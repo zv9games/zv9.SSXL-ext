@@ -1,0 +1,35 @@
+[package]
+name = "ssxl_cli"
+version = "0.6.0"
+edition = "2021"
+
+[[bin]]
+name = "ssxl"
+path = "src/main.rs"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES (Foundation & FFI) ---
+# CLI needs access to all core data types for diagnostics and the FFI layer to test the runtime.
+ssxl_shared     = { path = "../ssxl_shared" }
+ssxl_engine_ffi = { path = "../ssxl_engine_ffi" }
+ssxl_tools      = { path = "../ssxl_tools" }
+ssxl_generate   = { path = "../ssxl_generate" }
+ssxl_math   = { path = "../ssxl_math" }
+
+# --- EXTERNAL DEPENDENCIES (Execution & UI) ---
+# Asynchronous runtime and macros
+tokio           = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# Workspace standard logging framework (replaces log/env_logger)
+tracing         = { workspace = true }
+# Time utilities, often needed for logging/benchmarking output
+chrono          = { workspace = true }
+# Interactive Console UI library
+crossterm       = { workspace = true }
+# File system traversal (for module tree inspector)
+walkdir         = { workspace = true }
+# Parallel processing (for running benchmarks)
+rayon           = { workspace = true }
+# Regular expressions (for any complex parsing tasks)
+regex           = { workspace = true }
+tracing-subscriber = { workspace = true }
+ctrlc           = { workspace = true }

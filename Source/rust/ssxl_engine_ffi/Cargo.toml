@@ -1,0 +1,20 @@
+[package]
+name = "ssxl_engine_ffi"
+version = "0.6.0"
+edition = "2021"
+
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES (Core Logic) ---
+# FFI needs access to all the core data and logic it is bridging.
+ssxl_shared   = { path = "../ssxl_shared" }
+ssxl_generate = { path = "../ssxl_generate" }
+ssxl_sync     = { path = "../ssxl_sync" }
+ssxl_cache    = { path = "../ssxl_cache" }
+ssxl_math     = { path = "../ssxl_math" }
+
+# --- EXTERNAL DEPENDENCIES ---
+# The standard C library definitions for safe FFI (e.g., c_char, c_void)
+libc               = "0.2" 
+# Workspace standard logging framework
+tracing            = { workspace = true } 

@@ -1,0 +1,20 @@
+[package]
+name = "ssxl_sync"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES ---
+# Required for shared data types and the canonical error type
+ssxl_shared = { path = "../ssxl_shared" }
+
+# --- EXTERNAL CONCURRENCY & DIAGNOSTICS ---
+# Primary async runtime
+tokio               = { workspace = true, features = ["rt-multi-thread"] }
+# High-performance channel types
+crossbeam           = { workspace = true }
+crossbeam-channel   = { workspace = true }
+# High-performance sync primitives (like RwLock, often preferred over std::sync)
+parking_lot         = { workspace = true }
+# Ensure we use the workspace's standard logging framework
+tracing             = { workspace = true }

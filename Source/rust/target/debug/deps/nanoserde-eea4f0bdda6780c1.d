@@ -1,0 +1,11 @@
+C:\zv9\zv9.ssxl\rust\target\debug\deps\nanoserde-eea4f0bdda6780c1.d: C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\lib.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_bin.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_ron.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_json.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\toml.rs
+
+C:\zv9\zv9.ssxl\rust\target\debug\deps\libnanoserde-eea4f0bdda6780c1.rlib: C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\lib.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_bin.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_ron.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_json.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\toml.rs
+
+C:\zv9\zv9.ssxl\rust\target\debug\deps\libnanoserde-eea4f0bdda6780c1.rmeta: C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\lib.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_bin.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_ron.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_json.rs C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\toml.rs
+
+C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\lib.rs:
+C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_bin.rs:
+C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_ron.rs:
+C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\serde_json.rs:
+C:\Users\grego\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\nanoserde-0.2.1\src\toml.rs:

@@ -1,0 +1,33 @@
+[package]
+name    = "aetherion_engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name       = "aetherion_engine"
+path       = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Internal crates
+aetherion_core   = { path = "../aetherion_core" }
+aetherion_shared = { path = "../aetherion_shared" }
+
+# Godot bindings (local paths)
+godot        = { path = "../../../zv9.gdext/godot" }
+godot-core   = { path = "../../../zv9.gdext/godot-core" }
+godot-macros = { path = "../../../zv9.gdext/godot-macros" }
+
+# Shared utilities (pulled from workspace for consistency)
+log        = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+bincode    = { workspace = true }
+once_cell  = { workspace = true }
+rand       = { workspace = true }
+chrono     = { workspace = true }
+anyhow.workspace = true
+
+[features]
+default = []
+macros  = []

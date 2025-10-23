@@ -1,0 +1,13 @@
+[package]
+name = "ssxl_tools"
+edition = "2021" 
+
+[dependencies]
+# Internal dependencies (Local Crates)
+ssxl_shared = { path = "../ssxl_shared" }
+ssxl_cache = { path = "../ssxl_cache" }
+
+# External dependency (Workspace-Inherited)
+regex = { workspace = true }
+once_cell = { workspace = true }
+tracing = { workspace = true }

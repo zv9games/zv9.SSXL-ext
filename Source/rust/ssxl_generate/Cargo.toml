@@ -1,0 +1,25 @@
+[package]
+name = "ssxl_generate"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES (Foundation Layer) ---
+ssxl_shared = { path = "../ssxl_shared" }
+ssxl_math   = { path = "../ssxl_math" }
+ssxl_sync   = { path = "../ssxl_sync" }
+ssxl_tools = { path = "../ssxl_tools" }
+ssxl_cache = { path = "../ssxl_cache" }
+
+# --- EXTERNAL DEPENDENCIES (Core Computation) ---
+# For parallel execution of generation algorithms
+rayon            = { workspace = true }
+# Core randomness library
+rand             = { workspace = true }
+# Used for saving/loading bitmap images (optional textures/noise visualizations)
+image            = { workspace = true }
+# Ensure we use the workspace's standard logging framework
+tracing          = { workspace = true }
+tokio            = { workspace = true }
+noise            = { workspace = true }
+glam             = { workspace = true }
