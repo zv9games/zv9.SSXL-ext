@@ -1,0 +1,45 @@
+SSXL-ext Codebase LOC Report
+Generated (Epoch Seconds): 1761665132
+Root Directory: ../rust/
+Scan Time: 5.00ms
+Total Files Scanned: 35
+Total Lines of Code (LOC): 4703
+
+------------------------------------------------------
+ FILE LOC | Relative File Path
+------------------------------------------------------
+  831 LOC | manifest_archive.rs
+  396 LOC | ssxl_generate\src\conductor.rs
+  390 LOC | ssxl_godot\src\ssxl_engine.rs
+  270 LOC | ssxl_cli\src\cli_util_actions.rs
+  199 LOC | ssxl_cli\src\cli_util_bench.rs
+  179 LOC | ssxl_generate\src\cellular_automata_generator.rs
+  161 LOC | ssxl_cli\src\cli_util_loc_scan.rs
+  155 LOC | ssxl_cli\src\cli_util_inspect.rs
+  146 LOC | ssxl_shared\src\chunk_data.rs
+  143 LOC | ssxl_sync\src\lib.rs
+  131 LOC | ssxl_tools\src\lib.rs
+  130 LOC | ssxl_math\src\coordinate_system.rs
+  116 LOC | ssxl_cli\src\main.rs
+  107 LOC | ssxl_shared\src\tile_data.rs
+  105 LOC | ssxl_generate\src\perlin_generator.rs
+  102 LOC | ssxl_math\src\hashing.rs
+  100 LOC | ssxl_engine_ffi\src\lib.rs
+  100 LOC | manifest.rs
+   89 LOC | ssxl_shared\src\tile_type.rs
+   84 LOC | ssxl_godot\src\ssxl_oracle.rs
+   77 LOC | ssxl_cache\src\lib.rs
+   74 LOC | ssxl_cli\src\cli_util_menu.rs
+   70 LOC | ssxl_shared\src\lib.rs
+   67 LOC | ssxl_generate\src\lib.rs
+   64 LOC | ssxl_shared\src\errors.rs
+   58 LOC | ssxl_shared\src\grid_bounds.rs
+   57 LOC | ssxl_godot\src\ssxl_signals.rs
+   53 LOC | ssxl_godot\src\build.rs
+   45 LOC | ssxl_math\src\generation_utils.rs
+   45 LOC | ssxl_math\src\primitives.rs
+   43 LOC | ssxl_generate\src\benchmark_logic.rs
+   41 LOC | ssxl_shared\src\math_primitives.rs
+   34 LOC | ssxl_math\src\lib.rs
+   23 LOC | ssxl_godot\src\lib.rs
+   18 LOC | ssxl_generate\src\generator.rs

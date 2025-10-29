@@ -1,0 +1,16 @@
+# config/engine.toml
+
+# --- Core Engine Settings ---
+[engine]
+# Enables/disables advanced logging features (e.g., debug tracing)
+# logging_level = "info" # Example setting not in SSXLConfig, but common
+
+# --- Generation Defaults ---
+[generation]
+# The generator ID to use when no specific generator is requested by the FFI/CLI.
+# Options include "perlin_basic_2d", "cellular_automata_basic", etc.
+default_generator_id = "perlin_basic_2d"
+
+# The specific ruleset ID to use for the Cellular Automata generator (if selected).
+# 0: Basic Cave, 1: Maze/Dungeon, etc.
+ca_default_ruleset = 1
