@@ -1,6 +1,6 @@
 # 🪐 SSXL-ext: The Dimension-Agnostic Generation Engine
 
-![SSXL-ext Banner](SSXL-ext.jpg)
+![SSXL-ext Banner](SSXL-ext.png)
 
 **SSXL-ext** is a high-performance, modular procedural generation engine written in **Rust**, designed to integrate seamlessly with **Godot 4.2+** via **GDExtension**. It separates the heavy lifting of world generation from the rendering pipeline, enabling blazing-fast content creation without sacrificing visual fidelity.
 
