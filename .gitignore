@@ -28,3 +28,4 @@ __pycache__/
 
 # Your custom heavy folders
 **/Target/
+SSXL_engine_tester/godot.windows.editor.x86_64.exe
