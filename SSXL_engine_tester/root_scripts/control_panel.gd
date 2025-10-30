@@ -7,9 +7,9 @@ const CHUNK_SIZE_X: int = 64
 const CHUNK_SIZE_Y: int = 64
 const DEFAULT_CHUNKS: int = 12
 
-# 🎯 THROTTLING CONSTANTS
-const MAX_CHUNKS_PER_FRAME: int = 5
-const MAX_QUEUE_SIZE: int = 150 # Critical for backpressure
+# 🎯 THROTTLING CONSTANTS (OBSOLETE)
+# const MAX_CHUNKS_PER_FRAME: int = 5
+# const MAX_QUEUE_SIZE: int = 150 
 
 # ------------------------------------------------------------------------------
 # 🧭 UI Node References
@@ -27,7 +27,7 @@ const MAX_QUEUE_SIZE: int = 150 # Critical for backpressure
 @onready var engine_timer: Timer = $enginetimer
 @onready var engine_timer_label: Label = $enginetimerlabel
 @onready var tiles_placed_label: Label = $tilesplacedlabel
-@onready var tile_placement_time_label: Label = $tiletimeofplacement # ⬅️ NEW REFERENCE
+@onready var tile_placement_time_label: Label = $tiletimeofplacement
 
 # 🧠 External Scene References - Use explicit paths for non-siblings
 @onready var main: Node2D = get_parent() as Node2D
@@ -51,11 +51,7 @@ var total_tiles_placed: int = 0
 var is_generating: bool = false
 var initial_zoom_set: bool = false
 var current_camera_id: int = 1 # 1: UI, 2: Map
-var generation_start_time_ms: int = 0 # ⬅️ NEW: Store start time in milliseconds
-
-# 🚀 BATCHING: Arrays for high-performance updates
-var cells_to_update: Array[Vector2i] = []
-var chunks_to_process_queue: Array[Vector2i] = []
+var generation_start_time_ms: int = 0 
 
 
 # ------------------------------------------------------------------------------
@@ -134,7 +130,7 @@ func _setup_ui() -> void:
 	if is_instance_valid(tiles_placed_label):
 		tiles_placed_label.text = "Tiles Placed: 0"
 	
-	if is_instance_valid(tile_placement_time_label): # ⬅️ INITIALIZE NEW LABEL
+	if is_instance_valid(tile_placement_time_label):
 		tile_placement_time_label.text = "⏱️ Tile Placement Time: N/A"
 
 	status_label.text = "🟢 Ready to generate."
@@ -151,6 +147,7 @@ func _connect_signals() -> void:
 		if ssxl_signals.has_signal("build_map_start") and not ssxl_signals.build_map_start.is_connected(_on_build_map_start):
 			ssxl_signals.build_map_start.connect(_on_build_map_start)
 		
+		# The chunk_generated signal no longer queues data, it just updates UI and forces redraw
 		if ssxl_signals.has_signal("chunk_generated") and not ssxl_signals.chunk_generated.is_connected(_on_chunk_generated):
 			ssxl_signals.chunk_generated.connect(_on_chunk_generated)
 			
@@ -179,35 +176,20 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				
 # ------------------------------------------------------------------------------
-# 🔄 ENGINE LOOP & THROTTLED PROCESSING
+# 🔄 ENGINE LOOP (SIMPLIFIED)
 # ------------------------------------------------------------------------------
 func _process(_delta: float) -> void:
 	if not is_generating:
 		return
 		
-	# 🎯 THROTTLING LOGIC
-	var chunks_processed_this_frame: int = 0
-
-	while not chunks_to_process_queue.is_empty() and chunks_processed_this_frame < MAX_CHUNKS_PER_FRAME:
-		var coords: Vector2i = chunks_to_process_queue.pop_front()
-		_process_chunk_data(coords.x, coords.y)
-		chunks_processed_this_frame += 1
+	# The core processing loop is removed. The Rust engine now applies chunks 
+	# directly when `ssxl_engine.tick()` is called by the timer.
 	
-	# 🚀 BATCH RENDER
-	if not cells_to_update.is_empty():
-		expansive_tilemap.notify_runtime_tile_data_update(0)
-		cells_to_update.clear()
-
-	# 🟢 BACKPRESSURE RELEASE
-	if chunks_to_process_queue.size() < MAX_QUEUE_SIZE / 2:
-		if ssxl_signals and ssxl_signals.has_signal("chunk_generated") and not ssxl_signals.chunk_generated.is_connected(_on_chunk_generated):
-			ssxl_signals.chunk_generated.connect(_on_chunk_generated)
-			# print("🟢 Backpressure: Reconnected chunk_generated signal. Queue size: %d" % chunks_to_process_queue.size())
-
 	# Update Engine Status Label
 	if ssxl_engine and ssxl_engine.has_method("get_status"):
 		var status: String = ssxl_engine.call("get_status")
-		status_label.text = "🧠 Engine Status: %s (Queue: %d)" % [status, chunks_to_process_queue.size()]
+		# Simplified status text, as queue size is no longer relevant for GDScript
+		status_label.text = "🧠 Engine Status: %s" % status
 
 
 # ------------------------------------------------------------------------------
@@ -246,9 +228,9 @@ func _on_generate_pressed() -> void:
 	is_generating = true
 	initial_zoom_set = false
 
-	# ⬅️ NEW: Record the exact start time before the FFI call
-	generation_start_time_ms = Time.get_ticks_msec() 
-
+	# Record the exact start time before the FFI call
+	generation_start_time_ms = Time.get_ticks_msec()
+	
 	# Max value calculation (Total Tiles in the map)
 	var total_chunks_x: float = ceil(float(width) / CHUNK_SIZE_X)
 	var total_chunks_y: float = ceil(float(height) / CHUNK_SIZE_Y)
@@ -263,7 +245,7 @@ func _on_generate_pressed() -> void:
 	# Clear map and force update before FFI call
 	expansive_tilemap.clear()
 	expansive_tilemap.emit_signal("tile_data_changed", 0, Vector2i.ZERO, Vector2i(width, height))
-	cells_to_update.clear()
+	
 	await get_tree().process_frame
 
 	# Camera switch to map view
@@ -275,17 +257,11 @@ func _on_generate_pressed() -> void:
 	ssxl_engine.build_map(width, height, str(seed), generator_name)
 	print("🧪 ControlPanel: build_map called with seed %d" % seed)
 
-# --- NEW WRAPPER TO DEFER COMPLETION ---
+# --- COMPLETION HANDLER ---
 func _on_build_map_complete_received() -> void:
-	print("📡 Signal: build_map_complete received. Waiting for queue to clear...")
-	
-	await get_tree().process_frame
-	
-	# Wait until all chunks are processed
-	while not chunks_to_process_queue.is_empty():
-		await get_tree().process_frame
-		print("⏱️ Waiting for queue to clear... remaining: %d" % chunks_to_process_queue.size())
-		
+	# In the new async model, the Rust engine only emits this signal once 
+	# all chunks are generated AND applied via `apply_chunk_data`.
+	print("📡 Signal: build_map_complete received. Processing final state.")
 	_on_build_map_complete()
 	
 func _on_build_map_complete() -> void:
@@ -294,7 +270,7 @@ func _on_build_map_complete() -> void:
 	
 	var elapsed_engine_time: float = engine_timer.wait_time - engine_timer.time_left
 	
-	# ⬅️ NEW: Calculate the real-world elapsed time for tile placement
+	# Calculate the real-world elapsed time for tile placement
 	var elapsed_placement_time_ms: int = Time.get_ticks_msec() - generation_start_time_ms
 	var elapsed_placement_time_sec: float = float(elapsed_placement_time_ms) / 1000.0
 	
@@ -302,7 +278,7 @@ func _on_build_map_complete() -> void:
 	if is_instance_valid(tiles_placed_label):
 		tiles_placed_label.text = "Tiles Placed: %d" % final_tile_count
 		
-	# ⬅️ NEW: Update the new label
+	# Update the new label
 	if is_instance_valid(tile_placement_time_label):
 		tile_placement_time_label.text = "⏱️ Tile Placement Time: %.2fs" % elapsed_placement_time_sec
 		
@@ -324,13 +300,8 @@ func _on_build_map_complete() -> void:
 		camera2.zoom = Vector2(clampf(zoom_factor, 0.05, 1.0), clampf(zoom_factor, 0.05, 1.0))
 		initial_zoom_set = true
 
-	# CRITICAL SYNCHRONIZATION: Ensure the last batch is processed and render state is clean
-	if not cells_to_update.is_empty():
-		expansive_tilemap.notify_runtime_tile_data_update(0)
-	
-	# Final full map redraw.
+	# Final full map redraw (safety net).
 	expansive_tilemap.emit_signal("tile_data_changed", 0, Vector2i.ZERO, Vector2i(int(grid_width.value), int(grid_height.value)))
-	cells_to_update.clear()
 	
 	await get_tree().process_frame
 
@@ -349,103 +320,34 @@ func _on_build_map_start() -> void:
 	print("📡 Signal: build_map_start")
 
 func _on_chunk_generated(chunk_x: int, chunk_y: int) -> void:
-	chunks_to_process_queue.append(Vector2i(chunk_x, chunk_y))
+	# In the new model, the Rust engine has already called set_cell on the TileMap.
+	# We only need to update the UI and notify Godot to redraw the area.
 	
-	# Backpressure logic
-	if chunks_to_process_queue.size() >= MAX_QUEUE_SIZE:
-		if ssxl_signals.chunk_generated.is_connected(_on_chunk_generated):
-			ssxl_signals.chunk_generated.disconnect(_on_chunk_generated)
-			print("🛑 Backpressure: Disconnected chunk_generated signal. Queue size: %d" % MAX_QUEUE_SIZE)
+	var tiles_in_chunk: int = CHUNK_SIZE_X * CHUNK_SIZE_Y
+	
+	# 1. Update Trackers
+	progress_bar.value += float(tiles_in_chunk)
+	total_tiles_placed += tiles_in_chunk
+	
+	if is_instance_valid(tiles_placed_label):
+		tiles_placed_label.text = "Tiles Placed: %d" % total_tiles_placed
+	
+	# 2. Trigger Redraw for the affected chunk area
+	# FIX: Reverting to the one-argument call to resolve the "Too many arguments" error.
+	expansive_tilemap.notify_runtime_tile_data_update(0)
 
+	var percent: int = int(progress_bar.value / progress_bar.max_value * 100.0)
+
+	# 3. THROTTLED STATUS UPDATE
+	if percent != last_percent and (percent % 1 == 0 or percent == 100):
+		status_label.text = "🏗️ Chunk (%d, %d) applied... %d%%" % [chunk_x, chunk_y, percent]
+		
+	last_percent = percent
+	
 func _on_generation_error(error_message: String) -> void:
 	print("❌ ERROR: Generation failed: %s" % error_message)
 	_reset_temporary_state()
 	status_label.text = "❌ ERROR: Generation failed. Check console."
-
-
-# ------------------------------------------------------------------------------
-# --- CRITICAL: DEFERRED CHUNK PROCESSING ---
-# ------------------------------------------------------------------------------
-func _process_chunk_data(chunk_x: int, chunk_y: int) -> void:
-	
-	if not is_instance_valid(ssxl_engine):
-		push_error("SSXLEngine is invalid. Stopping generation.")
-		_reset_temporary_state()
-		return
-
-	# 1. Retrieve Chunk Data
-	var chunk_dict: Variant = ssxl_engine.generate_chunk(chunk_x, chunk_y, 0)
-	
-	# 2. Validation Checks
-	if typeof(chunk_dict) != TYPE_DICTIONARY:
-		push_error("SSXLEngine.generate_chunk() returned invalid type: %s. Chunk: (%d, %d)" % [typeof(chunk_dict), chunk_x, chunk_y])
-		_reset_temporary_state()
-		status_label.text = "❌ FATAL: Engine chunk data is corrupted (Invalid Type)."
-		return
-		
-	var tile_array: Array = chunk_dict.get("tiles", [])
-	var tiles_in_chunk: int = tile_array.size()
-
-	if tiles_in_chunk == 0:
-		progress_bar.value += float(CHUNK_SIZE_X * CHUNK_SIZE_Y)
-		total_chunks_processed += 1
-		return
-
-	# 3. TileMap Setup Check
-	const layer: int = 0
-	const source_id: int = 0
-	var tile_index: int = 0
-	
-	var tileset: TileSet = expansive_tilemap.get_tileset()
-	var atlas_source: TileSetAtlasSource = tileset.get_source(source_id) if is_instance_valid(tileset) else null
-	
-	if atlas_source == null:
-		push_error("TileMap source ID %d not found or TileSet is invalid." % source_id)
-		_reset_temporary_state()
-		return
-
-	# 4. Iterate and Place Tiles
-	var cells_in_chunk: Array[Vector2i] = []
-	
-	for tile_data_variant in tile_array:
-		var tile_data: Dictionary = tile_data_variant
-		var tile_id: int = tile_data.get("id", 0)
-		
-		var local_x: int = tile_index % CHUNK_SIZE_X
-		var local_y: int = tile_index / CHUNK_SIZE_X
-		
-		var global_x: int = (chunk_x * CHUNK_SIZE_X) + local_x
-		var global_y: int = (chunk_y * CHUNK_SIZE_Y) + local_y
-		
-		var tile_coords: Vector2i = Vector2i(global_x, global_y)
-		var atlas_coords: Vector2i = Vector2i(tile_id, 0)
-
-		if atlas_source.has_tile(atlas_coords):
-			expansive_tilemap.set_cell(layer, tile_coords, source_id, atlas_coords, 0)
-			cells_in_chunk.append(tile_coords)
-		else:
-			expansive_tilemap.erase_cell(layer, tile_coords)
-
-		tile_index += 1
-		
-	# BATCH RENDER UPDATE QUEUE
-	cells_to_update.append_array(cells_in_chunk)
-
-	# 5. Update Trackers
-	progress_bar.value += float(tiles_in_chunk)
-	total_chunks_processed += 1
-	
-	total_tiles_placed += tiles_in_chunk
-	if is_instance_valid(tiles_placed_label):
-		tiles_placed_label.text = "Tiles Placed: %d" % total_tiles_placed
-	
-	var percent: int = int(progress_bar.value / progress_bar.max_value * 100.0)
-
-	# THROTTLED STATUS UPDATE
-	if percent != last_percent and (percent % 1 == 0 or percent == 100):
-		status_label.text = "🏗️ Chunk (%d, %d) placed... %d%%" % [chunk_x, chunk_y, percent]
-		
-	last_percent = percent
 
 
 # ------------------------------------------------------------------------------
@@ -463,13 +365,11 @@ func _toggle_camera() -> void:
 	cameras.switch_to_camera(current_camera_id)
 	print("Camera toggled to: %d" % current_camera_id)
 
-## Resets only the temporary state (flags, timers, queues) but PRESERVES total_tiles_placed and generation_start_time_ms.
+## Resets only the temporary state (flags, timers) but PRESERVES total_tiles_placed and generation_start_time_ms.
 func _reset_temporary_state() -> void:
 	is_generating = false
 	generate_button.disabled = false
 	engine_timer.stop()
-	chunks_to_process_queue.clear()
-	cells_to_update.clear()
 	
 	# Only reset the engine tick counter
 	engine_tick_count = 0
@@ -480,10 +380,10 @@ func _clear_generation_state() -> void:
 	
 	# Reset state and label
 	total_tiles_placed = 0
-	generation_start_time_ms = 0 # ⬅️ NEW: Reset start time
+	generation_start_time_ms = 0
 	if is_instance_valid(tiles_placed_label):
 		tiles_placed_label.text = "Tiles Placed: 0"
-	if is_instance_valid(tile_placement_time_label): # ⬅️ CLEAR PLACEMENT TIME
+	if is_instance_valid(tile_placement_time_label):
 		tile_placement_time_label.text = "⏱️ Tile Placement Time: N/A"
 
 
@@ -497,7 +397,7 @@ func _on_toggle_terminal_button_pressed() -> void:
 	# Hide/Show elements based on the panel_collapsed state
 	for child in get_children():
 		# Filter to only affect the UI controls we want to collapse
-		if child != toggle_terminal_button and child is Control and child != status_label and child != engine_timer_label and child != tiles_placed_label and child != tile_placement_time_label: # ⬅️ ADD NEW LABEL
+		if child != toggle_terminal_button and child is Control and child != status_label and child != engine_timer_label and child != tiles_placed_label and child != tile_placement_time_label:
 			child.visible = not panel_collapsed
 	
 	# Control visibility of external references
@@ -517,6 +417,6 @@ func _on_engine_timer_timeout() -> void:
 	# Update label to show both runtime and ticks
 	engine_timer_label.text = "⏱️ Runtime: %.2fs | Ticks: %d" % [elapsed, engine_tick_count]
 	
-	# FFI CALL: Sends a tick to the native engine if the method exists
+	# FFI CALL: Sends a tick to the native engine 
 	if ssxl_engine and ssxl_engine.has_method("tick"):
 		ssxl_engine.tick(engine_tick_count)

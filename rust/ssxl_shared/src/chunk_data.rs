@@ -1,4 +1,3 @@
-// aetherion_shared/src/chunk_data.rs
 //! Canonical data structure for a single, dimension-agnostic chunk of procedural data.
 
 use serde::{Serialize, Deserialize};
@@ -6,23 +5,23 @@ use std::time::SystemTime;
 
 // Import types from other modules in aetherion_shared
 use crate::grid_bounds::GridBounds;
-use crate::tile_data::TileData; 
+use crate::tile_data::TileData;
 use crate::math_primitives; // Used for the SystemTime serde helper
 
 // Import Vec2i from the dedicated aetherion_math crate (External Dependency)
-use ssxl_math::Vec2i; 
+use ssxl_math::Vec2i;
 
 use serde_big_array::BigArray;
 
 // --- CONSTANTS ---
 
 /// The canonical size for all chunks in the Aetherion Engine (32x32 tiles).
-pub const CHUNK_SIZE: u32 = 64;
-/// The total number of tiles in a single chunk (32 * 32 = 1024).
-const TILE_COUNT: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize; 
+pub const CHUNK_SIZE: u32 = 32; // 📐 FIX: Aligned with the internal logic and tests.
+/// The total number of tiles in a single chunk (CHUNK_SIZE * CHUNK_SIZE = 1024).
+const TILE_COUNT: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
 
 // --- STRUCT DEFINITION ---
-#[derive(Debug, Clone, Serialize, Deserialize)] 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkData {
     pub id: u64,
     pub bounds: GridBounds,
@@ -65,7 +64,7 @@ impl ChunkData {
         let bounds = GridBounds::new(min_x, min_y, max_x, max_y);
         
         // NOTE: In a final system, the ID should be derived via robust hashing.
-        let id = chunk_coords.x as u64 ^ chunk_coords.y as u64; 
+        let id = chunk_coords.x as u64 ^ chunk_coords.y as u64;
         let tiles = [TileData::default(); TILE_COUNT];
 
         ChunkData {
@@ -102,9 +101,9 @@ impl ChunkData {
             self.tiles.clone_from_slice(&tiles_vec);
         } else {
             panic!(
-                "Tile vector size mismatch for chunk {:?}: Expected {} but got {}", 
-                self.bounds, 
-                TILE_COUNT, 
+                "Tile vector size mismatch for chunk {:?}: Expected {} but got {}",
+                self.bounds,
+                TILE_COUNT,
                 tiles_vec.len()
             );
         }
@@ -142,5 +141,5 @@ mod tests {
         assert_eq!(ChunkData::coord_to_index(32, 0), None);
         assert_eq!(ChunkData::coord_to_index(0, 32), None);
         assert_eq!(ChunkData::coord_to_index(33, 33), None);
-    } // <-- Missing brace restored
-} // <-- Missing brace restored
+    }
+}

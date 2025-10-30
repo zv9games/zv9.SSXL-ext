@@ -46,8 +46,8 @@ const PROGRESS_CHANNEL_BOUND: usize = 100;
 pub enum GenerationMessage {
     /// A general status update (e.g., "Initializing Noise", "Processing 5/100 Chunks").
     StatusUpdate(String),
-    /// Reports the completion of a single chunk. Contains the chunk's coordinates.
-    ChunkGenerated(Vec2i),
+    /// Reports the completion of a single chunk. Contains the chunk's coordinates AND the bulk data.
+    ChunkGenerated(Vec2i, ChunkData), // 🚀 MODIFIED: Carries the bulk data payload
     /// Reports the final completion of the entire generation run.
     GenerationComplete,
     /// Reports a non-fatal error during generation.
@@ -259,6 +259,12 @@ impl Conductor {
         let runtime_handle = self.get_handle();
         let progress_sender_clone = self.progress_sender.clone(); // Clone Sender for the task.
 
+        // 🚀 NEW: Capture resources needed for generation and caching,
+        // moving the generate_single_chunk context into the async task.
+        let generators_clone = self.generators.clone();
+        let chunk_cache_clone = self.chunk_cache.clone();
+        let active_generator_id = self.internal_state.get_active_generator_id();
+
         runtime_handle.spawn(async move {
             info!("Async generation task spawned with config: {:?}", config);
 
@@ -285,10 +291,59 @@ impl Conductor {
                     // Inner loop (X-axis)
                     for chunk_x in 0..width_in_chunks {
                         let chunk_coords = Vec2i::new(chunk_x as i32, chunk_y as i32);
+                        let key_vec3 = IVec3::new(chunk_coords.x, chunk_coords.y, 0);
+                        let chunk_key = ChunkKey(key_vec3);
+                        let chunk_data: ChunkData; // Data to be generated or loaded
 
-                        // Emit signal to Godot main thread to trigger synchronous generate_chunk() call
+                        // ⚠️ CORE TEMPO ALIGNMENT: GENERATE & CACHE IN THE WORKER THREAD
+
+                        // --- 1. Attempt to load from cache ---
+                        match chunk_cache_clone.lock() {
+                            Ok(mut cache_lock) => {
+                                match cache_lock.load_chunk(&chunk_key) {
+                                    Ok(Some(data)) => {
+                                        info!("Async: Retrieved chunk {:?} from cache.", chunk_coords);
+                                        chunk_data = data;
+                                    },
+                                    Ok(None) => {
+                                        info!("Async: Chunk {:?} not found in cache. Generating...", chunk_coords);
+
+                                        // --- 2. Generate the Chunk ---
+                                        let generator_arc = generators_clone
+                                            .get(&active_generator_id)
+                                            .expect("Active generator ID must be registered in Conductor.");
+
+                                        chunk_data = generator_arc.generate_chunk(chunk_coords);
+
+                                        // --- 3. Save to cache ---
+                                        if let Err(e) = cache_lock.save_chunk(&chunk_key, &chunk_data) {
+                                            error!("Async: Failed to save chunk {:?} to cache: {:?}", chunk_coords, e);
+                                        } else {
+                                            info!("Async: Saved chunk {:?} to cache.", chunk_coords);
+                                        }
+                                    },
+                                    Err(e) => {
+                                        warn!("Async: Cache load failed for {:?}: {:?}. Forcing generation.", chunk_coords, e);
+                                        let generator_arc = generators_clone
+                                            .get(&active_generator_id)
+                                            .expect("Active generator ID must be registered in Conductor.");
+                                        chunk_data = generator_arc.generate_chunk(chunk_coords);
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                error!("Async: Cache Mutex poisoned during load/save: {}", e);
+                                warn!("Async: Falling back to generation without caching.");
+                                let generator_arc = generators_clone
+                                    .get(&active_generator_id)
+                                    .expect("Active generator ID must be registered in Conductor.");
+                                chunk_data = generator_arc.generate_chunk(chunk_coords);
+                            }
+                        }
+
+                        // 4. Emit signal with the bulk data payload
                         let send_result = progress_sender_clone.send(
-                            GenerationMessage::ChunkGenerated(chunk_coords)
+                            GenerationMessage::ChunkGenerated(chunk_coords, chunk_data) // 👈 SENDING BULK DATA
                         ).await;
 
                         if send_result.is_err() {
@@ -348,57 +403,17 @@ impl Conductor {
         }
     }
 
-    /// The primary synchronous function used to generate a chunk (blocking for now).
+    /// **SYNCHRONOUS PATHWAY (For CLI/Benchmarking):**
+    /// Synchronously generates a single chunk using the currently active generator.
+    /// This method is blocking and bypasses the asynchronous runtime, MPSC channel,
+    /// and internal caching mechanism.
     pub fn generate_single_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
-        let key_vec3 = IVec3::new(chunk_coords.x, chunk_coords.y, 0);
-        let chunk_key = ChunkKey(key_vec3);
-
-        // --- 1. Attempt to load from cache ---
-        match self.chunk_cache.lock() {
-            Ok(cache_lock) => {
-                match cache_lock.load_chunk(&chunk_key) {
-                    Ok(Some(data)) => {
-                        info!("Conductor retrieved chunk {:?} (Key: {:?}) from cache.", chunk_coords, chunk_key);
-                        return data;
-                    },
-                    Ok(None) => {
-                        info!("Chunk {:?} not found in cache. Generating...", chunk_coords);
-                    },
-                    Err(e) => {
-                        warn!("Cache load failed for {:?}: {:?}. Generating instead.", chunk_coords, e);
-                    }
-                }
-            },
-            Err(e) => {
-                error!("Cache Mutex poisoned during load: {}", e);
-            }
-        }
-
-        // --- 2. Generate the Chunk ---
         let active_id = self.internal_state.get_active_generator_id();
+
         let generator_arc = self.generators
             .get(&active_id)
-            .expect("Active generator ID must be registered in Conductor.");
+            .unwrap_or_else(|| panic!("Cannot find active generator with ID: {}", active_id));
 
-        info!("Conductor dispatching generation of chunk {:?} using '{}'",
-              chunk_coords, active_id);
-
-        let chunk_data = generator_arc.generate_chunk(chunk_coords);
-
-        // --- 3. Save to cache ---
-        match self.chunk_cache.lock() {
-            Ok(cache_lock) => {
-                if let Err(e) = cache_lock.save_chunk(&chunk_key, &chunk_data) {
-                    error!("Failed to save chunk {:?} (Key: {:?}) to cache: {:?}", chunk_coords, chunk_key, e);
-                } else {
-                    info!("Conductor saved chunk {:?} to cache.", chunk_coords);
-                }
-            },
-            Err(e) => {
-                error!("Cache Mutex poisoned during save: {}", e);
-            }
-        }
-
-        chunk_data
+        generator_arc.generate_chunk(chunk_coords)
     }
 }

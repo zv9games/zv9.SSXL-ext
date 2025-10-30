@@ -1,17 +1,19 @@
 use godot::prelude::*;
 use godot::classes::Node;
 use godot::obj::{Base, Gd};
-use godot::builtin::{GString, Dictionary, Array, Variant};
+use godot::builtin::{GString, Vector2i};
 use godot::classes::TileMap;
+
 use crate::ssxl_signals::SSXLSignals;
 
-// PHASE 8.4: Required for the asynchronous receiver
-use tokio::sync::mpsc; 
+// Required for the asynchronous receiver
+use tokio::sync::mpsc;
 
 // Internal Crate Dependencies
-use ssxl_generate::{Conductor, GeneratorConfig}; 
+use ssxl_generate::{Conductor, GeneratorConfig};
 use ssxl_generate::conductor::GenerationMessage;
-use ssxl_math::Vec2i;
+use ssxl_shared::chunk_data; 
+use ssxl_shared::chunk_data::ChunkData;
 
 // Standard library and utilities
 use std::sync::{Arc, Mutex};
@@ -31,13 +33,13 @@ pub struct SSXLEngine {
     /// The core Rust logic manager, safely wrapped in an Arc/Mutex for shared access.
     conductor: Option<Arc<Mutex<Conductor>>>,
     
-    /// Reference to the AetherionSignals node for signal emission.
-    signals_node: Option<Gd<Node>>, 
+    /// Reference to the SSXLSignals node for signal emission.
+    signals_node: Option<Gd<Node>>,
     
     /// Reference to the main expansive TileMap for drawing/manipulation.
-    tilemap_node: Option<Gd<TileMap>>, 
+    tilemap_node: Option<Gd<TileMap>>,
 
-    /// PHASE 8.4: The receiver side of the MPSC channel for progress updates.
+    /// The receiver side of the MPSC channel for progress updates.
     /// This is stored on the main thread and polled every tick.
     generation_receiver: Option<mpsc::Receiver<GenerationMessage>>,
 
@@ -52,9 +54,9 @@ impl SSXLEngine {
     pub fn init(base: Base<Node>) -> Self {
         Self {
             conductor: None,
-            signals_node: None, 
-            tilemap_node: None, 
-            generation_receiver: None, 
+            signals_node: None,
+            tilemap_node: None,
+            generation_receiver: None,
             base,
         }
     }
@@ -74,81 +76,133 @@ impl SSXLEngine {
         }
     }
 
-    /// Helper to emit the status signal (optional, but good practice for internal changes)
+    /// Helper to emit the status signal.
     pub fn emit_status_updated(&mut self, status: GString) {
         self.base_mut().emit_signal("status_updated", &[status.to_variant()]);
     }
     
-    
-    
-    #[signal] 
+    #[signal]
     fn status_updated(status_message: godot::prelude::GString);
 
-    // --- PHASE 8.4: MPSC POLLING AND HANDLING ---
+    // ------------------------- CHUNK DATA APPLICATION ----------------------------
+
+    /// Synchronously applies the generated ChunkData to the Godot TileMap on the main thread.
+    fn apply_chunk_data(&mut self, chunk_data: ChunkData) {
+        // Take ownership of the tilemap for mutation during the operation
+        if let Some(mut tilemap) = self.tilemap_node.take() {
+            let chunk_size = chunk_data::ChunkData::SIZE as i32;
+            
+            // Chunk coordinates in the world grid (top-left tile of the chunk)
+            let chunk_world_x = chunk_data.bounds.min.x as i32;
+            let chunk_world_y = chunk_data.bounds.min.y as i32;
+            
+            let layer = 0;
+            let source_id = 0;
+            let alternative_tile = 0;
+
+            for y in 0..chunk_size {
+                for x in 0..chunk_size {
+                    let index = (y * chunk_size + x) as usize;
+                    
+                    if let Some(tile) = chunk_data.tiles.get(index) {
+                        
+                        let tile_type_id = tile.tile_type as i32;
+                        
+                        // Calculate world coordinates for the tile
+                        let world_x = x + chunk_world_x;
+                        let world_y = y + chunk_world_y;
+                        
+                        // Simplified Atlas Mapping (Assumes a 1D strip of 16 tiles per row)
+                        let atlas_x = tile_type_id % 16;
+                        let atlas_y = tile_type_id / 16;
+                        
+                        let atlas_coords = Vector2i::new(atlas_x, atlas_y);
+                        let tile_coords = Vector2i::new(world_x, world_y);
+
+                        // FIX APPLIED: Removed .bind_mut() on the built-in TileMap class.
+                        tilemap
+                            .set_cell_ex(layer, tile_coords)
+                            .source_id(source_id)
+                            .atlas_coords(atlas_coords)
+                            .alternative_tile(alternative_tile)
+                            .done();
+                    }
+                }
+            }
+            
+            // Put the tilemap back
+            self.tilemap_node = Some(tilemap);
+            
+            info!("Chunk data for ({}, {}) applied to TileMap.",
+                chunk_world_x / chunk_size,
+                chunk_world_y / chunk_size);
+        } else {
+            godot_error!("Cannot apply chunk data: TileMap node is not set.");
+        }
+    }
+
+
+    // ------------------------- MPSC POLLING AND HANDLING -------------------------
 
     /// Private helper to process a single `GenerationMessage` and emit the corresponding Godot signals.
     fn handle_generation_update(&mut self, message: GenerationMessage) {
-        // Collect the status message first, so we can call self.emit_status_updated 
-        // after the immutable borrow of self.signals_node ends. (FIXES E0502)
         let mut status_update: Option<GString> = None;
         
-        if let Some(signals) = &self.signals_node {
-            match message {
-                GenerationMessage::StatusUpdate(msg) => {
-                    info!("Generation Status: {}", msg);
-                    status_update = Some(GString::from(format!("GENERATING: {}", msg).as_str()));
-                }
-                GenerationMessage::ChunkGenerated(coords) => {
-                    // Convert Vec2i to i32 for Godot signal
-                    info!("Chunk Generated: ({}, {})", coords.x, coords.y);
+        match message {
+            GenerationMessage::StatusUpdate(msg) => {
+                info!("Generation Status: {}", msg);
+                status_update = Some(GString::from(format!("GENERATING: {}", msg).as_str()));
+            }
+            GenerationMessage::ChunkGenerated(coords, chunk_data) => {
+                info!("Chunk Generated: ({}, {}). Applying chunk data...", coords.x, coords.y);
+                
+                // CRITICAL: Call the synchronous drawing function on the main thread
+                self.apply_chunk_data(chunk_data);
+                
+                // Emit signal (mostly for UI/metrics)
+                if let Some(signals) = &self.signals_node {
                     if let Ok(mut ssxl_signals_instance) = signals.clone().try_cast::<SSXLSignals>() {
                         ssxl_signals_instance.bind_mut().emit_chunk_generated(coords.x as i32, coords.y as i32);
                     }
                 }
-                GenerationMessage::GenerationComplete => {
-                    info!("Generation Complete.");
-                    status_update = Some(GString::from("IDLE: Ready for next command."));
+            }
+            GenerationMessage::GenerationComplete => {
+                info!("Generation Complete.");
+                status_update = Some(GString::from("IDLE: Ready for next command."));
+                if let Some(signals) = &self.signals_node {
                     if let Ok(mut ssxl_signals_instance) = signals.clone().try_cast::<SSXLSignals>() {
                         ssxl_signals_instance.bind_mut().emit_build_map_complete();
                     }
                 }
-                GenerationMessage::Error(e) => {
-                    godot_error!("Generation Task Error: {}", e);
-                    status_update = Some(GString::from(format!("ERROR: {}", e).as_str()));
-                }
+            }
+            GenerationMessage::Error(e) => {
+                godot_error!("Generation Task Error: {}", e);
+                status_update = Some(GString::from(format!("ERROR: {}", e).as_str()));
             }
         }
 
-        // FIX E0502: Mutably borrow self here, after the immutable borrow of self.signals_node has ended.
+        // Re-borrow self to emit status signal after signal node use.
         if let Some(status) = status_update {
             self.emit_status_updated(status);
         }
     }
 
-    /// Main engine tick method, called by SSXLOracle.
+    /// Main engine tick method, called by SSXLOracle to poll for updates.
     #[func]
     pub fn tick(&mut self, current_tick: u64) {
         godot_print!("SSXLEngine: Received tick #{}", current_tick);
 
-        // FIX E0499: Take ownership of the receiver to avoid a mutable borrow of self 
-        // that conflicts with the mutable borrow in self.handle_generation_update().
+        // Take ownership of the receiver to avoid mutable borrow conflicts
         if let Some(mut receiver) = self.generation_receiver.take() {
             let mut messages = Vec::new();
             let mut disconnected = false;
 
-            // Use a non-blocking loop to drain the channel quickly
+            // Drain the channel quickly
             loop {
                 match receiver.try_recv() {
-                    Ok(message) => {
-                        // Store the message for processing later
-                        messages.push(message); 
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {
-                        // Channel is empty, done for this tick.
-                        break;
-                    }
+                    Ok(message) => messages.push(message),
+                    Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => {
-                        // All senders have dropped (task finished or crashed).
                         godot_error!("Generation channel disconnected.");
                         disconnected = true;
                         break;
@@ -156,7 +210,7 @@ impl SSXLEngine {
                 }
             }
 
-            // Process messages here, now that the mutable borrow from the receiver is released.
+            // Process messages
             for message in messages {
                 self.handle_generation_update(message);
             }
@@ -168,17 +222,14 @@ impl SSXLEngine {
         }
     }
     
-    // Helper to initialize conductor lazily with logging
+    // Helper to initialize conductor lazily
     fn ensure_conductor(&mut self) -> bool {
         if self.conductor.is_some() {
             return true;
         }
 
-        // --- FIX APPLIED HERE ---
-        // Changed godot_error! to godot_print! to stop this message from appearing as an error (E) in Godot.
         godot_print!("--- Initializing Conductor lazily ---");
         
-        // PHASE 8.4: Update to handle the new return tuple: (Conductor, State, Receiver)
         match Conductor::new(None) {
             Ok((conductor_instance, _state, progress_receiver)) => {
                 info!("SSXL Conductor initialized successfully.");
@@ -193,7 +244,7 @@ impl SSXLEngine {
         }
     }
 
-    // --- NODE SETTERS (Required by control_panel.gd) ---
+    // ------------------------- NODE SETTERS -------------------------
 
     /// Sets the reference to the SSXLSignals node for emitting core events.
     #[func]
@@ -209,20 +260,18 @@ impl SSXLEngine {
         info!("SSXLEngine: TileMap Node reference set.");
     }
     
-    // --- CORE GENERATION & PIPELINE (Phase 8.3 Implementation) ---
+    // ------------------------- CORE GENERATION -------------------------
 
-    /// Implements Phase 8.3: Triggers the core map generation pipeline in the Conductor.
+    /// Triggers the core map generation pipeline in the Conductor.
     #[func]
     pub fn build_map(&mut self, width: i32, height: i32, seed: GString, generator_name: GString) {
-        // --- 1. Validation and Initialization ---
+        // 1. Validation and Initialization
         if !self.ensure_conductor() {
             return;
         }
 
-        // Clone the Arc before locking to satisfy the borrow checker (E0502 fix from prior step).
         let conductor_arc = self.conductor.as_ref().unwrap().clone();
 
-        // Prepare the configuration object
         let config = GeneratorConfig {
             width: width as usize,
             height: height as usize,
@@ -230,10 +279,9 @@ impl SSXLEngine {
             generator_name: generator_name.to_string(),
         };
         
-        // --- 2. Conductor Command and Error Handling ---
+        // 2. Conductor Command and Error Handling
         let result = match conductor_arc.lock() {
             Ok(mut conductor) => {
-                // Call the conductor's start generation method.
                 match conductor.start_generation(config) {
                     Ok(_) => {
                         info!("SSXLEngine: Conductor command accepted: START GENERATION.");
@@ -245,21 +293,19 @@ impl SSXLEngine {
                     }
                 }
             }
-            // Gracefully handle Mutex Poisoning
             Err(e) => {
                 godot_error!("CRITICAL: Mutex lock failed during build_map command: {:?}", e);
                 Err("ERROR: Engine Lock Failure")
             }
         };
 
-        // --- 3. Status & Signals (Moved outside the lock block to avoid E0502) ---
+        // 3. Status & Signals
         match result {
             Ok(_) => {
                 self.emit_status_updated(GString::from("GENERATING"));
 
                 if let Some(signals) = &self.signals_node {
                     if let Ok(mut ssxl_signals_instance) = signals.clone().try_cast::<SSXLSignals>() {
-                        // Emit the build_map_start signal to trigger Godot-side UI/flow logic.
                         ssxl_signals_instance.bind_mut().emit_build_map_start();
                     } else {
                         godot_error!("Signal Emission Failed: Signals Node reference is not of type SSXLSignals.");
@@ -273,61 +319,6 @@ impl SSXLEngine {
             }
         }
     }
-
-
-    /// Returns the generated chunk data as a Godot Dictionary,
-	/// satisfying the GDScript validation expectations.
-	#[func]
-    // FIX: Changed to `&mut self` to allow lazy initialization via `ensure_conductor`.
-	pub fn generate_chunk(&mut self, x: i32, y: i32, key_z: i32) -> Dictionary {
-		let chunk_coords = Vec2i::new(x, y);
-		let mut result_dict = Dictionary::new();
-
-		// 1. FIX: Ensure Conductor is initialized, solving the FFI test failure.
-		if !self.ensure_conductor() { 
-			godot_error!("Cannot generate chunk: Conductor not initialized.");
-			return result_dict;
-		}
-
-		let conductor_arc = self.conductor.as_ref().unwrap();
-
-		// 2. Lock the Mutex to access the Conductor's data
-		match conductor_arc.lock() {
-			Ok(conductor) => {
-				// Log for debugging purposes
-				godot_print!("Godot: Calling core generate_single_chunk for {:?}", chunk_coords);
-        
-				// NOTE: This is a synchronous call to retrieve data.
-				let chunk_data = conductor.generate_single_chunk(chunk_coords);
-
-				// --- DATA CONVERSION: Rust `ChunkData` to Godot `Dictionary` ---
-				let mut tile_array = Array::new();
-
-				for tile in chunk_data.tiles {
-					let mut tile_dict = Dictionary::new();
-
-					// Assumed fields for TileData struct
-					tile_dict.set("id", Variant::from(tile.tile_type as i32));
-					tile_dict.set("level", Variant::from(tile.noise_value));
-
-					// Safely push complex data
-					tile_array.push(&tile_dict.to_variant());
-				}
-
-				// Populate the result dictionary
-				result_dict.set("key_x", Variant::from(x));
-				result_dict.set("key_y", Variant::from(y));
-				result_dict.set("key_z", Variant::from(key_z));
-				result_dict.set("tile_count", Variant::from(tile_array.len() as i32));
-				result_dict.set("tiles", tile_array.to_variant());
-			},
-			Err(e) => {
-				godot_error!("Mutex lock failed during chunk generation: {:?}", e);
-			}
-		}
-
-		result_dict	
-	}
     
     /// Sets the active generator algorithm by its string ID (e.g., "perlin_basic_2d").
     #[func]
@@ -342,9 +333,7 @@ impl SSXLEngine {
         let conductor_arc = self.conductor.as_ref().unwrap();
 
         match conductor_arc.lock() {
-            Ok(mut conductor) => {
-                conductor.set_active_generator(&id_str).is_ok()
-            },
+            Ok(mut conductor) => conductor.set_active_generator(&id_str).is_ok(),
             Err(e) => {
                 godot_error!("Mutex lock failed during set_generator: {:?}", e);
                 false
@@ -356,7 +345,6 @@ impl SSXLEngine {
     #[func]
     pub fn get_active_generator_id(&self) -> GString {
         if self.conductor.is_none() {
-            godot_error!("Cannot get active generator: Conductor not initialized.");
             return GString::from("ERROR: CONDUCTOR NOT INITIALIZED");
         }
 
@@ -368,7 +356,8 @@ impl SSXLEngine {
         }
     }
 
-    // --- Destructor Replacement ---
+    // ------------------------- CLEANUP -------------------------
+
     /// Expose a function for Godot to call on cleanup.
     #[func]
     pub fn shutdown_engine(&mut self) {
@@ -378,12 +367,13 @@ impl SSXLEngine {
         self.generation_receiver = None; 
 
         if let Some(conductor_arc) = self.conductor.take() {
+            // Attempt to unwrap and teardown the conductor gracefully if no other references exist
             if let Ok(c) = Arc::try_unwrap(conductor_arc) {
                 if let Ok(conductor) = c.into_inner() {
                     conductor.graceful_teardown();
                 }
             } else {
-                godot_error!("SSXLEngine: Cannot fully shutdown Conductor; other references still exist. This is usually okay if other systems hold a shared reference, but it might indicate a leak if unintended.");
+                godot_error!("SSXLEngine: Cannot fully shutdown Conductor; other references still exist.");
             }
         }
     }
