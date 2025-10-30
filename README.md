@@ -2,31 +2,38 @@
 
 ![SSXL-ext Banner](SSXL-ext.png)
 
-**SSXL-ext** is a high-performance, modular procedural generation engine written in **Rust**, designed to integrate seamlessly with **Godot 4.2+** via **GDExtension**. It separates the heavy lifting of world generation from the rendering pipeline, enabling blazing-fast content creation without sacrificing visual fidelity.
+**SSXL-ext** is a high-performance, modular procedural generation engine written in **Rust**, designed to integrate seamlessly with **Godot 4.2+** via **GDExtension**. It doesn’t simulate worlds—it forges them. In milliseconds.
 
 > “SSXL-ext is not a game—it’s the genesis point for your game.”
 
 ---
 
-## 🚀 Key Features
+## ⚡️ The Breakthrough
 
-- **Subzero Cold Performance**  
-  Rust-powered generation algorithms with zero-cost abstractions and multithreaded execution.
+> 🧨 3.8 million tiles placed in 4 seconds.  
+> 🚫 GDScript queue eliminated.  
+> ✅ Rust writes directly to Godot’s `TileMap`.
 
-- **Modular Workspace**  
-  Swap out generation logic (Perlin, Cellular Automata, etc.) without touching the engine interface.
+The engine now bypasses Godot’s scripting layer entirely. Chunks are generated asynchronously in Rust and applied synchronously to the `TileMap`—no queue, no delay, no mercy.
 
-- **GDExtension Bridge**  
-  Fast, safe, low-latency data transfer between Rust and Godot using the `gdext` ecosystem.
+---
 
-- **Multithreaded Execution**  
-  `ssxl_sync` spawns worker threads to generate chunks asynchronously, keeping the Godot main thread smooth.
+## 🚀 Core Features
 
-- **Core Algorithms**  
-  Includes:
-  - Perlin & Simplex Noise
-  - 2D & 3D Cellular Automata
-  - Custom biome blending via the **Conductor** pipeline
+- **Direct TileMap Integration**  
+  Rust sends `ChunkData` straight to Godot’s rendering layer. No intermediaries.
+
+- **Multithreaded Generation**  
+  Worker threads spawn via `ssxl_sync`, generating chunks in parallel.
+
+- **Modular Algorithms**  
+  Swap between Perlin, Cellular Automata, Maze, Cave, Solid Fill, Checkerboard—no engine changes required.
+
+- **Zero-Cost Abstractions**  
+  Rust’s performance profile ensures no overhead, even at scale.
+
+- **Godot as a Visualizer**  
+  SSXL treats Godot as a high-speed renderer—not a processor.
 
 ---
 
@@ -64,7 +71,18 @@ cargo build --release
 
 ---
 
-## 📝 Script Naming Refinements
+## 🧠 Philosophy
+
+SSXL-ext is built on the principle of **separation of concerns**.  
+Rust handles the math, the noise, the concurrency.  
+Godot handles the visuals, the physics, the scripting.  
+Together, they form a symphony of speed and control.
+
+> SSXL-ext doesn’t wait for the world to load. It builds the world while you play.
+
+---
+
+## 📝 Naming Conventions
 
 | Current File Name             | Module         | Recommended Name       | Reasoning                                      |
 |------------------------------|----------------|------------------------|------------------------------------------------|
@@ -78,38 +96,19 @@ cargo build --release
 
 ---
 
-## ❄️ Performance Alignment: Taming the Godot Bulldozer
+## 🧊 Performance Notes
 
-### 1. Asynchronous Chunk Generation
+- **ChunkData is king**  
+  Entire chunks are transferred as bulk payloads—no per-tile calls.
 
-Use `ssxl_sync` to spawn Rust worker threads for chunk generation.  
-Return `ChunkData` via lock-free queue or channel to `ssxl_godot::SSXLEngine`.  
-Result: High FPS, smooth gameplay, chunks pop in as they complete.
+- **Rendering is synchronous**  
+  TileMap updates happen on the main thread, instantly.
 
-### 2. High-Speed Data Transfer
+- **Cache-aware generation**  
+  Chunks are loaded from cache or generated on-demand, then stored.
 
-❌ Avoid per-tile GDExtension calls.  
-✅ Transfer entire chunk as a flat array (`PackedByteArray`, `Vec<u8>`).  
-Godot unpacks in one go—less FFI overhead, more speed.
-
-### 3. Godot-Side Rendering Optimization
-
-❌ Don’t create a new Node3D/Sprite2D per tile.  
-✅ Use:
-
-- **2D**: `TileMap` or custom `_draw()` with `RenderingServer`  
-- **3D**: `MultiMeshInstance3D` with batched transforms/colors
-
-> Treat Godot as a high-speed data visualizer—not a processor.
-
----
-
-## 🧠 Philosophy
-
-SSXL-ext is built on the principle of **separation of concerns**.  
-Rust handles the math, the noise, the concurrency.  
-Godot handles the visuals, the physics, the scripting.  
-Together, they form a symphony of speed and control.
+- **No queue, no lag**  
+  The GDScript queue is gone. The bottleneck is gone. The legend begins.
 
 ---
 
