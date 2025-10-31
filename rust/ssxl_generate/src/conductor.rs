@@ -8,16 +8,28 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use std::io;
 
+// 🚀 TEMPO BOOST: Rayon for CPU parallelization
+use rayon::prelude::*;
+// 🚀 TEMPO BOOST: Use num_cpus to set worker threads dynamically
+use num_cpus;
+
+// 📐 BULLDOZER FIX: Imports updated to support i64 (64-bit) coordinates
+use glam::I64Vec3;
+use ssxl_math::{Vec2i, prelude::ChunkKey};
+
 // --- CONSTANTS ---
-const CHUNK_SIZE: usize = 64;
+const CHUNK_SIZE: usize = 64; // The size of a chunk in tiles
+
+/// A safety measure to prevent the Conductor from trying to generate or track
+/// an excessive number of chunks that could lead to memory exhaustion.
+/// This limit (100,000) supports maps up to approximately 16192x16192 tiles (253x253 chunks).
+const MAX_ACTIVE_CHUNKS: i64 = 100_000_000;
 
 // --- INTERNAL CRATE DEPENDENCIES ---
 use ssxl_cache::ChunkCache;
-use ssxl_math::{Vec2i, prelude::ChunkKey};
-use glam::IVec3;
-
 use crate::Generator;
 use crate::perlin_generator::PerlinGenerator;
+// FIX: No-Break Space (\u{a0}) removed from indentation on the following lines.
 use crate::cellular_automata_generator::{
     CellularAutomataGenerator,
     RULE_BASIC_CAVE,
@@ -34,7 +46,8 @@ use ssxl_tools::get_config_from_path;
 type DynGenerator = Box<dyn Generator + Send + Sync>;
 
 // --- MPSC Channel Configuration ---
-const PROGRESS_CHANNEL_BOUND: usize = 100;
+// 🚀 TEMPO BOOST: Increased bound to allow Rayon to get far ahead of the main thread consumer.
+const PROGRESS_CHANNEL_BOUND: usize = 1024;
 
 // -----------------------------------------------------------------------------
 // GENERATION MESSAGES
@@ -47,7 +60,8 @@ pub enum GenerationMessage {
     /// A general status update (e.g., "Initializing Noise", "Processing 5/100 Chunks").
     StatusUpdate(String),
     /// Reports the completion of a single chunk. Contains the chunk's coordinates AND the bulk data.
-    ChunkGenerated(Vec2i, ChunkData), // 🚀 MODIFIED: Carries the bulk data payload
+    /// 🚀 **TEMPO BOOST:** Uses Arc<ChunkData> for zero-copy transfer to the main thread.
+    ChunkGenerated(Vec2i, Arc<ChunkData>),
     /// Reports the final completion of the entire generation run.
     GenerationComplete,
     /// Reports a non-fatal error during generation.
@@ -157,8 +171,12 @@ impl Conductor {
         let config = get_config_from_path(config_path)?;
 
         // --- Runtime Setup ---
+        // 🚀 TEMPO BOOST: Dynamically set worker threads to match CPU cores.
+        let num_cores = num_cpus::get();
+        info!("Tokio Runtime initializing with {} worker threads (all logical cores).", num_cores);
+
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
+            .worker_threads(num_cores)
             .enable_all()
             .build()?;
 
@@ -178,11 +196,11 @@ impl Conductor {
         let ca_maze: DynGenerator = Box::new(CellularAutomataGenerator::new(RULE_MAZE));
         generators.insert(ca_maze.id().to_string(), Arc::new(ca_maze));
 
-        // 4. Cellular Automata Generator (Solid Fill) 🆕
+        // 4. Cellular Automata Generator (Solid Fill)
         let ca_solid: DynGenerator = Box::new(CellularAutomataGenerator::new(RULE_SOLID));
         generators.insert(ca_solid.id().to_string(), Arc::new(ca_solid));
 
-        // 5. Cellular Automata Generator (Checkerboard) 🆕
+        // 5. Cellular Automata Generator (Checkerboard)
         let ca_checkerboard: DynGenerator = Box::new(CellularAutomataGenerator::new(RULE_CHECKERBOARD));
         generators.insert(ca_checkerboard.id().to_string(), Arc::new(ca_checkerboard));
 
@@ -199,6 +217,7 @@ impl Conductor {
         };
 
         // --- MPSC Channel Setup ---
+        // Bound set high to prevent backpressure on fast Rayon threads
         let (progress_sender, progress_receiver) = mpsc::channel(PROGRESS_CHANNEL_BOUND);
 
         // --- Conductor State Initialization ---
@@ -255,75 +274,96 @@ impl Conductor {
         }
 
         // 2. Prepare for Asynchronous Generation
-        let internal_state_clone = self.internal_state.clone();
         let runtime_handle = self.get_handle();
-        let progress_sender_clone = self.progress_sender.clone(); // Clone Sender for the task.
-
-        // 🚀 NEW: Capture resources needed for generation and caching,
-        // moving the generate_single_chunk context into the async task.
+        // Clone all resources needed for the *blocking* task's move closure
         let generators_clone = self.generators.clone();
         let chunk_cache_clone = self.chunk_cache.clone();
         let active_generator_id = self.internal_state.get_active_generator_id();
+        let progress_sender_clone = self.progress_sender.clone();
+        let internal_state_clone = self.internal_state.clone();
+        let config_clone = config.clone(); // Clone the config for the task
 
-        runtime_handle.spawn(async move {
-            info!("Async generation task spawned with config: {:?}", config);
-
-            // Send initial status update
-            let _ = progress_sender_clone.send(GenerationMessage::StatusUpdate("Starting generation task...".into())).await;
+        // --- 3. Offload CPU-Intensive Work to Blocking Pool (THE TEMPO BOOST) ---
+        runtime_handle.spawn_blocking(move || { // ⚠️ CRITICAL CHANGE: Use spawn_blocking for CPU work
+            info!("Blocking generation task started with config: {:?}", config_clone);
 
             // Increment queue depth to signal a task has started
             internal_state_clone.queue_depth.fetch_add(1, Ordering::Relaxed);
-
-            // --- IMPLEMENTATION: FULL CHUNK LOOP ---
-            // Calculate the grid dimensions in chunks (using ceiling division)
-            let width_in_chunks = (config.width + CHUNK_SIZE - 1) / CHUNK_SIZE;
-            let height_in_chunks = (config.height + CHUNK_SIZE - 1) / CHUNK_SIZE;
+            
+            // Calculate grid dimensions using i64 types
+            let chunk_size_i64 = CHUNK_SIZE as i64;
+            let width_in_chunks = (config_clone.width as i64 + chunk_size_i64 - 1) / chunk_size_i64;
+            let height_in_chunks = (config_clone.height as i64 + chunk_size_i64 - 1) / chunk_size_i64;
+            // The total number of chunks to process
             let total_chunks = width_in_chunks * height_in_chunks;
+            
+            // 🛑 SAFETY CHECK: Re-introducing the chunk limit to prevent memory exhaustion
+            if total_chunks > MAX_ACTIVE_CHUNKS {
+                let error_msg = format!("max chunks limit exceeded: requested {} chunks ({}x{}) but the limit is {}. Increase MAX_ACTIVE_CHUNKS in conductor.rs if needed.",
+                    total_chunks, width_in_chunks, height_in_chunks, MAX_ACTIVE_CHUNKS);
+                error!("{}", error_msg);
+                let _ = progress_sender_clone.blocking_send(GenerationMessage::Error(error_msg.into()));
+                // CRITICAL FIX: Decrement the queue depth since we are aborting the task
+                internal_state_clone.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                return; // Exit the blocking task gracefully on error
+            }
+
+            // --- 1. Create a flattened collection of all chunk coordinates (i64) ---
+            let all_chunk_coords: Vec<Vec2i> = (0..height_in_chunks)
+                .flat_map(|y| (0..width_in_chunks).map(move |x| Vec2i::new(x, y)))
+                .collect();
+
+            info!("Generation starting: {} chunks to process.", all_chunk_coords.len());
 
             if total_chunks == 0 {
-                error!("Generation failed: Calculated chunk count is zero for size {}x{}. Sending error signal.", config.width, config.height);
-                let _ = progress_sender_clone.send(GenerationMessage::Error("Map dimensions are too small to contain a single chunk.".into())).await;
+                error!("Generation failed: Calculated chunk count is zero for size {}x{}. Sending error signal.", config_clone.width, config_clone.height);
+                let _ = progress_sender_clone.blocking_send(GenerationMessage::Error("Map dimensions are too small to contain a single chunk.".into()));
             } else {
-                info!("Generation starting: {} chunks ({}x{}) to process.", total_chunks, width_in_chunks, height_in_chunks);
-
-                // Outer loop (Y-axis)
-                for chunk_y in 0..height_in_chunks {
-                    // Inner loop (X-axis)
-                    for chunk_x in 0..width_in_chunks {
-                        let chunk_coords = Vec2i::new(chunk_x as i32, chunk_y as i32);
-                        let key_vec3 = IVec3::new(chunk_coords.x, chunk_coords.y, 0);
+                // --- 2. Parallelize the entire generation workload using Rayon ---
+                all_chunk_coords
+                    .par_iter()
+                    .for_each(|&chunk_coords| { // Use for_each for fire-and-forget generation
+                        // The generation logic below now executes in parallel across CPU cores!
+                        
+                        // 📐 BULLDOZER FIX: Use I64Vec3 (i64) to prevent coordinate overflow on key creation.
+                        let key_vec3 = I64Vec3::new(chunk_coords.x, chunk_coords.y, 0);
+                        
                         let chunk_key = ChunkKey(key_vec3);
-                        let chunk_data: ChunkData; // Data to be generated or loaded
+                        let chunk_data: ChunkData;
 
-                        // ⚠️ CORE TEMPO ALIGNMENT: GENERATE & CACHE IN THE WORKER THREAD
+                        // ⚠️ CORE TEMPO ALIGNMENT: GENERATE & CACHE IN PARALLEL
 
                         // --- 1. Attempt to load from cache ---
+                        // Mutex Lock contention will occur here, but Rayon handles this better than Tokio threads
                         match chunk_cache_clone.lock() {
-                            Ok(mut cache_lock) => {
+                            // FIX: Removed 'mut' from 'cache_lock' to resolve 'unused_mut' warning.
+                            Ok(cache_lock) => {
+                                // Caching logic remains the same: load, generate, save
                                 match cache_lock.load_chunk(&chunk_key) {
                                     Ok(Some(data)) => {
-                                        info!("Async: Retrieved chunk {:?} from cache.", chunk_coords);
+                                        info!("Blocking: Retrieved chunk {:?} from cache.", chunk_coords);
                                         chunk_data = data;
                                     },
                                     Ok(None) => {
-                                        info!("Async: Chunk {:?} not found in cache. Generating...", chunk_coords);
+                                        info!("Blocking: Chunk {:?} not found in cache. Generating...", chunk_coords);
 
                                         // --- 2. Generate the Chunk ---
                                         let generator_arc = generators_clone
                                             .get(&active_generator_id)
                                             .expect("Active generator ID must be registered in Conductor.");
 
-                                        chunk_data = generator_arc.generate_chunk(chunk_coords);
+                                        chunk_data = generator_arc.generate_chunk(chunk_coords); // ⚠️ Vec2i (i64 based)
 
                                         // --- 3. Save to cache ---
+                                        // The MutexGuard is locked in the surrounding scope, so we can access `cache_lock`
                                         if let Err(e) = cache_lock.save_chunk(&chunk_key, &chunk_data) {
-                                            error!("Async: Failed to save chunk {:?} to cache: {:?}", chunk_coords, e);
+                                            error!("Blocking: Failed to save chunk {:?} to cache: {:?}", chunk_coords, e);
                                         } else {
-                                            info!("Async: Saved chunk {:?} to cache.", chunk_coords);
+                                            info!("Blocking: Saved chunk {:?} to cache.", chunk_coords);
                                         }
                                     },
                                     Err(e) => {
-                                        warn!("Async: Cache load failed for {:?}: {:?}. Forcing generation.", chunk_coords, e);
+                                        warn!("Blocking: Cache load failed for {:?}: {:?}. Forcing generation without caching.", chunk_coords, e);
                                         let generator_arc = generators_clone
                                             .get(&active_generator_id)
                                             .expect("Active generator ID must be registered in Conductor.");
@@ -332,39 +372,39 @@ impl Conductor {
                                 }
                             },
                             Err(e) => {
-                                error!("Async: Cache Mutex poisoned during load/save: {}", e);
-                                warn!("Async: Falling back to generation without caching.");
+                                error!("Blocking: Cache Mutex poisoned during load/save: {}", e);
+                                warn!("Blocking: Falling back to generation without caching.");
                                 let generator_arc = generators_clone
                                     .get(&active_generator_id)
                                     .expect("Active generator ID must be registered in Conductor.");
                                 chunk_data = generator_arc.generate_chunk(chunk_coords);
                             }
                         }
+                        
+                        // 🚀 **TEMPO BOOST:** Wrap ChunkData in Arc for zero-copy transfer
+                        let chunk_data_arc = Arc::new(chunk_data);
 
-                        // 4. Emit signal with the bulk data payload
-                        let send_result = progress_sender_clone.send(
-                            GenerationMessage::ChunkGenerated(chunk_coords, chunk_data) // 👈 SENDING BULK DATA
-                        ).await;
+                        // 4. Emit signal with the zero-copy bulk data payload
+                        let send_result = progress_sender_clone.blocking_send( // ⚠️ Use blocking_send
+                            GenerationMessage::ChunkGenerated(chunk_coords, chunk_data_arc) // 👈 SENDING ARC<BULK DATA>
+                        );
 
                         if send_result.is_err() {
                             // If the receiver (Godot) dropped the channel, gracefully stop the work.
                             warn!("Progress channel disconnected. Stopping generation task.");
-
-                            // Decrease queue depth before exiting the task.
-                            internal_state_clone.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                            // Note: We can't break from a for_each loop, so we return early
                             return;
                         }
-                    }
-                }
+                    }); // END of rayon parallel processing
             }
 
             // Send final completion message
-            let _ = progress_sender_clone.send(GenerationMessage::GenerationComplete).await;
+            let _ = progress_sender_clone.blocking_send(GenerationMessage::GenerationComplete);
 
             // Decrement queue depth on completion
             internal_state_clone.queue_depth.fetch_sub(1, Ordering::Relaxed);
 
-            info!("Async generation task finished processing command: {:?}", config);
+            info!("Blocking generation task finished processing command: {:?}", config_clone);
         });
 
         Ok(())

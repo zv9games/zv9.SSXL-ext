@@ -1,9 +1,9 @@
-// ssxl_math/src/hashing.rs
 //! Core hashing utilities for converting coordinate data into unique identifiers (hashes).
 //! These hashes are primarily used as stable keys for the cache and storage layers.
 
 use crate::primitives::SSXLResult;
-use glam::IVec3;
+// 📐 BULLDOZER FIX: Changed IVec3 (i32) to I64Vec3 (i64) to support coordinates beyond 2.1 billion chunks.
+use glam::I64Vec3; 
 use sha2::{Digest, Sha256};
 
 /// Generates a unique SHA-256 hash string for a given 3D integer coordinate (chunk position).
@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 /// # Returns
 ///
 /// A `String` containing the hexadecimal representation of the SHA-256 hash.
-pub fn hash_chunk_coords(coords: IVec3) -> SSXLResult<String> {
+pub fn hash_chunk_coords(coords: I64Vec3) -> SSXLResult<String> {
     // 1. Format the coordinate string: "x:y:z"
     let coord_string = format!("{}:{}:{}", coords.x, coords.y, coords.z);
 
@@ -63,7 +63,8 @@ mod tests {
     /// Tests that the SHA-256 hashing of coordinates is strictly deterministic.
     #[test]
     fn test_chunk_coords_determinism() {
-        let coords = IVec3::new(10, -5, 100);
+        // Test with a coordinate that exceeds i32 limits to prove i64 is active.
+        let coords = I64Vec3::new(3_000_000_000, -5, 100); 
         let hash1 = hash_chunk_coords(coords).unwrap();
         let hash2 = hash_chunk_coords(coords).unwrap();
         
@@ -73,8 +74,8 @@ mod tests {
     /// Tests that adjacent coordinates produce different hashes and verifies the format.
     #[test]
     fn test_chunk_coords_uniqueness_and_format() {
-        let coords1 = IVec3::new(1, 1, 1);
-        let coords2 = IVec3::new(1, 1, 2); // Only Z differs
+        let coords1 = I64Vec3::new(1, 1, 1);
+        let coords2 = I64Vec3::new(1, 1, 2); // Only Z differs
         let hash1 = hash_chunk_coords(coords1).unwrap();
         let hash2 = hash_chunk_coords(coords2).unwrap();
 

@@ -56,9 +56,7 @@ impl TileType {
             3 => Some(TileType::Mountain),
             4 => Some(TileType::Boundary),
             5 => Some(TileType::Structure),
-            // FIX: Added Rock
-            6 => Some(TileType::Rock), 
-            // FIX: Updated Custom variants' values
+            6 => Some(TileType::Rock),
             7 => Some(TileType::Custom1),
             8 => Some(TileType::Custom2),
             _ => None,
@@ -73,8 +71,12 @@ impl TileType {
 impl TileType {
     /// Checks if the tile type indicates a ground-based, traversable surface.
     pub const fn is_walkable(self) -> bool {
-        // FIX: Added Rock as a walkable surface
-        matches!(self, TileType::Grass | TileType::Mountain | TileType::Structure | TileType::Rock)
+        matches!(self, 
+            TileType::Grass 
+            | TileType::Mountain 
+            | TileType::Structure 
+            | TileType::Rock
+        )
     }
 
     /// Checks if the tile type indicates a liquid that typically requires fluid dynamics simulation.

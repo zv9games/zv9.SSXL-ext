@@ -1,10 +1,8 @@
 // ssxl_generate/src/cellular_automata_generator.rs
 
 use crate::Generator;
-use ssxl_math::{
-    Vec2i,
-    generation_utils::fast_rand,
-};
+use ssxl_math::Vec2i;
+use fastrand; 
 use ssxl_shared::{
     chunk_data::{ChunkData, CHUNK_SIZE},
     grid_bounds::GridBounds,
@@ -18,10 +16,10 @@ const CA_ITERATIONS: u8 = 4;
 const INITIAL_FILL_PERCENT: u8 = 45; // 45% of tiles start as 'Rock'
 
 // --- RULESET DEFINITIONS ---
-pub const RULE_BASIC_CAVE: u8 = 0; // Current rules: Generates large, open cave systems.
-pub const RULE_MAZE: u8 = 1;        // New rules: Generates thin, winding maze/pillar structures.
-pub const RULE_SOLID: u8 = 2;        // 🆕 Fills the entire chunk with a solid tile.
-pub const RULE_CHECKERBOARD: u8 = 3; // 🆕 Generates a checkerboard pattern.
+pub const RULE_BASIC_CAVE: u8 = 0; // Generates large, open cave systems.
+pub const RULE_MAZE: u8 = 1;         // Generates thin, winding maze/pillar structures.
+pub const RULE_SOLID: u8 = 2;         // Fills the entire chunk with a solid tile.
+pub const RULE_CHECKERBOARD: u8 = 3; // Generates a checkerboard pattern.
 
 
 /// ⚙️ Implements a 2D Cellular Automata (CA) generator for pattern-based terrain.
@@ -38,27 +36,30 @@ impl CellularAutomataGenerator {
 }
 
 // -------------------------------------------------------------------------
-// 🆕 NEW LOGIC: STATIC PATTERN GENERATION
+// STATIC PATTERN GENERATION
 // -------------------------------------------------------------------------
 
 /// Generates a simple, static pattern that does not require CA iterations.
 fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
     // 1. Chunk Metadata Initialization
-    let chunk_tile_size = CHUNK_SIZE as i32;
+    let chunk_tile_size = CHUNK_SIZE as i64;
     let world_start_x = chunk_coords.x * chunk_tile_size;
     let world_start_y = chunk_coords.y * chunk_tile_size;
     let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
+    
     let bounds = GridBounds::new(
-        world_start_x as i64,
-        world_start_y as i64,
-        (world_start_x + chunk_tile_size) as i64,
-        (world_start_y + chunk_tile_size) as i64,
+        world_start_x,
+        world_start_y,
+        world_start_x + chunk_tile_size,
+        world_start_y + chunk_tile_size,
     );
+    
     let dimension_name = match ruleset {
         RULE_SOLID => "Solid_Fill".to_string(),
         RULE_CHECKERBOARD => "Checkerboard".to_string(),
         _ => "Static_Pattern_Unknown".to_string(),
     };
+    
     let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
     let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
 
@@ -66,9 +67,9 @@ fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
     for y in 0..CHUNK_SIZE {
         for x in 0..CHUNK_SIZE {
             let tile_type = match ruleset {
-                RULE_SOLID => TileType::Rock, // Always Rock
+                RULE_SOLID => TileType::Rock,
                 RULE_CHECKERBOARD => {
-                    // The tile type alternates based on (x + y) parity
+                    // Tile type alternates based on (x + y) parity
                     if (x + y) % 2 == 0 {
                         TileType::Rock
                     } else {
@@ -77,7 +78,6 @@ fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
                 }
                 _ => TileType::Void, // Should not happen
             };
-            // Note: Noise value is 0.0 for pure pattern tiles
             tiles.push(TileData::new(tile_type, 0.0));
         }
     }
@@ -88,11 +88,9 @@ fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
 }
 
 
-// --- CORE GENERATION LOGIC (UNCHANGED) ---
-
 /// Determines the next tile type based on the current type, live neighbors, and the active ruleset.
 fn get_next_tile_type(current_type: TileType, live_neighbors: u8, ruleset: u8) -> TileType {
-    // NOTE: We only handle Rock/Void transitions here.
+    // NOTE: Only handles Rock/Void transitions.
 
     // Define Birth (B) and Survival (S) conditions based on the ruleset
     let (birth_min, birth_max, survive_min, survive_max) = match ruleset {
@@ -132,6 +130,7 @@ fn apply_ca_step(chunk_data: &mut ChunkData, ruleset: u8) {
             let current_tile = &chunk_data.tiles[index];
             let live_neighbors = count_live_neighbors(chunk_data, x as u32, y as u32);
 
+            // Corrected function call with 3 arguments
             let new_type = get_next_tile_type(
                 current_tile.tile_type,
                 live_neighbors,
@@ -186,14 +185,23 @@ impl Generator for CellularAutomataGenerator {
     fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
         info!("CA Generator: Starting chunk generation at {:?} with ruleset {}.", chunk_coords, self.ruleset);
 
-        // 🆕 1. Check for static patterns and execute non-CA logic
+        // 1. Check for static patterns and execute non-CA logic
         if self.ruleset == RULE_SOLID || self.ruleset == RULE_CHECKERBOARD {
             warn!("CA Generator: Using static pattern ruleset ({}). Bypassing CA steps.", self.ruleset);
             return generate_static_pattern(chunk_coords, self.ruleset);
         }
 
-        // --- 2. CHUNK METADATA INITIALIZATION (for CA algorithms) ---
-        let chunk_tile_size = CHUNK_SIZE as i32;
+        // 2. DETERMINISTIC PRNG SEEDING
+        // Use chunk coordinates to create a predictable seed for fastrand's thread-local generator.
+        let seed_x = chunk_coords.x as u64;
+        let seed_y = chunk_coords.y as u64;
+        // Simple scrambling of the coordinates for distribution.
+        let seed = seed_x.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(seed_y);
+        fastrand::seed(seed);
+        info!("CA Generator: Seeded PRNG with deterministic value: {}.", seed);
+        
+        // 3. CHUNK METADATA INITIALIZATION (for CA algorithms)
+        let chunk_tile_size = CHUNK_SIZE as i64;
 
         let world_start_x = chunk_coords.x * chunk_tile_size;
         let world_start_y = chunk_coords.y * chunk_tile_size;
@@ -201,22 +209,24 @@ impl Generator for CellularAutomataGenerator {
         let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
 
         let bounds = GridBounds::new(
-            world_start_x as i64,
-            world_start_y as i64,
-            (world_start_x + chunk_tile_size) as i64,
-            (world_start_y + chunk_tile_size) as i64,
+            world_start_x,
+            world_start_y,
+            world_start_x + chunk_tile_size,
+            world_start_y + chunk_tile_size,
         );
 
         let dimension_name = self.id().to_string(); // Use the ID as the dimension name
 
         let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
 
-        // --- 3. INITIAL RANDOM FILL (Seed) ---
+        // 4. INITIAL RANDOM FILL (Seed)
         let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
 
         for _ in 0..(CHUNK_SIZE * CHUNK_SIZE) {
-            // fast_rand(N) returns 0 if a random number 0..=99 is < N
-            let is_rock = fast_rand(INITIAL_FILL_PERCENT) == 0;
+            // Generate a random number from 0 to 99.
+            let random_val: u8 = fastrand::u8(0..100);
+            // The tile is rock if the random number is less than INITIAL_FILL_PERCENT.
+            let is_rock = random_val < INITIAL_FILL_PERCENT;
 
             let tile_type = if is_rock {
                 TileType::Rock
@@ -227,9 +237,8 @@ impl Generator for CellularAutomataGenerator {
         }
         chunk_data.insert_tiles(tiles);
 
-        // --- 4. APPLY CA ITERATIONS ---
+        // 5. APPLY CA ITERATIONS
         for i in 0..CA_ITERATIONS {
-            // Pass the active ruleset ID
             apply_ca_step(&mut chunk_data, self.ruleset);
             info!("CA Generator: Iteration {} complete.", i + 1);
         }

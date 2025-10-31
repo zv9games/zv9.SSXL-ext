@@ -1,23 +1,22 @@
-// ssxl_math/src/generation_utils.rs
 //! Utility module for core functions used by the generation pipeline.
 
-// FIX: Corrected the module path from 'math_primitives' to 'primitives'
 use crate::primitives::SSXLData; 
-use std::time::SystemTime; // Required for seeding fast_rand
+// FIX: Simplified imports. thread_rng is now used, removing the need for SeedableRng, Pcg64, etc.
+use rand::Rng; 
 
-/// 🛠️ Implements a basic placeholder fast random utility for CA seeding.
-///
+// -----------------------------------------------------------------------------
+// I. RANDOMNESS UTILITIES
+// -----------------------------------------------------------------------------
+
+/// A simple, thread-local generator for random values.
+/// This uses the standard library's thread-local RNG (`rand::thread_rng()`)
+/// to efficiently generate random numbers, bypassing the complex manual
+/// setup that caused trait resolution errors.
+/// 
 /// Returns `0` if a generated random value (0-99) is less than `target_percent`.
-/// This is used to randomly select tiles for the initial Cellular Automata seed.
-pub fn fast_rand(target_percent: u8) -> u32 {
-    // Uses time/memory address hash for a quick, non-cryptographic pseudo-random seed
-    let seed = SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64;
-        
-    // Simple modulo 100 to get a value for percent chance check
-    let rand_val = (seed % 100) as u8;
+pub fn generate_percent_roll(target_percent: u8) -> u32 {
+    // thread_rng() returns a thread-local, seeded generator.
+    let rand_val = rand::thread_rng().gen_range(0..100) as u8;
 
     if rand_val < target_percent {
         0
@@ -26,10 +25,11 @@ pub fn fast_rand(target_percent: u8) -> u32 {
     }
 }
 
+// -----------------------------------------------------------------------------
+// II. CORE PROCESS UTILITIES
+// -----------------------------------------------------------------------------
+
 /// Processes the input data, applying a placeholder mathematical transformation.
-///
-/// In a real engine, this would perform preliminary calculations (e.g., noise sampling,
-/// terrain height adjustments) before final structure generation.
 ///
 /// # Arguments
 ///

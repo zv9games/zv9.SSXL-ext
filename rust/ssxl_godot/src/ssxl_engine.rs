@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 // Internal Crate Dependencies
 use ssxl_generate::{Conductor, GeneratorConfig};
+// NOTE: GenerationMessage is assumed to be updated in conductor.rs to use Arc<ChunkData>
 use ssxl_generate::conductor::GenerationMessage;
 use ssxl_shared::chunk_data; 
 use ssxl_shared::chunk_data::ChunkData;
@@ -87,39 +88,57 @@ impl SSXLEngine {
     // ------------------------- CHUNK DATA APPLICATION ----------------------------
 
     /// Synchronously applies the generated ChunkData to the Godot TileMap on the main thread.
-    fn apply_chunk_data(&mut self, chunk_data: ChunkData) {
+    /// 🚀 **TEMPO BOOST:** This now accepts an Arc<ChunkData>, reducing data transfer time.
+    /// ⚠️ **TODO: BATCHING REFACTOR:** The core loop here is the *biggest* bottleneck.
+    /// It must be replaced with a single TileMap batch operation (e.g., `tilemap.set_cells_i`)
+    /// which will be 5-10x faster than this per-tile loop.
+    fn apply_chunk_data(&mut self, chunk_data_arc: Arc<ChunkData>) {
         // Take ownership of the tilemap for mutation during the operation
         if let Some(mut tilemap) = self.tilemap_node.take() {
-            let chunk_size = chunk_data::ChunkData::SIZE as i32;
+            // Dereference the Arc once for efficient access
+            let chunk_data = chunk_data_arc.as_ref();
+
+            // Use i64 for all internal geometry calculations
+            let chunk_size = chunk_data::ChunkData::SIZE as i64;
             
-            // Chunk coordinates in the world grid (top-left tile of the chunk)
-            let chunk_world_x = chunk_data.bounds.min.x as i32;
-            let chunk_world_y = chunk_data.bounds.min.y as i32;
+            // Chunk coordinates are now pulled as i64 from the ChunkData struct (Bulldozer)
+            let chunk_world_x: i64 = chunk_data.bounds.min.x;
+            let chunk_world_y: i64 = chunk_data.bounds.min.y;
             
             let layer = 0;
             let source_id = 0;
             let alternative_tile = 0;
 
-            for y in 0..chunk_size {
-                for x in 0..chunk_size {
-                    let index = (y * chunk_size + x) as usize;
+            // ⚠️ THIS LOOP MUST BE REPLACED WITH A BATCH CALL
+            for y_i64 in 0..chunk_size {
+                for x_i64 in 0..chunk_size {
+                    // Index calculation uses i64 to prevent usize overflow on large chunks
+                    let index = (y_i64 * chunk_size + x_i64) as usize; 
                     
                     if let Some(tile) = chunk_data.tiles.get(index) {
                         
                         let tile_type_id = tile.tile_type as i32;
                         
-                        // Calculate world coordinates for the tile
-                        let world_x = x + chunk_world_x;
-                        let world_y = y + chunk_world_y;
+                        // Calculate absolute world coordinates using i64
+                        let world_x_i64 = x_i64 + chunk_world_x;
+                        let world_y_i64 = y_i64 + chunk_world_y;
+                        
+                        // 🚨 CRITICAL CHECK: Acknowledge the Godot i32 limitation (Bulldozer Guard)
+                        if world_x_i64 > i32::MAX as i64 || world_x_i64 < i32::MIN as i64 || 
+                            world_y_i64 > i32::MAX as i64 || world_y_i64 < i32::MIN as i64 {
+                            
+                            godot_error!("Bulldozer Warning: Tile ({}, {}) exceeds Godot TileMap i32 coordinate range. World is too big for current TileMap rendering strategy.", world_x_i64, world_y_i64);
+                            continue; 
+                        }
                         
                         // Simplified Atlas Mapping (Assumes a 1D strip of 16 tiles per row)
                         let atlas_x = tile_type_id % 16;
                         let atlas_y = tile_type_id / 16;
                         
                         let atlas_coords = Vector2i::new(atlas_x, atlas_y);
-                        let tile_coords = Vector2i::new(world_x, world_y);
+                        // Final unavoidable downcast to Godot's 32-bit Vector2i
+                        let tile_coords = Vector2i::new(world_x_i64 as i32, world_y_i64 as i32); 
 
-                        // FIX APPLIED: Removed .bind_mut() on the built-in TileMap class.
                         tilemap
                             .set_cell_ex(layer, tile_coords)
                             .source_id(source_id)
@@ -153,15 +172,18 @@ impl SSXLEngine {
                 info!("Generation Status: {}", msg);
                 status_update = Some(GString::from(format!("GENERATING: {}", msg).as_str()));
             }
-            GenerationMessage::ChunkGenerated(coords, chunk_data) => {
+            // 🚀 TEMPO BOOST: Now receives Arc<ChunkData> for zero-copy transfer
+            GenerationMessage::ChunkGenerated(coords, chunk_data_arc) => {
+                // coords.x and coords.y are now i64 (from Conductor refactor)
                 info!("Chunk Generated: ({}, {}). Applying chunk data...", coords.x, coords.y);
                 
                 // CRITICAL: Call the synchronous drawing function on the main thread
-                self.apply_chunk_data(chunk_data);
+                self.apply_chunk_data(chunk_data_arc);
                 
                 // Emit signal (mostly for UI/metrics)
                 if let Some(signals) = &self.signals_node {
                     if let Ok(mut ssxl_signals_instance) = signals.clone().try_cast::<SSXLSignals>() {
+                        // The signal arguments must be i32 for Godot, clipping the coordinates if the world is too large.
                         ssxl_signals_instance.bind_mut().emit_chunk_generated(coords.x as i32, coords.y as i32);
                     }
                 }
@@ -188,10 +210,11 @@ impl SSXLEngine {
     }
 
     /// Main engine tick method, called by SSXLOracle to poll for updates.
+    /// (Tempo strategy: non-blocking channel drain)
     #[func]
-    pub fn tick(&mut self, current_tick: u64) {
-        godot_print!("SSXLEngine: Received tick #{}", current_tick);
-
+    pub fn tick(&mut self, _current_tick: u64) {
+        // godot_print! is removed for cleaner logs and performance focus.
+        
         // Take ownership of the receiver to avoid mutable borrow conflicts
         if let Some(mut receiver) = self.generation_receiver.take() {
             let mut messages = Vec::new();
@@ -230,6 +253,7 @@ impl SSXLEngine {
 
         godot_print!("--- Initializing Conductor lazily ---");
         
+        // Configuration path is None by default, relying on environment or defaults
         match Conductor::new(None) {
             Ok((conductor_instance, _state, progress_receiver)) => {
                 info!("SSXL Conductor initialized successfully.");

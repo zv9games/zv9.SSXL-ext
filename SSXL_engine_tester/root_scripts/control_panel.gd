@@ -219,7 +219,9 @@ func _on_generate_pressed() -> void:
 		seed_input.text = str(seed)
 		status_label.text = "⚠️ Invalid seed. Using random seed: %d" % seed
 		
-	if width <= 0 or height <= 0 or (float(width) / CHUNK_SIZE_X) * (float(height) / CHUNK_SIZE_Y) > 10_000.0:
+	# --- CHUNK LIMIT UPDATE ---
+	# The client-side soft limit is now 50,000 chunks.
+	if width <= 0 or height <= 0 or (float(width) / CHUNK_SIZE_X) * (float(height) / CHUNK_SIZE_Y) > 50_000.0:
 		status_label.text = "⚠️ Invalid grid size. Max chunks limit exceeded."
 		return
 

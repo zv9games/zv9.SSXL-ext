@@ -1,6 +1,6 @@
 // ssxl_cli/src/cli_util_actions.rs
 
-use std::process::Command;
+use std::process::{Command, Stdio}; // 🆕 Added Stdio for piping
 use tracing::{info, warn, error};
 
 // NEW IMPORTS for Signal Inspector / Concurrency
@@ -10,7 +10,6 @@ use std::time::Duration;
 use std::io::{self, Write};
 use ctrlc;
 use std::env;
-// 🆕 Added fs and path::PathBuf for file copy operations
 use std::{fs, path::PathBuf}; 
 
 // PHASE 2 TRANSITION: Import the Conductor types
@@ -148,7 +147,7 @@ pub fn launch_headless_godot() {
 }
 
 // -----------------------------------------------------------------------------
-// PHASE 7: FFI BRIDGE VALIDATION (E2E FINAL) - MODIFIED (Copy step REMOVED)
+// PHASE 7: FFI BRIDGE VALIDATION (E2E FINAL) - MODIFIED FOR CONCURRENCY FIX
 // -----------------------------------------------------------------------------
 
 /// 🔥 Runs an end-to-end test of the FFI bridge by launching Godot headless
@@ -156,7 +155,6 @@ pub fn launch_headless_godot() {
 pub fn run_ffi_bridge_validation() {
     info!("🔥 STARTING: FFI Bridge and GDExtension Integration Validation...");
 
-    // The DLL is now assumed to be copied at CLI bootup.
     let project_path_abs = match get_godot_project_abs_path() {
         Ok(path) => path,
         Err(e) => {
@@ -169,33 +167,65 @@ pub fn run_ffi_bridge_validation() {
     info!("Running test scene: {} in project (Absolute Path): {}", GODOT_TEST_SCENE, project_path_abs);
 
     // --- 3. Launch Godot Headless to Execute the GDExtension Test ---
-    let godot_command = Command::new(GODOT_EXE_PATH)
+    let mut command = Command::new(GODOT_EXE_PATH);
+    command
         .arg("--headless") 
         .arg("--path")
         .arg(&project_path_abs) 
         .arg("--scene")
         .arg(GODOT_TEST_SCENE)
-        .output();
+        .arg("--quit") // 🛑 CRITICAL FIX: Ensures Godot process exits immediately after running the scene
+        .stdout(Stdio::piped()) // 🛑 FIX: Explicitly pipe stdout for reading
+        .stderr(Stdio::piped()); // 🛑 FIX: Explicitly pipe stderr for reading
 
-    // --- 4. Process the Output ---
-    match godot_command {
-        Ok(output) => {
-            println!("\n--- GODOT TEST OUTPUT START ---");
-            println!("{}", String::from_utf8_lossy(&output.stdout));
-            println!("--- GODOT TEST OUTPUT END ---\n");
-
-            if output.status.success() {
-                info!("✅ FFI/GDExtension Bridge VALIDATION SUCCEEDED!");
-            } else {
-                error!("❌ FFI/GDExtension Bridge VALIDATION FAILED! Exit code: {:?}", output.status.code());
-                eprintln!("--- GODOT ERROR OUTPUT ---");
-                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-            }
-        },
+    // Spawn the process
+    let mut child = match command.spawn() {
+        Ok(c) => c,
         Err(e) => {
-            error!("❌ Failed to execute Godot command: {}", e);
+            error!("❌ Failed to spawn Godot process: {}", e);
             warn!("Please ensure the Godot executable is in the correct path relative to your CLI: {}", GODOT_EXE_PATH);
+            return;
         }
+    };
+
+    // Capture streams BEFORE waiting for the process to exit
+    let stdout = child.stdout.take().expect("Failed to capture stdout stream");
+    let stderr = child.stderr.take().expect("Failed to capture stderr stream");
+
+    // 1. Concurrently read STDOUT in a separate thread to prevent pipe deadlock
+    let stdout_handle = thread::spawn(move || {
+        io::read_to_string(stdout).unwrap_or_else(|_| "Failed to read stdout.".to_string())
+    });
+
+    // 2. Concurrently read STDERR in another thread to prevent pipe deadlock
+    let stderr_handle = thread::spawn(move || {
+        io::read_to_string(stderr).unwrap_or_else(|_| "Failed to read stderr.".to_string())
+    });
+
+    // 3. Main thread waits for the Godot process to exit
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("❌ Godot process failed to wait: {}", e);
+            return;
+        }
+    };
+
+    // 4. Retrieve captured output from the concurrent threads
+    let stdout_output = stdout_handle.join().unwrap_or_else(|_| "Stdout reading thread panicked.".to_string());
+    let stderr_output = stderr_handle.join().unwrap_or_else(|_| "Stderr reading thread panicked.".to_string());
+
+    // --- 5. Process the Output ---
+    println!("\n--- GODOT TEST OUTPUT START ---");
+    println!("{}", stdout_output);
+    println!("--- GODOT TEST OUTPUT END ---\n");
+
+    if status.success() {
+        info!("✅ FFI/GDExtension Bridge VALIDATION SUCCEEDED!");
+    } else {
+        error!("❌ FFI/GDExtension Bridge VALIDATION FAILED! Exit code: {:?}", status.code());
+        eprintln!("--- GODOT ERROR OUTPUT ---");
+        eprintln!("{}", stderr_output);
     }
 }
 

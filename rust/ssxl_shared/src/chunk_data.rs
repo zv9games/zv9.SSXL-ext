@@ -15,10 +15,10 @@ use serde_big_array::BigArray;
 
 // --- CONSTANTS ---
 
-/// The canonical size for all chunks in the Aetherion Engine (32x32 tiles).
-pub const CHUNK_SIZE: u32 = 32; // 📐 FIX: Aligned with the internal logic and tests.
+/// The canonical size for all chunks in the SSXL Engine (32x32 tiles).
+pub const CHUNK_SIZE: u32 = 32;
 /// The total number of tiles in a single chunk (CHUNK_SIZE * CHUNK_SIZE = 1024).
-const TILE_COUNT: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
+const TILE_ARRAY_SIZE: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
 
 // --- STRUCT DEFINITION ---
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,7 +28,7 @@ pub struct ChunkData {
     /// The fixed-size array containing all tile data. `BigArray` is used for efficient
     /// serialization of the large array.
     #[serde(with = "BigArray")]
-    pub tiles: [TileData; TILE_COUNT],
+    pub tiles: [TileData; TILE_ARRAY_SIZE],
     pub dimension_tag: String,
     #[serde(with = "math_primitives::system_time_serde")]
     pub generated_at: SystemTime,
@@ -41,7 +41,7 @@ impl ChunkData {
 
     /// Creates a new, empty ChunkData instance initialized with default data.
     pub fn new(id: u64, bounds: GridBounds, dimension_tag: String) -> Self {
-        let tiles = [TileData::default(); TILE_COUNT];
+        let tiles = [TileData::default(); TILE_ARRAY_SIZE];
         ChunkData {
             id,
             bounds,
@@ -53,19 +53,20 @@ impl ChunkData {
     
     /// Creates a new ChunkData instance using only the chunk coordinates.
     pub fn new_at_coords(chunk_coords: Vec2i) -> Self {
-        let chunk_size_i64 = CHUNK_SIZE as i64;
+        let chunk_size_i64 = Self::SIZE as i64;
         
-        // Convert chunk coordinates to world-space grid coordinates (i64 for GridBounds)
-        let min_x = chunk_coords.x as i64 * chunk_size_i64;
-        let min_y = chunk_coords.y as i64 * chunk_size_i64;
+        // Convert chunk coordinates (Vec2i is i64-based) to world-space grid coordinates
+        let min_x = chunk_coords.x * chunk_size_i64;
+        let min_y = chunk_coords.y * chunk_size_i64;
+        // Max coordinates are inclusive
         let max_x = min_x + chunk_size_i64 - 1;
         let max_y = min_y + chunk_size_i64 - 1;
 
         let bounds = GridBounds::new(min_x, min_y, max_x, max_y);
         
-        // NOTE: In a final system, the ID should be derived via robust hashing.
+        // Simple, deterministic ID derived from chunk coordinates using XOR for fast hashing.
         let id = chunk_coords.x as u64 ^ chunk_coords.y as u64;
-        let tiles = [TileData::default(); TILE_COUNT];
+        let tiles = [TileData::default(); TILE_ARRAY_SIZE];
 
         ChunkData {
             id,
@@ -93,18 +94,19 @@ impl ChunkData {
         })
     }
     
-    /// **CRITICAL FIX for CA Generator:** Replaces the chunk's fixed-size tile array with a new set of tiles.
+    /// Replaces the chunk's fixed-size tile array with a new set of tiles.
     /// Used by generators (like Cellular Automata) that produce a `Vec<TileData>`.
     pub fn insert_tiles(&mut self, tiles_vec: Vec<TileData>) {
-        if tiles_vec.len() == TILE_COUNT {
+        if tiles_vec.len() == TILE_ARRAY_SIZE {
             // Efficiently copy the vector's contents into the fixed-size array
             self.tiles.clone_from_slice(&tiles_vec);
         } else {
+            // Panic signals a contract violation: the generator must produce the correct number of tiles.
             panic!(
-                "Tile vector size mismatch for chunk {:?}: Expected {} but got {}",
+                "Tile vector size mismatch for chunk {:?}. Generator returned {} tiles, but expected {}.",
                 self.bounds,
-                TILE_COUNT,
-                tiles_vec.len()
+                tiles_vec.len(),
+                TILE_ARRAY_SIZE
             );
         }
     }
@@ -134,7 +136,7 @@ mod tests {
         assert_eq!(ChunkData::coord_to_index(16, 16), Some(528));
 
         // 3. Max boundary check (31, 31)
-        // (Y=31 * SIZE=32) + X=31 = 992 + 31 = 1023 (TILE_COUNT - 1)
+        // (Y=31 * SIZE=32) + X=31 = 992 + 31 = 1023 (TILE_ARRAY_SIZE - 1)
         assert_eq!(ChunkData::coord_to_index(31, 31), Some(1023));
 
         // 4. Out-of-bounds check (size is 32, so 32 is out)
