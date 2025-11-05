@@ -11,7 +11,7 @@ ssxl_engine_ffi = { path = "../ssxl_engine_ffi" }
 ssxl_shared = { path = "../ssxl_shared" }
 ssxl_math = { path = "../ssxl_math" }
 ssxl_generate = { path = "../ssxl_generate" }
-
+ssxl_sync = { path = "../ssxl_sync", features = ["godot-bindings"] }
 # --- EXTERNAL DEPENDENCIES ---
 
 # CORE GDExtension BINDINGS

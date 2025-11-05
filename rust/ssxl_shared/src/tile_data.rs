@@ -1,4 +1,5 @@
 // ssxl_shared/src/tile_data.rs
+
 //! Defines the TileData structure: a compact, serializable unit holding all
 //! generated and runtime data for a single tile in the world grid.
 //!
@@ -6,6 +7,14 @@
 
 use super::tile_type::TileType;
 use serde::{Serialize, Deserialize};
+
+// CRITICAL FIX: Required import for AnimationUpdate coordinates.
+// Assumes Vec2i is available from the ssxl_math crate.
+use ssxl_math::Vec2i;
+
+// --------------------------------------------------------------------------------
+// CORE TILE DATA STRUCTURE
+// --------------------------------------------------------------------------------
 
 /// A compact structure holding the state of a single tile in the world.
 ///
@@ -37,8 +46,24 @@ impl Default for TileData {
     }
 }
 
+// --------------------------------------------------------------------------------
+// ANIMATION & COMMUNICATION DATA STRUCTURE (Fixes E0432)
+// --------------------------------------------------------------------------------
+
+/// Represents a simple tile update message for the animation worker.
+/// This struct is sent from `ssxl_sync` (worker) to `ssxl_godot` (main thread)
+/// to apply a single tile graphic change without affecting the underlying `TileData`.
+#[derive(Debug, Clone)]
+pub struct AnimationUpdate {
+    pub layer: i32,
+    pub source_id: i32,
+    pub tile_coords: Vec2i,
+    pub new_atlas_coords: Vec2i,
+}
+
+
 // ---------------------------
-// IMPL: Constructor, Flags Utility and Logic
+// IMPL: TileData Constructor, Flags Utility and Logic
 // ---------------------------
 
 /// Bitmask constants for the `flags` field

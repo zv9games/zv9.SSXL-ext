@@ -7,10 +7,11 @@ edition = "2021"
 # --- INTERNAL DEPENDENCIES ---
 # Required for shared data types and the canonical error type
 ssxl_shared = { path = "../ssxl_shared" }
+ssxl_math = { path = "../ssxl_math" }
 
 # --- EXTERNAL CONCURRENCY & DIAGNOSTICS ---
 # Primary async runtime
-tokio               = { workspace = true, features = ["rt-multi-thread"] }
+tokio               = { workspace = true, features = ["full"] }
 # High-performance channel types
 crossbeam           = { workspace = true }
 crossbeam-channel   = { workspace = true }
@@ -18,3 +19,8 @@ crossbeam-channel   = { workspace = true }
 parking_lot         = { workspace = true }
 # Ensure we use the workspace's standard logging framework
 tracing             = { workspace = true }
+godot               = { workspace = true, optional = true }
+
+[features]
+# Add a feature flag for Godot-specific dependencies
+godot-bindings = ["godot"]

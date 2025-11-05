@@ -1,3 +1,5 @@
+// ssxl_shared/src/tile_type.rs
+
 //! Defines the canonical set of fundamental types that a Tile can represent.
 //!
 //! This enum is used by the generation modules to assign meaning to raw noise values,
@@ -60,6 +62,30 @@ impl TileType {
             7 => Some(TileType::Custom1),
             8 => Some(TileType::Custom2),
             _ => None,
+        }
+    }
+    
+    // --- RENDERING HELPER METHODS (NEW) ---
+
+    /// Returns the default Godot Tile ID (source layer/index) associated with this type.
+    /// This is a fallback used by the ChunkPresenter.
+    pub const fn get_default_tile_id(self) -> u16 {
+        // Since TileType itself is the key data, we use its discriminant as a simple ID.
+        self.to_u8() as u16
+    }
+
+    /// Returns the default Godot Atlas Coordinates (frame x, frame y) for this tile type.
+    /// This provides the ChunkPresenter the necessary visual data for a static representation.
+    pub const fn get_default_atlas_coords(self) -> (u16, u16) {
+        match self {
+            // Mapping from TileType to a position in the tileset atlas (x, y).
+            TileType::Water    => (1, 0),
+            TileType::Grass    => (2, 0),
+            TileType::Mountain => (3, 0),
+            TileType::Boundary => (4, 0),
+            TileType::Structure=> (5, 0),
+            TileType::Rock     => (6, 0),
+            _ => (0, 0), // Default to (0, 0) for Void, Custom, etc.
         }
     }
 }

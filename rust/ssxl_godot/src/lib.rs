@@ -1,9 +1,18 @@
 // ssxl_godot/src/lib.rs
 
-// 🛑 Declare sub-modules (no change needed here)
+// 🛑 Declare sub-modules (existing)
 pub mod ssxl_engine;
 pub mod ssxl_signals;
 pub mod ssxl_oracle;
+
+// 🛠️ FIX: New module declarations required by ssxl_engine.rs
+// These modules contain the delegate structs (AsyncPoller, ChunkPresenter, etc.).
+mod async_poll;
+mod chunk_presenter;
+mod channel_handler;
+mod api_initializers;
+mod generation_api;
+mod animation_api;
 
 use godot::prelude::*;
 use godot::init::{ExtensionLibrary, InitLevel}; 

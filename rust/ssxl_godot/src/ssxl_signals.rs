@@ -1,15 +1,16 @@
-// ssxl_godot/src/ssxl_signals.rs (Final, Clean Code)
+// ssxl_godot/src/ssxl_signals.rs
+// This GDExtension class serves as a dedicated signal bus for the SSXL-ext engine,
+// allowing the Rust core to communicate asynchronous events back to Godot's GDScript layer.
 
 use godot::prelude::*;
 use godot::classes::Node;
 use godot::obj::Base;
-// FIX: Removed unused imports `GString`, `Dictionary`, and `Array`
 
 // -------------------------------------------------------------------------------------------------
 // SSXL SIGNALS GODOT WRAPPER
 // -------------------------------------------------------------------------------------------------
 
-/// A dedicated Godot Node class used purely for emitting signals from the Rust core back to GDScript.
+/// A dedicated Node for holding and emitting signals related to the SSXL-ext engine's operations.
 #[derive(GodotClass)]
 #[class(tool, base=Node, init)]
 pub struct SSXLSignals {
@@ -24,35 +25,28 @@ impl SSXLSignals {
             base,
         }
     }
-    
-    // --- Signal Declarations ---
 
-    #[signal] 
+    // ---------------------------------------------------------------------
+    // 📢 Signal Declarations
+    // ---------------------------------------------------------------------
+
+    /// Emitted when the map generation process starts.
+    #[signal]
     fn build_map_start();
 
+    /// Emitted when a new chunk of data has been generated and applied to the TileMap.
     #[signal]
     fn chunk_generated(x: i32, y: i32);
-    
+
+    /// Emitted when the entire map generation process is complete.
     #[signal]
     fn build_map_complete();
 
-    // --- Signal Emitter Functions ---
-
-    /// Emits the signal that the map build process has started.
-    #[func]
-    pub fn emit_build_map_start(&mut self) {
-        self.base_mut().emit_signal("build_map_start", &[]);
-    }
-
-    /// Emits the signal that a new chunk has been generated and is ready to be loaded.
-    #[func]
-    pub fn emit_chunk_generated(&mut self, x: i32, y: i32) {
-        self.base_mut().emit_signal("chunk_generated", &[x.to_variant(), y.to_variant()]);
-    }
-
-    /// Emits the signal that the entire map build process is complete.
-    #[func]
-    pub fn emit_build_map_complete(&mut self) {
-        self.base_mut().emit_signal("build_map_complete", &[]);
-    }
+    /// Emitted when the AnimationConductor sends a tile update for progressive visual loading.
+    #[signal]
+    fn animation_update(percent_done: f32, new_atlas_coords: godot::builtin::Vector2i);
+    
+    /// Emitted when the generation worker reports an unrecoverable error.
+    #[signal]
+    fn generation_error(error_message: godot::prelude::GString); 
 }

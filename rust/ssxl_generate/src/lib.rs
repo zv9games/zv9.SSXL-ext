@@ -1,3 +1,5 @@
+// ssxl_generate/src/lib.rs
+
 //! Core generation algorithms, runtime orchestration, and task management.
 
 // -------------------------------------------------------------------------------------------------
@@ -8,10 +10,19 @@ pub mod conductor;
 pub mod benchmark_logic;
 pub mod perlin_generator;
 pub mod cellular_automata_generator;
+pub mod ca; 
 
-// Direct re-exports of concrete implementations
-pub use cellular_automata_generator::CellularAutomataGenerator;
-pub use perlin_generator::PerlinGenerator;
+// Core orchestration modules required by Conductor.
+pub mod runtime_manager; 
+pub mod config_validator;
+pub mod task_queue;
+pub mod conductor_state;
+pub mod generator_manager;
+pub mod batch_processor;
+
+// FIX: Add the synchronization module required for channel type aliases.
+pub mod sync; 
+
 
 // -------------------------------------------------------------------------------------------------
 // CORE TRAIT DEFINITION (Generator Interface)
@@ -34,12 +45,21 @@ pub trait Generator {
 // -------------------------------------------------------------------------------------------------
 // PUBLIC EXPORTS
 // -------------------------------------------------------------------------------------------------
-// Re-export the main components for easy use by other crates (aetherion_godot, aetherion_cli).
-pub use conductor::Conductor;
-// PHASE 8.3 EXPORT: Expose GeneratorConfig for use by the FFI/Godot wrapper.
-pub use conductor::GeneratorConfig;
 
-// EXPOSED BENCHMARK FUNCTION: This resolves the E0432 error in aetherion_cli
+// Direct re-exports of concrete implementations
+pub use cellular_automata_generator::CellularAutomataGenerator;
+pub use perlin_generator::PerlinGenerator;
+
+// Main components for FFI/Godot use.
+pub use conductor::Conductor;
+pub use config_validator::GeneratorConfig; 
+
+// FIX: Re-export the channel types and core Task struct from the `sync` and `task_queue` modules.
+pub use sync::ConductorProgressReceiver;
+pub use sync::ConductorRequestSender;
+pub use task_queue::GenerationTask; // Key type sent to the Conductor
+
+// EXPOSED BENCHMARK FUNCTION
 pub use benchmark_logic::benchmark_generation_workload;
 
 // -------------------------------------------------------------------------------------------------
@@ -53,8 +73,8 @@ use tracing::{info, error};
 pub fn start_runtime_placeholder() {
     // Pass None as the config_path argument to satisfy the updated Conductor::new signature.
     match Conductor::new(None) {
-        // FIX: Properly destructure the 3-element tuple (Conductor, ConductorState, Receiver).
-        Ok((conductor, _state, _receiver)) => {
+        // Correctly destructure the 4-element tuple
+        Ok((conductor, _state, _progress_receiver, _request_sender)) => {
             info!("Runtime created successfully. Testing immediate graceful teardown...");
             
             // Call the consuming teardown method.

@@ -1,0 +1,4447 @@
+SSXL-ext Codebase LOC Report
+Generated (Epoch Seconds): 1761967458
+Root Directory: ../rust/
+Scan Time: 7.00ms
+Total Files Scanned: 35
+Total Lines of Code (LOC): 4176
+
+------------------------------------------------------
+ FILE LOC | Relative File Path
+------------------------------------------------------
+  459 LOC | ssxl_generate\src\conductor.rs
+  404 LOC | ssxl_godot\src\ssxl_engine.rs
+  341 LOC | ssxl_cli\src\cli_util_actions.rs
+  249 LOC | ssxl_generate\src\cellular_automata_generator.rs
+  215 LOC | ssxl_cli\src\cli_util_loc_scan.rs
+  199 LOC | ssxl_cli\src\cli_util_bench.rs
+  162 LOC | ssxl_cli\src\cli_util_inspect.rs
+  147 LOC | ssxl_shared\src\chunk_data.rs
+  143 LOC | ssxl_sync\src\lib.rs
+  140 LOC | ssxl_math\src\coordinate_system.rs
+  128 LOC | ssxl_tools\src\lib.rs
+  122 LOC | ssxl_cli\src\main.rs
+  109 LOC | ssxl_generate\src\perlin_generator.rs
+  107 LOC | ssxl_shared\src\tile_data.rs
+  103 LOC | ssxl_math\src\hashing.rs
+  101 LOC | ssxl_engine_ffi\src\lib.rs
+   91 LOC | ssxl_shared\src\tile_type.rs
+   86 LOC | manifest.rs
+   84 LOC | ssxl_godot\src\ssxl_oracle.rs
+   77 LOC | ssxl_cache\src\lib.rs
+   74 LOC | ssxl_cli\src\cli_util_menu.rs
+   70 LOC | ssxl_shared\src\lib.rs
+   67 LOC | ssxl_generate\src\lib.rs
+   64 LOC | ssxl_shared\src\errors.rs
+   58 LOC | ssxl_shared\src\grid_bounds.rs
+   58 LOC | ssxl_godot\src\ssxl_signals.rs
+   53 LOC | ssxl_godot\src\build.rs
+   45 LOC | ssxl_math\src\generation_utils.rs
+   45 LOC | ssxl_math\src\primitives.rs
+   43 LOC | ssxl_generate\src\benchmark_logic.rs
+   41 LOC | ssxl_shared\src\math_primitives.rs
+   34 LOC | ssxl_math\src\lib.rs
+   23 LOC | ssxl_godot\src\lib.rs
+   18 LOC | ssxl_generate\src\generator.rs
+   16 LOC | manifest_tips.rs
+
+
+
+
+======================================================
+SSXL-ext Codebase DETAILED CONTENT DUMP
+======================================================
+
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_generate\src\conductor.rs (459 LOC)
+//////////////////////////////////////////////////////
+
+//! The core manager for the ssxl Engine, responsible for coordinating
+//! generation, concurrency, and caching via the Tokio asynchronous runtime.
+
+use tokio::runtime::{Runtime, Handle};
+use tokio::sync::mpsc;
+use tracing::{info, error, warn};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+use std::io;
+
+// 🚀 TEMPO BOOST: Rayon for CPU parallelization
+use rayon::prelude::*;
+// 🚀 TEMPO BOOST: Use num_cpus to set worker threads dynamically
+use num_cpus;
+
+// 📐 BULLDOZER FIX: Imports updated to support i64 (64-bit) coordinates
+use glam::I64Vec3;
+use ssxl_math::{Vec2i, prelude::ChunkKey};
+
+// --- CONSTANTS ---
+const CHUNK_SIZE: usize = 64; // The size of a chunk in tiles
+
+/// A safety measure to prevent the Conductor from trying to generate or track
+/// an excessive number of chunks that could lead to memory exhaustion.
+/// This limit (100,000) supports maps up to approximately 16192x16192 tiles (253x253 chunks).
+const MAX_ACTIVE_CHUNKS: i64 = 100_000_000;
+
+// --- INTERNAL CRATE DEPENDENCIES ---
+use ssxl_cache::ChunkCache;
+use crate::Generator;
+use crate::perlin_generator::PerlinGenerator;
+// FIX: No-Break Space (\u{a0}) removed from indentation on the following lines.
+use crate::cellular_automata_generator::{
+    CellularAutomataGenerator,
+    RULE_BASIC_CAVE,
+    RULE_MAZE,
+    RULE_SOLID,
+    RULE_CHECKERBOARD,
+};
+
+// --- EXTERNAL CRATE DEPENDENCIES ---
+use ssxl_shared::chunk_data::ChunkData;
+use ssxl_tools::get_config_from_path;
+
+// Define a type alias that includes Send + Sync bounds for thread-safe trait objects
+type DynGenerator = Box<dyn Generator + Send + Sync>;
+
+// --- MPSC Channel Configuration ---
+// 🚀 TEMPO BOOST: Increased bound to allow Rayon to get far ahead of the main thread consumer.
+const PROGRESS_CHANNEL_BOUND: usize = 1024;
+
+// -----------------------------------------------------------------------------
+// GENERATION MESSAGES
+// -----------------------------------------------------------------------------
+
+/// Messages sent from the asynchronous generation task back to the main
+/// thread (Godot's tick loop) for reporting progress and results.
+#[derive(Debug)]
+pub enum GenerationMessage {
+    /// A general status update (e.g., "Initializing Noise", "Processing 5/100 Chunks").
+    StatusUpdate(String),
+    /// Reports the completion of a single chunk. Contains the chunk's coordinates AND the bulk data.
+    /// 🚀 **TEMPO BOOST:** Uses Arc<ChunkData> for zero-copy transfer to the main thread.
+    ChunkGenerated(Vec2i, Arc<ChunkData>),
+    /// Reports the final completion of the entire generation run.
+    GenerationComplete,
+    /// Reports a non-fatal error during generation.
+    Error(String),
+}
+
+
+// -----------------------------------------------------------------------------
+// GENERATOR CONFIGURATION
+// -----------------------------------------------------------------------------
+
+/// Configuration data passed from the Godot API to the Conductor to start a
+/// full map generation run.
+#[derive(Debug, Clone)]
+pub struct GeneratorConfig {
+    pub width: usize,
+    pub height: usize,
+    pub seed: String,
+    pub generator_name: String,
+}
+
+
+// -----------------------------------------------------------------------------
+// CONDUCTOR STATE AND STATUS
+// -----------------------------------------------------------------------------
+
+/// Represents the operational state of the Conductor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConductorStatus {
+    Initializing,
+    Running,
+    Paused,
+    ShuttingDown,
+    Error,
+}
+
+/// Shared, thread-safe state exposed to the CLI for monitoring.
+#[derive(Clone)]
+pub struct ConductorState {
+    status: Arc<Mutex<ConductorStatus>>,
+    // Represents the number of pending tasks in the generation queue
+    queue_depth: Arc<AtomicUsize>,
+    // The ID of the currently active generation algorithm
+    active_generator_id: Arc<Mutex<String>>,
+}
+
+impl ConductorState {
+    pub fn new(initial_generator_id: String) -> Self {
+        ConductorState {
+            status: Arc::new(Mutex::new(ConductorStatus::Initializing)),
+            queue_depth: Arc::new(AtomicUsize::new(0)),
+            active_generator_id: Arc::new(Mutex::new(initial_generator_id)),
+        }
+    }
+
+    // Public methods for the CLI to inspect the state
+    pub fn get_status(&self) -> ConductorStatus {
+        // Handle Mutex poisoning gracefully
+        match self.status.lock() {
+            Ok(guard) => *guard,
+            Err(e) => {
+                error!("Mutex poisoned when reading status: {}", e);
+                ConductorStatus::Error
+            }
+        }
+    }
+
+    pub fn get_queue_depth(&self) -> usize {
+        self.queue_depth.load(Ordering::Relaxed)
+    }
+
+    pub fn get_active_generator_id(&self) -> String {
+        // Handle Mutex poisoning by unwrapping
+        self.active_generator_id.lock().unwrap().clone()
+    }
+
+    // Internal methods for the Conductor to update the state
+    pub(crate) fn set_status(&self, new_status: ConductorStatus) {
+        *self.status.lock().unwrap() = new_status;
+    }
+
+    pub(crate) fn set_active_generator_id(&self, id: &str) {
+        *self.active_generator_id.lock().unwrap() = id.to_string();
+    }
+}
+
+// -----------------------------------------------------------------------------
+// CONDUCTOR MANAGER
+// -----------------------------------------------------------------------------
+
+/// The central manager for the procedural generation pipeline.
+pub struct Conductor {
+    runtime: Runtime,
+    generators: HashMap<String, Arc<DynGenerator>>,
+    internal_state: ConductorState,
+    // Thread-safe handle to the ChunkCache for persistence
+    chunk_cache: Arc<Mutex<ChunkCache>>,
+    // The sender side of the progress channel. Cloned for each task.
+    progress_sender: mpsc::Sender<GenerationMessage>,
+}
+
+impl Conductor {
+    /// Initializes the Conductor, starts the runtime, creates the MPSC channel,
+    /// and returns the MPSC Receiver for the FFI consumer (Godot) to poll.
+    pub fn new(config_path: Option<&str>) -> Result<(Self, ConductorState, mpsc::Receiver<GenerationMessage>), io::Error> {
+        // Load configuration first
+        let config = get_config_from_path(config_path)?;
+
+        // --- Runtime Setup ---
+        // 🚀 TEMPO BOOST: Dynamically set worker threads to match CPU cores.
+        let num_cores = num_cpus::get();
+        info!("Tokio Runtime initializing with {} worker threads (all logical cores).", num_cores);
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_cores)
+            .enable_all()
+            .build()?;
+
+        // --- Generator Registration ---
+        let mut generators: HashMap<String, Arc<DynGenerator>> = HashMap::new();
+
+        // 1. Perlin Generator (MVG)
+        let perlin: DynGenerator = Box::new(PerlinGenerator::new(64.0));
+        let default_perlin_id = perlin.id().to_string();
+        generators.insert(default_perlin_id.clone(), Arc::new(perlin));
+
+        // 2. Cellular Automata Generator (Cave)
+        let ca_cave: DynGenerator = Box::new(CellularAutomataGenerator::new(RULE_BASIC_CAVE));
+        generators.insert(ca_cave.id().to_string(), Arc::new(ca_cave));
+
+        // 3. Cellular Automata Generator (Maze)
+        let ca_maze: DynGenerator = Box::new(CellularAutomataGenerator::new(RULE_MAZE));
+        generators.insert(ca_maze.id().to_string(), Arc::new(ca_maze));
+
+        // 4. Cellular Automata Generator (Solid Fill)
+        let ca_solid: DynGenerator = Box::new(CellularAutomataGenerator::new(RULE_SOLID));
+        generators.insert(ca_solid.id().to_string(), Arc::new(ca_solid));
+
+        // 5. Cellular Automata Generator (Checkerboard)
+        let ca_checkerboard: DynGenerator = Box::new(CellularAutomataGenerator::new(RULE_CHECKERBOARD));
+        generators.insert(ca_checkerboard.id().to_string(), Arc::new(ca_checkerboard));
+
+        // --- Cache Initialization ---
+        let chunk_cache = match ChunkCache::new() {
+            Ok(c) => {
+                info!("ChunkCache initialized successfully.");
+                Arc::new(Mutex::new(c))
+            },
+            Err(e) => {
+                error!("Failed to initialize ChunkCache: {:?}", e);
+                return Err(io::Error::new(io::ErrorKind::Other, "Cache initialization failed"));
+            }
+        };
+
+        // --- MPSC Channel Setup ---
+        // Bound set high to prevent backpressure on fast Rayon threads
+        let (progress_sender, progress_receiver) = mpsc::channel(PROGRESS_CHANNEL_BOUND);
+
+        // --- Conductor State Initialization ---
+        let mut initial_id = default_perlin_id.clone();
+
+        // Use configured default, falling back to Perlin if not found
+        let config_id = config.get_default_generator_id();
+        if generators.contains_key(config_id) {
+            initial_id = config_id.to_string();
+        } else {
+            warn!("Config default generator ID '{}' not found. Falling back to Perlin: {}", config_id, default_perlin_id);
+        }
+
+        let state = ConductorState::new(initial_id.clone());
+        state.set_status(ConductorStatus::Running);
+
+        info!("Conductor initialized. Active generator: {}", initial_id);
+
+        // Return the Conductor instance, the State, and the MPSC Receiver
+        Ok((Conductor {
+            runtime,
+            generators,
+            internal_state: state.clone(),
+            chunk_cache,
+            progress_sender,
+        }, state, progress_receiver))
+    }
+
+    /// Public method to get a handle to the Runtime for task spawning.
+    pub fn get_handle(&self) -> Handle {
+        self.runtime.handle().clone()
+    }
+
+    /// Provides public read-access to the active generator ID.
+    pub fn get_active_generator_id(&self) -> String {
+        self.internal_state.get_active_generator_id()
+    }
+
+    // -------------------------------------------------------------------------
+    // CORE GENERATION COMMAND ENTRY POINT
+    // -------------------------------------------------------------------------
+
+    /// Handles the main map generation command from an FFI wrapper (like Godot).
+    pub fn start_generation(&mut self, config: GeneratorConfig) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Conductor received main generation command. Config: {:?}", config);
+
+        // 1. Set the active generator based on the config name
+        match self.set_active_generator(&config.generator_name) {
+            Ok(_) => info!("Generator successfully set to '{}'", config.generator_name),
+            Err(e) => {
+                error!("Failed to set generator: {}", e);
+                return Err(e.into());
+            }
+        }
+
+        // 2. Prepare for Asynchronous Generation
+        let runtime_handle = self.get_handle();
+        // Clone all resources needed for the *blocking* task's move closure
+        let generators_clone = self.generators.clone();
+        let chunk_cache_clone = self.chunk_cache.clone();
+        let active_generator_id = self.internal_state.get_active_generator_id();
+        let progress_sender_clone = self.progress_sender.clone();
+        let internal_state_clone = self.internal_state.clone();
+        let config_clone = config.clone(); // Clone the config for the task
+
+        // --- 3. Offload CPU-Intensive Work to Blocking Pool (THE TEMPO BOOST) ---
+        runtime_handle.spawn_blocking(move || { // ⚠️ CRITICAL CHANGE: Use spawn_blocking for CPU work
+            info!("Blocking generation task started with config: {:?}", config_clone);
+
+            // Increment queue depth to signal a task has started
+            internal_state_clone.queue_depth.fetch_add(1, Ordering::Relaxed);
+            
+            // Calculate grid dimensions using i64 types
+            let chunk_size_i64 = CHUNK_SIZE as i64;
+            let width_in_chunks = (config_clone.width as i64 + chunk_size_i64 - 1) / chunk_size_i64;
+            let height_in_chunks = (config_clone.height as i64 + chunk_size_i64 - 1) / chunk_size_i64;
+            // The total number of chunks to process
+            let total_chunks = width_in_chunks * height_in_chunks;
+            
+            // 🛑 SAFETY CHECK: Re-introducing the chunk limit to prevent memory exhaustion
+            if total_chunks > MAX_ACTIVE_CHUNKS {
+                let error_msg = format!("max chunks limit exceeded: requested {} chunks ({}x{}) but the limit is {}. Increase MAX_ACTIVE_CHUNKS in conductor.rs if needed.",
+                    total_chunks, width_in_chunks, height_in_chunks, MAX_ACTIVE_CHUNKS);
+                error!("{}", error_msg);
+                let _ = progress_sender_clone.blocking_send(GenerationMessage::Error(error_msg.into()));
+                // CRITICAL FIX: Decrement the queue depth since we are aborting the task
+                internal_state_clone.queue_depth.fetch_sub(1, Ordering::Relaxed);
+                return; // Exit the blocking task gracefully on error
+            }
+
+            // --- 1. Create a flattened collection of all chunk coordinates (i64) ---
+            let all_chunk_coords: Vec<Vec2i> = (0..height_in_chunks)
+                .flat_map(|y| (0..width_in_chunks).map(move |x| Vec2i::new(x, y)))
+                .collect();
+
+            info!("Generation starting: {} chunks to process.", all_chunk_coords.len());
+
+            if total_chunks == 0 {
+                error!("Generation failed: Calculated chunk count is zero for size {}x{}. Sending error signal.", config_clone.width, config_clone.height);
+                let _ = progress_sender_clone.blocking_send(GenerationMessage::Error("Map dimensions are too small to contain a single chunk.".into()));
+            } else {
+                // --- 2. Parallelize the entire generation workload using Rayon ---
+                all_chunk_coords
+                    .par_iter()
+                    .for_each(|&chunk_coords| { // Use for_each for fire-and-forget generation
+                        // The generation logic below now executes in parallel across CPU cores!
+                        
+                        // 📐 BULLDOZER FIX: Use I64Vec3 (i64) to prevent coordinate overflow on key creation.
+                        let key_vec3 = I64Vec3::new(chunk_coords.x, chunk_coords.y, 0);
+                        
+                        let chunk_key = ChunkKey(key_vec3);
+                        let chunk_data: ChunkData;
+
+                        // ⚠️ CORE TEMPO ALIGNMENT: GENERATE & CACHE IN PARALLEL
+
+                        // --- 1. Attempt to load from cache ---
+                        // Mutex Lock contention will occur here, but Rayon handles this better than Tokio threads
+                        match chunk_cache_clone.lock() {
+                            // FIX: Removed 'mut' from 'cache_lock' to resolve 'unused_mut' warning.
+                            Ok(cache_lock) => {
+                                // Caching logic remains the same: load, generate, save
+                                match cache_lock.load_chunk(&chunk_key) {
+                                    Ok(Some(data)) => {
+                                        info!("Blocking: Retrieved chunk {:?} from cache.", chunk_coords);
+                                        chunk_data = data;
+                                    },
+                                    Ok(None) => {
+                                        info!("Blocking: Chunk {:?} not found in cache. Generating...", chunk_coords);
+
+                                        // --- 2. Generate the Chunk ---
+                                        let generator_arc = generators_clone
+                                            .get(&active_generator_id)
+                                            .expect("Active generator ID must be registered in Conductor.");
+
+                                        chunk_data = generator_arc.generate_chunk(chunk_coords); // ⚠️ Vec2i (i64 based)
+
+                                        // --- 3. Save to cache ---
+                                        // The MutexGuard is locked in the surrounding scope, so we can access `cache_lock`
+                                        if let Err(e) = cache_lock.save_chunk(&chunk_key, &chunk_data) {
+                                            error!("Blocking: Failed to save chunk {:?} to cache: {:?}", chunk_coords, e);
+                                        } else {
+                                            info!("Blocking: Saved chunk {:?} to cache.", chunk_coords);
+                                        }
+                                    },
+                                    Err(e) => {
+                                        warn!("Blocking: Cache load failed for {:?}: {:?}. Forcing generation without caching.", chunk_coords, e);
+                                        let generator_arc = generators_clone
+                                            .get(&active_generator_id)
+                                            .expect("Active generator ID must be registered in Conductor.");
+                                        chunk_data = generator_arc.generate_chunk(chunk_coords);
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                error!("Blocking: Cache Mutex poisoned during load/save: {}", e);
+                                warn!("Blocking: Falling back to generation without caching.");
+                                let generator_arc = generators_clone
+                                    .get(&active_generator_id)
+                                    .expect("Active generator ID must be registered in Conductor.");
+                                chunk_data = generator_arc.generate_chunk(chunk_coords);
+                            }
+                        }
+                        
+                        // 🚀 **TEMPO BOOST:** Wrap ChunkData in Arc for zero-copy transfer
+                        let chunk_data_arc = Arc::new(chunk_data);
+
+                        // 4. Emit signal with the zero-copy bulk data payload
+                        let send_result = progress_sender_clone.blocking_send( // ⚠️ Use blocking_send
+                            GenerationMessage::ChunkGenerated(chunk_coords, chunk_data_arc) // 👈 SENDING ARC<BULK DATA>
+                        );
+
+                        if send_result.is_err() {
+                            // If the receiver (Godot) dropped the channel, gracefully stop the work.
+                            warn!("Progress channel disconnected. Stopping generation task.");
+                            // Note: We can't break from a for_each loop, so we return early
+                            return;
+                        }
+                    }); // END of rayon parallel processing
+            }
+
+            // Send final completion message
+            let _ = progress_sender_clone.blocking_send(GenerationMessage::GenerationComplete);
+
+            // Decrement queue depth on completion
+            internal_state_clone.queue_depth.fetch_sub(1, Ordering::Relaxed);
+
+            info!("Blocking generation task finished processing command: {:?}", config_clone);
+        });
+
+        Ok(())
+    }
+
+    // --- Shutdown Management ---
+
+    /// Signals the Conductor's internal state to begin a graceful shutdown process.
+    pub fn signal_shutdown_graceful(&self) {
+        info!("SSXL Conductor signaled for shutdown. Setting status to ShuttingDown.");
+        self.internal_state.set_status(ConductorStatus::ShuttingDown);
+    }
+
+    /// Performs a full, graceful teardown of the Conductor, signaling shutdown and
+    /// stopping the underlying Tokio runtime. This method consumes `self`.
+    pub fn graceful_teardown(self) {
+        self.signal_shutdown_graceful();
+
+        // This stops the Tokio runtime pool, freeing its resources.
+        self.runtime.shutdown_background();
+        info!("SSXL Conductor full teardown complete.");
+    }
+
+    // --- Generator Management & Core Pipeline ---
+
+    /// Changes the algorithm used for subsequent generation tasks.
+    pub fn set_active_generator(&mut self, id: &str) -> Result<(), String> {
+        if self.generators.contains_key(id) {
+            info!("Active generator set to: {}", id);
+            self.internal_state.set_active_generator_id(id);
+            Ok(())
+        } else {
+            let err = format!("Generator ID '{}' not found. Available IDs: {:?}", id, self.generators.keys());
+            error!("{}", err);
+            Err(err)
+        }
+    }
+
+    /// **SYNCHRONOUS PATHWAY (For CLI/Benchmarking):**
+    /// Synchronously generates a single chunk using the currently active generator.
+    /// This method is blocking and bypasses the asynchronous runtime, MPSC channel,
+    /// and internal caching mechanism.
+    pub fn generate_single_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
+        let active_id = self.internal_state.get_active_generator_id();
+
+        let generator_arc = self.generators
+            .get(&active_id)
+            .unwrap_or_else(|| panic!("Cannot find active generator with ID: {}", active_id));
+
+        generator_arc.generate_chunk(chunk_coords)
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_godot\src\ssxl_engine.rs (404 LOC)
+//////////////////////////////////////////////////////
+
+use godot::prelude::*;
+use godot::classes::Node;
+use godot::obj::{Base, Gd};
+use godot::builtin::{GString, Vector2i};
+use godot::classes::TileMap;
+
+use crate::ssxl_signals::SSXLSignals;
+
+// Required for the asynchronous receiver
+use tokio::sync::mpsc;
+
+// Internal Crate Dependencies
+use ssxl_generate::{Conductor, GeneratorConfig};
+// NOTE: GenerationMessage is assumed to be updated in conductor.rs to use Arc<ChunkData>
+use ssxl_generate::conductor::GenerationMessage;
+use ssxl_shared::chunk_data; 
+use ssxl_shared::chunk_data::ChunkData;
+
+// Standard library and utilities
+use std::sync::{Arc, Mutex};
+use tracing::info;
+use godot::prelude::godot_error;
+use godot::prelude::godot_print;
+
+
+// -------------------------------------------------------------------------------------------------
+// SSXL ENGINE GODOT WRAPPER
+// -------------------------------------------------------------------------------------------------
+
+/// The Godot-facing wrapper class for the SSXL Engine.
+#[derive(GodotClass)]
+#[class(tool, base=Node, init)]
+pub struct SSXLEngine {
+    /// The core Rust logic manager, safely wrapped in an Arc/Mutex for shared access.
+    conductor: Option<Arc<Mutex<Conductor>>>,
+    
+    /// Reference to the SSXLSignals node for signal emission.
+    signals_node: Option<Gd<Node>>,
+    
+    /// Reference to the main expansive TileMap for drawing/manipulation.
+    tilemap_node: Option<Gd<TileMap>>,
+
+    /// The receiver side of the MPSC channel for progress updates.
+    /// This is stored on the main thread and polled every tick.
+    generation_receiver: Option<mpsc::Receiver<GenerationMessage>>,
+
+    #[base]
+    base: Base<Node>,
+}
+
+// ------------------------------------------------------------------------------------
+// Constructor
+// ------------------------------------------------------------------------------------
+impl SSXLEngine {
+    pub fn init(base: Base<Node>) -> Self {
+        Self {
+            conductor: None,
+            signals_node: None,
+            tilemap_node: None,
+            generation_receiver: None,
+            base,
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------
+// API methods remain in the #[godot_api] block.
+// ------------------------------------------------------------------------------------
+#[godot_api]
+impl SSXLEngine {
+    #[func]
+    pub fn get_status(&self) -> GString {
+        if self.conductor.is_some() {
+            GString::from("STATUS: Conductor Ready")
+        } else {
+            GString::from("STATUS: Waiting for Init")
+        }
+    }
+
+    /// Helper to emit the status signal.
+    pub fn emit_status_updated(&mut self, status: GString) {
+        self.base_mut().emit_signal("status_updated", &[status.to_variant()]);
+    }
+    
+    #[signal]
+    fn status_updated(status_message: godot::prelude::GString);
+
+    // ------------------------- CHUNK DATA APPLICATION ----------------------------
+
+    /// Synchronously applies the generated ChunkData to the Godot TileMap on the main thread.
+    /// 🚀 **TEMPO BOOST:** This now accepts an Arc<ChunkData>, reducing data transfer time.
+    /// ⚠️ **TODO: BATCHING REFACTOR:** The core loop here is the *biggest* bottleneck.
+    /// It must be replaced with a single TileMap batch operation (e.g., `tilemap.set_cells_i`)
+    /// which will be 5-10x faster than this per-tile loop.
+    fn apply_chunk_data(&mut self, chunk_data_arc: Arc<ChunkData>) {
+        // Take ownership of the tilemap for mutation during the operation
+        if let Some(mut tilemap) = self.tilemap_node.take() {
+            // Dereference the Arc once for efficient access
+            let chunk_data = chunk_data_arc.as_ref();
+
+            // Use i64 for all internal geometry calculations
+            let chunk_size = chunk_data::ChunkData::SIZE as i64;
+            
+            // Chunk coordinates are now pulled as i64 from the ChunkData struct (Bulldozer)
+            let chunk_world_x: i64 = chunk_data.bounds.min.x;
+            let chunk_world_y: i64 = chunk_data.bounds.min.y;
+            
+            let layer = 0;
+            let source_id = 0;
+            let alternative_tile = 0;
+
+            // ⚠️ THIS LOOP MUST BE REPLACED WITH A BATCH CALL
+            for y_i64 in 0..chunk_size {
+                for x_i64 in 0..chunk_size {
+                    // Index calculation uses i64 to prevent usize overflow on large chunks
+                    let index = (y_i64 * chunk_size + x_i64) as usize; 
+                    
+                    if let Some(tile) = chunk_data.tiles.get(index) {
+                        
+                        let tile_type_id = tile.tile_type as i32;
+                        
+                        // Calculate absolute world coordinates using i64
+                        let world_x_i64 = x_i64 + chunk_world_x;
+                        let world_y_i64 = y_i64 + chunk_world_y;
+                        
+                        // 🚨 CRITICAL CHECK: Acknowledge the Godot i32 limitation (Bulldozer Guard)
+                        if world_x_i64 > i32::MAX as i64 || world_x_i64 < i32::MIN as i64 || 
+                            world_y_i64 > i32::MAX as i64 || world_y_i64 < i32::MIN as i64 {
+                            
+                            godot_error!("Bulldozer Warning: Tile ({}, {}) exceeds Godot TileMap i32 coordinate range. World is too big for current TileMap rendering strategy.", world_x_i64, world_y_i64);
+                            continue; 
+                        }
+                        
+                        // Simplified Atlas Mapping (Assumes a 1D strip of 16 tiles per row)
+                        let atlas_x = tile_type_id % 16;
+                        let atlas_y = tile_type_id / 16;
+                        
+                        let atlas_coords = Vector2i::new(atlas_x, atlas_y);
+                        // Final unavoidable downcast to Godot's 32-bit Vector2i
+                        let tile_coords = Vector2i::new(world_x_i64 as i32, world_y_i64 as i32); 
+
+                        tilemap
+                            .set_cell_ex(layer, tile_coords)
+                            .source_id(source_id)
+                            .atlas_coords(atlas_coords)
+                            .alternative_tile(alternative_tile)
+                            .done();
+                    }
+                }
+            }
+            
+            // Put the tilemap back
+            self.tilemap_node = Some(tilemap);
+            
+            info!("Chunk data for ({}, {}) applied to TileMap.",
+                chunk_world_x / chunk_size,
+                chunk_world_y / chunk_size);
+        } else {
+            godot_error!("Cannot apply chunk data: TileMap node is not set.");
+        }
+    }
+
+
+    // ------------------------- MPSC POLLING AND HANDLING -------------------------
+
+    /// Private helper to process a single `GenerationMessage` and emit the corresponding Godot signals.
+    fn handle_generation_update(&mut self, message: GenerationMessage) {
+        let mut status_update: Option<GString> = None;
+        
+        match message {
+            GenerationMessage::StatusUpdate(msg) => {
+                info!("Generation Status: {}", msg);
+                status_update = Some(GString::from(format!("GENERATING: {}", msg).as_str()));
+            }
+            // 🚀 TEMPO BOOST: Now receives Arc<ChunkData> for zero-copy transfer
+            GenerationMessage::ChunkGenerated(coords, chunk_data_arc) => {
+                // coords.x and coords.y are now i64 (from Conductor refactor)
+                info!("Chunk Generated: ({}, {}). Applying chunk data...", coords.x, coords.y);
+                
+                // CRITICAL: Call the synchronous drawing function on the main thread
+                self.apply_chunk_data(chunk_data_arc);
+                
+                // Emit signal (mostly for UI/metrics)
+                if let Some(signals) = &self.signals_node {
+                    if let Ok(mut ssxl_signals_instance) = signals.clone().try_cast::<SSXLSignals>() {
+                        // The signal arguments must be i32 for Godot, clipping the coordinates if the world is too large.
+                        ssxl_signals_instance.bind_mut().emit_chunk_generated(coords.x as i32, coords.y as i32);
+                    }
+                }
+            }
+            GenerationMessage::GenerationComplete => {
+                info!("Generation Complete.");
+                status_update = Some(GString::from("IDLE: Ready for next command."));
+                if let Some(signals) = &self.signals_node {
+                    if let Ok(mut ssxl_signals_instance) = signals.clone().try_cast::<SSXLSignals>() {
+                        ssxl_signals_instance.bind_mut().emit_build_map_complete();
+                    }
+                }
+            }
+            GenerationMessage::Error(e) => {
+                godot_error!("Generation Task Error: {}", e);
+                status_update = Some(GString::from(format!("ERROR: {}", e).as_str()));
+            }
+        }
+
+        // Re-borrow self to emit status signal after signal node use.
+        if let Some(status) = status_update {
+            self.emit_status_updated(status);
+        }
+    }
+
+    /// Main engine tick method, called by SSXLOracle to poll for updates.
+    /// (Tempo strategy: non-blocking channel drain)
+    #[func]
+    pub fn tick(&mut self, _current_tick: u64) {
+        // godot_print! is removed for cleaner logs and performance focus.
+        
+        // Take ownership of the receiver to avoid mutable borrow conflicts
+        if let Some(mut receiver) = self.generation_receiver.take() {
+            let mut messages = Vec::new();
+            let mut disconnected = false;
+
+            // Drain the channel quickly
+            loop {
+                match receiver.try_recv() {
+                    Ok(message) => messages.push(message),
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        godot_error!("Generation channel disconnected.");
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+
+            // Process messages
+            for message in messages {
+                self.handle_generation_update(message);
+            }
+            
+            // Put the receiver back ONLY if it wasn't disconnected.
+            if !disconnected {
+                self.generation_receiver = Some(receiver);
+            }
+        }
+    }
+    
+    // Helper to initialize conductor lazily
+    fn ensure_conductor(&mut self) -> bool {
+        if self.conductor.is_some() {
+            return true;
+        }
+
+        godot_print!("--- Initializing Conductor lazily ---");
+        
+        // Configuration path is None by default, relying on environment or defaults
+        match Conductor::new(None) {
+            Ok((conductor_instance, _state, progress_receiver)) => {
+                info!("SSXL Conductor initialized successfully.");
+                self.conductor = Some(Arc::new(Mutex::new(conductor_instance)));
+                self.generation_receiver = Some(progress_receiver); // Store the receiver
+                true
+            }
+            Err(e) => {
+                godot_error!("SSXL Conductor failed to initialize: REASON: {:?}", e);
+                false
+            }
+        }
+    }
+
+    // ------------------------- NODE SETTERS -------------------------
+
+    /// Sets the reference to the SSXLSignals node for emitting core events.
+    #[func]
+    pub fn set_signals_node(&mut self, signals_node: Gd<Node>) {
+        self.signals_node = Some(signals_node);
+        info!("SSXLEngine: Signals Node reference set.");
+    }
+    
+    /// Sets the reference to the main expansive TileMap for visual updates.
+    #[func]
+    pub fn set_tilemap(&mut self, tilemap_node: Gd<TileMap>) {
+        self.tilemap_node = Some(tilemap_node);
+        info!("SSXLEngine: TileMap Node reference set.");
+    }
+    
+    // ------------------------- CORE GENERATION -------------------------
+
+    /// Triggers the core map generation pipeline in the Conductor.
+    #[func]
+    pub fn build_map(&mut self, width: i32, height: i32, seed: GString, generator_name: GString) {
+        // 1. Validation and Initialization
+        if !self.ensure_conductor() {
+            return;
+        }
+
+        let conductor_arc = self.conductor.as_ref().unwrap().clone();
+
+        let config = GeneratorConfig {
+            width: width as usize,
+            height: height as usize,
+            seed: seed.to_string(),
+            generator_name: generator_name.to_string(),
+        };
+        
+        // 2. Conductor Command and Error Handling
+        let result = match conductor_arc.lock() {
+            Ok(mut conductor) => {
+                match conductor.start_generation(config) {
+                    Ok(_) => {
+                        info!("SSXLEngine: Conductor command accepted: START GENERATION.");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        godot_error!("Conductor failed to start generation: REASON: {:?}", e);
+                        Err("ERROR: Generation Command Failed")
+                    }
+                }
+            }
+            Err(e) => {
+                godot_error!("CRITICAL: Mutex lock failed during build_map command: {:?}", e);
+                Err("ERROR: Engine Lock Failure")
+            }
+        };
+
+        // 3. Status & Signals
+        match result {
+            Ok(_) => {
+                self.emit_status_updated(GString::from("GENERATING"));
+
+                if let Some(signals) = &self.signals_node {
+                    if let Ok(mut ssxl_signals_instance) = signals.clone().try_cast::<SSXLSignals>() {
+                        ssxl_signals_instance.bind_mut().emit_build_map_start();
+                    } else {
+                        godot_error!("Signal Emission Failed: Signals Node reference is not of type SSXLSignals.");
+                    }
+                } else {
+                    godot_error!("Signal Emission Failed: SSXLSignals node reference not set.");
+                }
+            }
+            Err(status_msg) => {
+                self.emit_status_updated(GString::from(status_msg));
+            }
+        }
+    }
+    
+    /// Sets the active generator algorithm by its string ID (e.g., "perlin_basic_2d").
+    #[func]
+    pub fn set_generator(&mut self, id: GString) -> bool {
+        let id_str = id.to_string();
+
+        if !self.ensure_conductor() {
+            godot_error!("Cannot set generator: Conductor not initialized.");
+            return false;
+        }
+
+        let conductor_arc = self.conductor.as_ref().unwrap();
+
+        match conductor_arc.lock() {
+            Ok(mut conductor) => conductor.set_active_generator(&id_str).is_ok(),
+            Err(e) => {
+                godot_error!("Mutex lock failed during set_generator: {:?}", e);
+                false
+            }
+        }
+    }
+
+    /// Returns the ID of the currently active generator.
+    #[func]
+    pub fn get_active_generator_id(&self) -> GString {
+        if self.conductor.is_none() {
+            return GString::from("ERROR: CONDUCTOR NOT INITIALIZED");
+        }
+
+        let conductor_arc = self.conductor.as_ref().unwrap();
+
+        match conductor_arc.lock() {
+            Ok(conductor) => GString::from(conductor.get_active_generator_id().as_str()),
+            Err(_) => GString::from("ERROR: MUTEX POISONED"),
+        }
+    }
+
+    // ------------------------- CLEANUP -------------------------
+
+    /// Expose a function for Godot to call on cleanup.
+    #[func]
+    pub fn shutdown_engine(&mut self) {
+        info!("SSXLEngine: Shutting down.");
+
+        // Clear the receiver, forcing a disconnection if the task is still running
+        self.generation_receiver = None; 
+
+        if let Some(conductor_arc) = self.conductor.take() {
+            // Attempt to unwrap and teardown the conductor gracefully if no other references exist
+            if let Ok(c) = Arc::try_unwrap(conductor_arc) {
+                if let Ok(conductor) = c.into_inner() {
+                    conductor.graceful_teardown();
+                }
+            } else {
+                godot_error!("SSXLEngine: Cannot fully shutdown Conductor; other references still exist.");
+            }
+        }
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_cli\src\cli_util_actions.rs (341 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_cli/src/cli_util_actions.rs
+
+use std::process::{Command, Stdio}; // 🆕 Added Stdio for piping
+use tracing::{info, warn, error};
+
+// NEW IMPORTS for Signal Inspector / Concurrency
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::thread;
+use std::time::Duration;
+use std::io::{self, Write};
+use ctrlc;
+use std::env;
+use std::fs; 
+
+// PHASE 2 TRANSITION: Import the Conductor types
+use ssxl_generate::conductor::{Conductor, ConductorStatus};
+
+// --- CONSTANTS ---
+const GODOT_EXE_PATH: &str = "./../SSXL_engine_tester/godot.windows.editor.x86_64.exe";
+// Path fragment is used by get_godot_project_abs_path and the DLL copy function
+const RELATIVE_PROJECT_PATH_FRAGMENT: &str = "../SSXL_engine_tester"; 
+const GODOT_TEST_SCENE: &str = "res://test_scene/test_ffi_data.tscn";
+
+// 🆕 NEW DLL COPY CONSTANTS
+const DLL_NAME: &str = "SSXL_engine.dll";
+const SOURCE_DLL_PATH_FRAGMENT: &str = "target/debug/"; 
+
+
+// --- CORE CLI ACTIONS ---
+
+/// 🚀 Runs the full Rust test suite via Cargo
+pub fn run_cargo_tests() {
+	println!("🚀 Running full cargo test suite...");
+
+	let status = Command::new("cargo")
+		.args(&["test", "--", "--nocapture"])
+		.status()
+		.expect("Failed to run cargo test");
+
+	if status.success() {
+		info!("✅ All tests passed.");
+	} else {
+		error!("❌ Some tests failed.");
+	}
+}
+
+/// Helper to calculate the absolute path to the Godot project tester directory.
+fn get_godot_project_abs_path() -> Result<String, String> {
+    let mut current_dir = env::current_dir()
+        .map_err(|e| format!("Failed to determine CWD: {}", e))?;
+
+    current_dir.push(RELATIVE_PROJECT_PATH_FRAGMENT);
+
+    current_dir.canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| format!("Cannot resolve project path fragment '{}': {}. Does the directory exist?", RELATIVE_PROJECT_PATH_FRAGMENT, e))
+}
+
+// -----------------------------------------------------------------------------
+// NEW: DLL COPY FUNCTION (Called from main.rs at boot)
+// -----------------------------------------------------------------------------
+
+/// Copies the latest compiled DLL from the Rust target directory to the Godot tester project.
+/// Designed to be run automatically during CLI boot.
+pub fn copy_dll_to_tester_project_at_boot() -> Result<(), String> {
+    info!("Attempting to copy {} to Godot tester project...", DLL_NAME);
+
+    // 1. Construct Source Path
+    let mut source = env::current_dir()
+        .map_err(|e| format!("Failed to get current directory for source: {}", e))?;
+    source.push(SOURCE_DLL_PATH_FRAGMENT);
+    source.push(DLL_NAME);
+    let source_path = source.as_path();
+
+    // 2. Construct Destination Path
+    let mut destination = env::current_dir()
+        .map_err(|e| format!("Failed to get current directory for destination: {}", e))?;
+    destination.push(RELATIVE_PROJECT_PATH_FRAGMENT);
+    destination.push(DLL_NAME);
+    let destination_path = destination.as_path();
+
+    // 3. Check if Source DLL exists (implies a successful cargo build run)
+    if !source_path.exists() {
+        // If the DLL is missing, it's not a fatal error for the CLI, just a warning
+        warn!("Source DLL not found at: {}. Have you run `cargo build` recently?", source_path.display());
+        return Ok(());
+    }
+
+    // 4. Perform Copy
+    match fs::copy(source_path, destination_path) {
+        Ok(_) => {
+            info!("✅ DLL Copied: {} -> {}", source_path.file_name().unwrap_or_default().to_string_lossy(), destination_path.display());
+            Ok(())
+        }
+        Err(e) => {
+            // Note: If Godot is running and locked the file, this will fail.
+            Err(format!("❌ FAILED to copy DLL. Check permissions/if Godot is running. Error: {}", e))
+        }
+    }
+}
+
+
+// -----------------------------------------------------------------------------
+// PHASE 8: NON-HEADLESS CLIENT LAUNCH (UPDATED)
+// -----------------------------------------------------------------------------
+
+/// 🚀 Launches the full **Godot Editor** (non-headless) with the project loaded.
+pub fn launch_godot_client() {
+    info!("🚀 LAUNCHING: Godot Editor (Non-Headless) for scene debugging...");
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Launch failed: {}", e);
+            return;
+        }
+    };
+
+    info!("Attempting to launch Godot from: {}", GODOT_EXE_PATH);
+    info!("Loading project at (Absolute Path): {}", project_path_abs);
+
+    match Command::new(GODOT_EXE_PATH)
+        .arg("--editor") 
+        .arg("--path")
+        .arg(&project_path_abs)
+        .spawn() 
+    {
+        Ok(_) => {
+            info!("✅ Godot EDITOR spawned successfully. Please close the Godot window to continue CLI use.");
+        }
+        Err(e) => {
+            error!("❌ Failed to execute Godot command: {}", e);
+            warn!("Please ensure the Godot executable is in the correct path relative to your CLI: {}", GODOT_EXE_PATH);
+        }
+    }
+}
+
+
+/// 🎮 Placeholder to launch headless Godot
+pub fn launch_headless_godot() {
+	warn!("🎮 Placeholder: Attempting to launch headless Godot (simple path check)...");
+	
+	match Command::new(GODOT_EXE_PATH).arg("--version").status() {
+		Ok(status) if status.success() => info!("🚀 Headless Godot launch command ready (path check OK)."),
+		_ => error!("❌ Godot executable not found or command failed. Check path: {}", GODOT_EXE_PATH),
+	}
+}
+
+// -----------------------------------------------------------------------------
+// PHASE 7: FFI BRIDGE VALIDATION (E2E FINAL) - MODIFIED FOR CONCURRENCY FIX
+// -----------------------------------------------------------------------------
+
+/// 🔥 Runs an end-to-end test of the FFI bridge by launching Godot headless
+/// to load the dedicated GDExtension test scene and validate data transfer.
+pub fn run_ffi_bridge_validation() {
+    info!("🔥 STARTING: FFI Bridge and GDExtension Integration Validation...");
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Validation failed: {}", e);
+            return;
+        }
+    };
+
+    info!("Launching Godot (Headless) from: {}", GODOT_EXE_PATH);
+    info!("Running test scene: {} in project (Absolute Path): {}", GODOT_TEST_SCENE, project_path_abs);
+
+    // --- 3. Launch Godot Headless to Execute the GDExtension Test ---
+    let mut command = Command::new(GODOT_EXE_PATH);
+    command
+        .arg("--headless") 
+        .arg("--path")
+        .arg(&project_path_abs) 
+        .arg("--scene")
+        .arg(GODOT_TEST_SCENE)
+        .arg("--quit") // 🛑 CRITICAL FIX: Ensures Godot process exits immediately after running the scene
+        .stdout(Stdio::piped()) // 🛑 FIX: Explicitly pipe stdout for reading
+        .stderr(Stdio::piped()); // 🛑 FIX: Explicitly pipe stderr for reading
+
+    // Spawn the process
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("❌ Failed to spawn Godot process: {}", e);
+            warn!("Please ensure the Godot executable is in the correct path relative to your CLI: {}", GODOT_EXE_PATH);
+            return;
+        }
+    };
+
+    // Capture streams BEFORE waiting for the process to exit
+    let stdout = child.stdout.take().expect("Failed to capture stdout stream");
+    let stderr = child.stderr.take().expect("Failed to capture stderr stream");
+
+    // 1. Concurrently read STDOUT in a separate thread to prevent pipe deadlock
+    let stdout_handle = thread::spawn(move || {
+        io::read_to_string(stdout).unwrap_or_else(|_| "Failed to read stdout.".to_string())
+    });
+
+    // 2. Concurrently read STDERR in another thread to prevent pipe deadlock
+    let stderr_handle = thread::spawn(move || {
+        io::read_to_string(stderr).unwrap_or_else(|_| "Failed to read stderr.".to_string())
+    });
+
+    // 3. Main thread waits for the Godot process to exit
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("❌ Godot process failed to wait: {}", e);
+            return;
+        }
+    };
+
+    // 4. Retrieve captured output from the concurrent threads
+    let stdout_output = stdout_handle.join().unwrap_or_else(|_| "Stdout reading thread panicked.".to_string());
+    let stderr_output = stderr_handle.join().unwrap_or_else(|_| "Stderr reading thread panicked.".to_string());
+
+    // --- 5. Process the Output ---
+    println!("\n--- GODOT TEST OUTPUT START ---");
+    println!("{}", stdout_output);
+    println!("--- GODOT TEST OUTPUT END ---\n");
+
+    if status.success() {
+        info!("✅ FFI/GDExtension Bridge VALIDATION SUCCEEDED!");
+    } else {
+        error!("❌ FFI/GDExtension Bridge VALIDATION FAILED! Exit code: {:?}", status.code());
+        eprintln!("--- GODOT ERROR OUTPUT ---");
+        eprintln!("{}", stderr_output);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// PHASE 1: FOUNDATION VALIDATION
+// -----------------------------------------------------------------------------
+
+/// Runs only the unit tests defined in the Phase 1 Foundation Layer packages.
+pub fn run_priority_1_tests() {
+	info!("Running Phase 1 Foundation Layer (P1) test suite...");
+
+	let result = Command::new("cargo")
+		.arg("test")
+		.arg("--package")
+		.arg("ssxl_shared")
+		.arg("--package")
+		.arg("ssxl_math")
+		.arg("--package")
+		.arg("ssxl_sync")
+		.arg("--all-targets")
+		.status();
+
+	match result {
+		Ok(status) if status.success() => {
+			info!("✅ Phase 1 Validation Complete: All foundation tests passed successfully.");
+		}
+		_ => {
+			error!("❌ Phase 1 Validation Failed. Check the errors above.");
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// PHASE 4: SIGNAL INSPECTOR / LIVE FEED
+// -----------------------------------------------------------------------------
+
+/// 🔮 Starts the live **Signal Inspector** utility (CLI Menu [B]).
+pub fn start_signal_inspector() {
+    warn!("🔮 Initializing Conductor and starting Signal Inspector (Real-Time Feed)...");
+
+    // 1. Initialize Conductor and retrieve the thread-safe state
+    let (conductor, state, _receiver) = match Conductor::new(None) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("❌ Failed to initialize Conductor/Runtime: {}", e);
+            return;
+        }
+    };
+
+    // Wrap Conductor in Arc<Mutex<Option<>>> for safe, single consumption by the ctrlc handler.
+    let conductor_shutdown_safe = Arc::new(Mutex::new(Some(conductor)));
+    let shutdown_clone = conductor_shutdown_safe.clone();
+
+    // 2. Setup atomic flag for graceful exit via Ctrl-C
+    let running = Arc::new(AtomicBool::new(true));
+    let r_for_handler = running.clone();
+
+    // Set a Ctrl-C handler to stop the loop and shut down the Conductor
+    if let Err(e) = ctrlc::set_handler(move || {
+        r_for_handler.store(false, Ordering::SeqCst);
+
+        if let Some(c) = shutdown_clone.lock().unwrap().take() {
+            c.graceful_teardown();
+        }
+        let _ = writeln!(io::stdout(), "\nInspector: Shutdown signal received. Waiting for Conductor...");
+    }) {
+        error!("Could not set Ctrl-C handler: {}", e);
+        return;
+    }
+
+    info!("Inspector: Press Ctrl-C to stop the live feed and gracefully shut down the Conductor.");
+
+    let mut frame_count: u64 = 0;
+    const MVG_BASELINE: u64 = 10_000_000;
+
+    // 3. Main Live Feed Loop
+    while running.load(Ordering::SeqCst) {
+        frame_count += 1;
+
+        // --- REAL-TIME DATA POLLING ---
+        let status = state.get_status();
+        let queue_depth = state.get_queue_depth();
+        let active_id = state.get_active_generator_id();
+
+        // Use carriage return (`\r`) to overwrite the current line.
+        print!("\r");
+        print!("🔮 LIVE FEED | Frame: {: >4} | Status: {: <12} | Generator: {: <25} | Queue Depth: ~{: >6} | MVG Baseline: {} tiles/s | Press Ctrl-C to exit.",
+            frame_count,
+            format!("{:?}", status),
+            active_id,
+            queue_depth,
+            MVG_BASELINE
+        );
+        let _ = io::stdout().flush();
+
+        // Check for internal shutdown signals (e.g., error in Conductor)
+        if status == ConductorStatus::ShuttingDown || status == ConductorStatus::Error {
+            running.store(false, Ordering::SeqCst);
+
+            if let Some(c) = conductor_shutdown_safe.lock().unwrap().take() {
+                c.graceful_teardown();
+            }
+            break;
+        }
+
+        // Wait 50ms (20 FPS refresh)
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    // 4. Cleanup: Clear the line after exiting the loop
+    let _ = writeln!(io::stdout(), "\r{: <200}", " "); // Overwrite and clear the line
+    info!("Inspector shutdown complete. Conductor runtime terminated.");
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_generate\src\cellular_automata_generator.rs (249 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_generate/src/cellular_automata_generator.rs
+
+use crate::Generator;
+use ssxl_math::Vec2i;
+use fastrand; 
+use ssxl_shared::{
+    chunk_data::{ChunkData, CHUNK_SIZE},
+    grid_bounds::GridBounds,
+    tile_data::TileData,
+    tile_type::TileType,
+};
+use tracing::{info, warn};
+
+// --- CONSTANTS ---
+const CA_ITERATIONS: u8 = 4;
+const INITIAL_FILL_PERCENT: u8 = 45; // 45% of tiles start as 'Rock'
+
+// --- RULESET DEFINITIONS ---
+pub const RULE_BASIC_CAVE: u8 = 0; // Generates large, open cave systems.
+pub const RULE_MAZE: u8 = 1;         // Generates thin, winding maze/pillar structures.
+pub const RULE_SOLID: u8 = 2;         // Fills the entire chunk with a solid tile.
+pub const RULE_CHECKERBOARD: u8 = 3; // Generates a checkerboard pattern.
+
+
+/// ⚙️ Implements a 2D Cellular Automata (CA) generator for pattern-based terrain.
+#[allow(dead_code)]
+pub struct CellularAutomataGenerator {
+    /// The ID of the CA ruleset to use (e.g., 0 for Cave, 1 for Maze).
+    ruleset: u8,
+}
+
+impl CellularAutomataGenerator {
+    pub fn new(ruleset: u8) -> Self {
+        CellularAutomataGenerator { ruleset }
+    }
+}
+
+// -------------------------------------------------------------------------
+// STATIC PATTERN GENERATION
+// -------------------------------------------------------------------------
+
+/// Generates a simple, static pattern that does not require CA iterations.
+fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
+    // 1. Chunk Metadata Initialization
+    let chunk_tile_size = CHUNK_SIZE as i64;
+    let world_start_x = chunk_coords.x * chunk_tile_size;
+    let world_start_y = chunk_coords.y * chunk_tile_size;
+    let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
+    
+    let bounds = GridBounds::new(
+        world_start_x,
+        world_start_y,
+        world_start_x + chunk_tile_size,
+        world_start_y + chunk_tile_size,
+    );
+    
+    let dimension_name = match ruleset {
+        RULE_SOLID => "Solid_Fill".to_string(),
+        RULE_CHECKERBOARD => "Checkerboard".to_string(),
+        _ => "Static_Pattern_Unknown".to_string(),
+    };
+    
+    let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
+    let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+
+    // 2. Pattern Generation
+    for y in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE {
+            let tile_type = match ruleset {
+                RULE_SOLID => TileType::Rock,
+                RULE_CHECKERBOARD => {
+                    // Tile type alternates based on (x + y) parity
+                    if (x + y) % 2 == 0 {
+                        TileType::Rock
+                    } else {
+                        TileType::Void
+                    }
+                }
+                _ => TileType::Void, // Should not happen
+            };
+            tiles.push(TileData::new(tile_type, 0.0));
+        }
+    }
+
+    chunk_data.insert_tiles(tiles);
+    info!("CA Generator: Finished static chunk at {:?}.", chunk_coords);
+    chunk_data
+}
+
+
+/// Determines the next tile type based on the current type, live neighbors, and the active ruleset.
+fn get_next_tile_type(current_type: TileType, live_neighbors: u8, ruleset: u8) -> TileType {
+    // NOTE: Only handles Rock/Void transitions.
+
+    // Define Birth (B) and Survival (S) conditions based on the ruleset
+    let (birth_min, birth_max, survive_min, survive_max) = match ruleset {
+        RULE_MAZE => (3, 3, 1, 4), // B3/S1234
+        RULE_BASIC_CAVE | _ => (4, 5, 1, 7), // B45/S1234567
+    };
+
+    match current_type {
+        TileType::Rock => {
+            // Survival Rule
+            if live_neighbors >= survive_min && live_neighbors <= survive_max {
+                TileType::Rock
+            } else {
+                TileType::Void
+            }
+        }
+        TileType::Void => {
+            // Birth Rule
+            if live_neighbors >= birth_min && live_neighbors <= birth_max {
+                TileType::Rock
+            } else {
+                TileType::Void
+            }
+        }
+        // Preserve any other tile types
+        _ => current_type,
+    }
+}
+
+/// Applies one step of the Cellular Automata rule to the chunk grid.
+fn apply_ca_step(chunk_data: &mut ChunkData, ruleset: u8) {
+    let mut new_tiles: Vec<TileData> = chunk_data.tiles.iter().cloned().collect();
+
+    for x in 0..CHUNK_SIZE {
+        for y in 0..CHUNK_SIZE {
+            let index = (y * CHUNK_SIZE + x) as usize;
+            let current_tile = &chunk_data.tiles[index];
+            let live_neighbors = count_live_neighbors(chunk_data, x as u32, y as u32);
+
+            // Corrected function call with 3 arguments
+            let new_type = get_next_tile_type(
+                current_tile.tile_type,
+                live_neighbors,
+                ruleset
+            );
+
+            // Retain existing noise value
+            new_tiles[index] = TileData::new(new_type, current_tile.noise_value);
+        }
+    }
+    chunk_data.insert_tiles(new_tiles);
+}
+
+/// Counts the number of 'live' (TileType::Rock) neighbors for a given coordinate (Moore neighborhood).
+fn count_live_neighbors(chunk_data: &ChunkData, cx: u32, cy: u32) -> u8 {
+    let mut count = 0;
+
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+
+            let nx = cx as i32 + dx;
+            let ny = cy as i32 + dy;
+
+            // Check if neighbor is within chunk bounds
+            if nx >= 0 && nx < CHUNK_SIZE as i32 && ny >= 0 && ny < CHUNK_SIZE as i32 {
+                let index = (ny as u32 * CHUNK_SIZE + nx as u32) as usize;
+
+                if chunk_data.tiles[index].tile_type == TileType::Rock {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+// --- TRAIT IMPLEMENTATION ---
+
+impl Generator for CellularAutomataGenerator {
+    fn id(&self) -> &str {
+        match self.ruleset {
+            RULE_MAZE => "cellular_automata_maze",
+            RULE_SOLID => "cellular_automata_solid",
+            RULE_CHECKERBOARD => "cellular_automata_checkerboard",
+            RULE_BASIC_CAVE | _ => "cellular_automata_basic",
+        }
+    }
+
+    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
+        info!("CA Generator: Starting chunk generation at {:?} with ruleset {}.", chunk_coords, self.ruleset);
+
+        // 1. Check for static patterns and execute non-CA logic
+        if self.ruleset == RULE_SOLID || self.ruleset == RULE_CHECKERBOARD {
+            warn!("CA Generator: Using static pattern ruleset ({}). Bypassing CA steps.", self.ruleset);
+            return generate_static_pattern(chunk_coords, self.ruleset);
+        }
+
+        // 2. DETERMINISTIC PRNG SEEDING
+        // Use chunk coordinates to create a predictable seed for fastrand's thread-local generator.
+        let seed_x = chunk_coords.x as u64;
+        let seed_y = chunk_coords.y as u64;
+        // Simple scrambling of the coordinates for distribution.
+        let seed = seed_x.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(seed_y);
+        fastrand::seed(seed);
+        info!("CA Generator: Seeded PRNG with deterministic value: {}.", seed);
+        
+        // 3. CHUNK METADATA INITIALIZATION (for CA algorithms)
+        let chunk_tile_size = CHUNK_SIZE as i64;
+
+        let world_start_x = chunk_coords.x * chunk_tile_size;
+        let world_start_y = chunk_coords.y * chunk_tile_size;
+
+        let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
+
+        let bounds = GridBounds::new(
+            world_start_x,
+            world_start_y,
+            world_start_x + chunk_tile_size,
+            world_start_y + chunk_tile_size,
+        );
+
+        let dimension_name = self.id().to_string(); // Use the ID as the dimension name
+
+        let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
+
+        // 4. INITIAL RANDOM FILL (Seed)
+        let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+
+        for _ in 0..(CHUNK_SIZE * CHUNK_SIZE) {
+            // Generate a random number from 0 to 99.
+            let random_val: u8 = fastrand::u8(0..100);
+            // The tile is rock if the random number is less than INITIAL_FILL_PERCENT.
+            let is_rock = random_val < INITIAL_FILL_PERCENT;
+
+            let tile_type = if is_rock {
+                TileType::Rock
+            } else {
+                TileType::Void
+            };
+            tiles.push(TileData::new(tile_type, 0.0));
+        }
+        chunk_data.insert_tiles(tiles);
+
+        // 5. APPLY CA ITERATIONS
+        for i in 0..CA_ITERATIONS {
+            apply_ca_step(&mut chunk_data, self.ruleset);
+            info!("CA Generator: Iteration {} complete.", i + 1);
+        }
+
+        warn!("CA Generator: Finished chunk at {:?}. Result is ready.", chunk_coords);
+        chunk_data
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_cli\src\cli_util_loc_scan.rs (215 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_cli/src/cli_util_loc_scan.rs
+
+use std::fs;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{info, warn, error};
+
+// --- CONFIGURATION ---
+// USER-SPECIFIED PATH: Retained as per your last request.
+const ROOT_DIR: &str = "../rust/";
+const OUTPUT_FILENAME_PREFIX: &str = "ssxl_loc_report_";
+// FIXED: Output directory is now consistent with ROOT_DIR (one level up from CWD).
+const OUTPUT_DIR: &str = "../loc_reports/";
+
+/// 📐 Represents the LOC result for a single file.
+struct FileLoc {
+    path: PathBuf,
+    loc: usize,
+}
+
+/// Helper function to generate a simple epoch seconds string for the filename.
+fn get_timestamp_string() -> String {
+    let now = SystemTime::now();
+    let since_the_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    format!("{}", since_the_epoch.as_secs())
+}
+
+
+/// Recursively scans the target directory for all files matching the given extension
+/// and calculates their Lines of Code (LOC).
+fn recursive_loc_scan(path: &PathBuf, extension: &str, results: &mut Vec<FileLoc>) -> io::Result<()> {
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                // Fixed: Direct usage of path.file_name().map_or to avoid E0382 move error.
+                
+                // Skip the build output directory (target/)
+                if path.file_name().map_or(false, |n| n.to_string_lossy() == "target") {
+                    warn!("LOC Scanner skipping build output directory: {}", path.display());
+                    continue; // This stops recursion into the 'target' directory
+                }
+                
+                // Skip the temporary/obsolete directory 'iteration5'
+                if path.file_name().map_or(false, |n| n.to_string_lossy() == "iteration5") {
+                    warn!("LOC Scanner skipping obsolete directory: {}", path.display());
+                    continue;
+                }
+
+                recursive_loc_scan(&path, extension, results)?;
+            } else if path.extension().map_or(false, |ext| ext == extension) {
+                // Only process files with the specified extension (e.g., "rs")
+                match fs::read_to_string(&path) {
+                    Ok(content) => {
+                        let loc = content.lines().count();
+                        results.push(FileLoc { path, loc });
+                    }
+                    Err(e) => {
+                        error!("Failed to read file {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Executes the full LOC scan, prints the summary, and writes the detailed report.
+pub fn execute_loc_scan() {
+    info!("LOC Scanner: Starting recursive scan for Rust files in {}", ROOT_DIR);
+    
+    let root_path = PathBuf::from(ROOT_DIR);
+    if !root_path.exists() {
+        error!("LOC Scanner failed: Root directory not found at {}", root_path.display());
+        return;
+    }
+
+    let mut loc_results = Vec::new();
+    let scan_start = SystemTime::now();
+
+    match recursive_loc_scan(&root_path, "rs", &mut loc_results) {
+        Ok(_) => {
+            let scan_duration = scan_start.elapsed()
+                                          .map_or("N/A".to_string(), |d| format!("{:.2}ms", d.as_millis() as f32));
+
+            let total_loc: usize = loc_results.iter().map(|f| f.loc).sum();
+            let file_count = loc_results.len();
+
+            // --- Generate Output File ---
+            let timestamp_str = get_timestamp_string();
+            let output_filename = format!("{}{}.txt", OUTPUT_FILENAME_PREFIX, timestamp_str);
+            let output_path = PathBuf::from(OUTPUT_DIR).join(&output_filename);
+
+            // Ensure output directory exists
+            if let Err(e) = fs::create_dir_all(PathBuf::from(OUTPUT_DIR)) {
+                error!("Failed to create output directory {}: {}", OUTPUT_DIR, e);
+                return;
+            }
+
+            match fs::File::create(&output_path) {
+                Ok(mut file) => {
+                    // Write File Details (sorted by LOC descending) - this is done before header 
+                    // only to ensure the results are sorted for both the table and the dump.
+                    loc_results.sort_unstable_by(|a, b| b.loc.cmp(&a.loc));
+                    
+                    // 1. Write Header
+                    let header = format!(
+                        "SSXL-ext Codebase LOC Report\n\
+                        Generated (Epoch Seconds): {}\n\
+                        Root Directory: {}\n\
+                        Scan Time: {}\n\
+                        Total Files Scanned: {}\n\
+                        Total Lines of Code (LOC): {}\n\n\
+                        ------------------------------------------------------\n\
+                        {:>5} LOC | Relative File Path\n\
+                        ------------------------------------------------------\n",
+                        timestamp_str,
+                        ROOT_DIR,
+                        scan_duration,
+                        file_count,
+                        total_loc,
+                        "FILE"
+                    );
+                    if file.write_all(header.as_bytes()).is_err() {
+                        error!("Failed to write header to LOC report.");
+                        return;
+                    }
+
+                    // 2. Write Summary Table
+                    for result in &loc_results {
+                        // Attempt to strip the root prefix for cleaner output path
+                        let path_str = result.path.strip_prefix(&root_path)
+                                                   .unwrap_or(&result.path)
+                                                   .display()
+                                                   .to_string();
+                        let line = format!("{:>5} LOC | {}\n", result.loc, path_str);
+                        if file.write_all(line.as_bytes()).is_err() {
+                            error!("Failed to write line for {} to LOC report.", path_str);
+                            // Continue to next file on failure
+                        }
+                    }
+
+                    // 3. Write Detailed Content Dump (The requested feature)
+                    let content_header = format!(
+                        "\n\n\n\n======================================================\n\
+                         SSXL-ext Codebase DETAILED CONTENT DUMP\n\
+                         ======================================================\n"
+                    );
+                    if file.write_all(content_header.as_bytes()).is_err() {
+                        error!("Failed to write content dump header.");
+                        return;
+                    }
+
+                    for result in &loc_results {
+                        let path_str = result.path.strip_prefix(&root_path)
+                                                   .unwrap_or(&result.path)
+                                                   .display()
+                                                   .to_string();
+                        
+                        let file_separator = format!(
+                            "\n\n\n//////////////////////////////////////////////////////\n\
+                             // FILE: {} ({} LOC)\n\
+                             //////////////////////////////////////////////////////\n\n",
+                            path_str,
+                            result.loc
+                        );
+
+                        // Write file separator header
+                        if file.write_all(file_separator.as_bytes()).is_err() {
+                            error!("Failed to write content separator for {}.", path_str);
+                            continue;
+                        }
+
+                        // Read and write the entire file content
+                        match fs::read_to_string(&result.path) {
+                            Ok(content) => {
+                                if file.write_all(content.as_bytes()).is_err() {
+                                    error!("Failed to write content for {}.", path_str);
+                                }
+                            }
+                            Err(e) => {
+                                let error_message = format!("\n[ ERROR: FAILED TO READ FILE CONTENT: {} ]\n", e);
+                                if file.write_all(error_message.as_bytes()).is_err() {
+                                    error!("Failed to write error message for {}.", path_str);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Final Footer
+                    if file.write_all(b"\n\n======================================================\nEND OF REPORT\n======================================================\n").is_err() {
+                        error!("Failed to write report footer.");
+                    }
+
+                    info!("LOC Report: Successfully created report file: {}", output_path.display());
+
+                    // Print summary to console
+                    println!("\n[ LOC Scan Complete ]");
+                    println!("Total Rust Files: {}", file_count);
+                    println!("Total Lines of Code: {}", total_loc);
+                    println!("Report saved to: {}", output_path.display());
+                }
+                Err(e) => {
+                    error!("Failed to create LOC report file {}: {}", output_path.display(), e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("LOC Scanner: Recursive scan failed: {}", e);
+        }
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_cli\src\cli_util_bench.rs (199 LOC)
+//////////////////////////////////////////////////////
+
+//! Utilities for running generation benchmarks and conversion tests.
+
+use tracing::{info, warn, error};
+use std::time::Instant;
+// NEW IMPORTS for Concurrency and Live Ticker
+use std::thread;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::io::{self, Write};
+use std::time::Duration;
+
+// --- EXTERNAL CRATE DEPENDENCIES ---
+use ssxl_generate::benchmark_generation_workload; 
+use ssxl_generate::conductor::Conductor; // Import Conductor
+use ssxl_math::Vec2i; // Import Vec2i for chunk coordinates
+
+// --- Test Utilities ---
+
+/// 🧪 CLI-safe test: Initializes the Conductor, switches generators, and generates
+/// a small set of chunks to validate the core pipeline.
+pub fn test_generation_and_placement_cli() {
+    warn!("🧪 Running CLI Test: Generation and Placement (Conductor Validation)...");
+
+    // 1. Initialize Conductor and retrieve state
+    // FIX: Update destructuring to handle the new 3-element tuple (Conductor, ConductorState, Receiver).
+    let (mut conductor, _state, _receiver) = match Conductor::new(None) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("❌ Failed to initialize Conductor/Runtime: {}", e);
+            return;
+        }
+    };
+
+    let test_coords = [
+        Vec2i::new(0, 0),
+        Vec2i::new(-1, 0),
+        Vec2i::new(100, 100),
+    ];
+    let mut chunks_generated = 0;
+
+    // --- 2. Test Perlin Generator ---
+    let perlin_id = "perlin_mvg"; 
+    if conductor.set_active_generator(perlin_id).is_ok() {
+        info!("-> Active Generator set to: {}", perlin_id);
+        for &coords in &test_coords {
+            // FIX: Renamed 'chunk' to '_chunk' to suppress the unused variable warning.
+            let _chunk = conductor.generate_single_chunk(coords);
+            info!("  - Generated chunk {:?} successfully.", coords);
+            // In a real scenario, we would assert properties of '_chunk' here.
+            chunks_generated += 1;
+        }
+    } else {
+        warn!("Generator '{}' not found. Skipping Perlin test.", perlin_id);
+    }
+    
+    // --- 3. Test Cellular Automata Generator ---
+    let ca_id = "cellular_automata_basic"; 
+    if conductor.set_active_generator(ca_id).is_ok() {
+        info!("-> Active Generator set to: {}", ca_id);
+        let coords = Vec2i::new(50, 50);
+        // FIX: Renamed 'chunk' to '_chunk' to suppress the unused variable warning.
+        let _chunk = conductor.generate_single_chunk(coords);
+        info!("  - Generated chunk {:?} successfully.", coords);
+        chunks_generated += 1;
+    } else {
+        warn!("Generator '{}' not found. Skipping CA test.", ca_id);
+    }
+
+    // --- 4. Report and Shutdown ---
+    if chunks_generated > 0 {
+        info!("✅ CLI Generation Test SUCCESS: Generated {} chunks across {} generator(s).", 
+            chunks_generated, 
+            conductor.get_active_generator_id() // Reports the last active ID
+        );
+    } else {
+        error!("❌ CLI Generation Test FAILED: Zero chunks were generated. Check Conductor initialization and generator IDs.");
+    }
+
+    // FIX: Use the renamed, consuming shutdown method.
+    conductor.graceful_teardown();
+}
+
+// --- Conversion Utilities ---
+
+/// 🧪 Converts a PNG into a tile chunk using bitmask logic (Placeholder).
+pub fn run_bitmask_conversion() {
+    warn!("🧪 Starting bitmask conversion from world.png (Placeholder)...");
+
+    let tiles_placed = 5000;
+    
+    info!("✅ Conversion complete. Tiles placed: {}", tiles_placed);
+}
+
+// --- Benchmark Utilities ---
+
+/// 🧪 Benchmarks tile placement throughput.
+///
+/// Executes a fixed workload concurrently with a live progress ticker.
+pub fn run_max_grid_benchmark() {
+    warn!("🧪 Starting Max Grid Benchmark (Real Workload)...");
+    
+    const WORKLOAD_TILES: u64 = 100_000_000; 
+
+    // --- 1. SETUP SHARED ATOMIC STATE ---
+    let processed_tiles = Arc::new(AtomicU64::new(0));
+    let workload_counter_clone = processed_tiles.clone();
+    let ticker_counter_clone = processed_tiles.clone();
+
+    // --- 2. START THE WORKLOAD (GENERATION) THREAD ---
+    // NOTE: Conductor::new() is called inside benchmark_generation_workload 
+    // and is assumed to be fixed there (to pass None).
+    let workload_handle = thread::spawn(move || {
+        // NOTE: The function signature in aetherion_generate now includes the counter.
+        benchmark_generation_workload(WORKLOAD_TILES, workload_counter_clone); 
+    });
+
+    // --- 3. START THE TICKER (CLI REPORTING) THREAD ---
+    let start_time = Instant::now();
+    let ticker_handle = thread::spawn(move || {
+        let total = WORKLOAD_TILES as f64;
+        
+        loop {
+            // Load the current progress atomically
+            let current = ticker_counter_clone.load(Ordering::Relaxed);
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let percentage = ((current as f64 / total) * 100.0).min(100.0).round() as u64;
+
+            // Calculate live throughput
+            let throughput = if elapsed > 0.0 { 
+                (current as f64 / elapsed).round() as u64 
+            } else { 
+                0 
+            };
+
+            // Use \r to reset the cursor to the start of the line for a live update
+            print!("\r⏳ Progress: {: >3}% ({: >8}M / {}M) | Throughput: ~{: >9} tiles/s", 
+                percentage, 
+                current / 1_000_000, // Display in Millions
+                WORKLOAD_TILES / 1_000_000, // Display Total in Millions
+                throughput
+            );
+            // Ensure the output is immediately visible
+            let _ = io::stdout().flush();
+
+            if current >= WORKLOAD_TILES {
+                break;
+            }
+            // Poll progress every 50ms
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    // --- 4. WAIT FOR WORKLOAD AND MEASURE TIME ---
+    let start = Instant::now();
+    
+    // Block until the generation work is finished
+    if let Err(e) = workload_handle.join() {
+        error!("Workload thread panicked: {:?}", e);
+        // Clean the line and exit
+        let _ = println!("\r❌ Benchmark failed: Generation thread panic. {: <100}", " "); 
+        return; 
+    }
+    
+    // Ensure the ticker thread prints 100% and finishes its loop
+    ticker_handle.join().unwrap();
+    
+    let duration = start.elapsed();
+    let duration_secs = duration.as_secs_f64();
+    let duration_millis = duration.as_millis() as f64; 
+    let actual_tiles_placed = WORKLOAD_TILES;
+    
+    // Clear the progress line before printing final results
+    println!("\r✅ Benchmark complete. Workload: {} tiles. Duration: {:.2}s", 
+        actual_tiles_placed, duration_secs);
+
+    if duration_secs > 0.0 {
+        let throughput_sec = (actual_tiles_placed as f64 / duration_secs).round() as u64;
+        let throughput_ms = actual_tiles_placed as f64 / duration_millis;
+        
+        // --- Outputting Max Possible Throughput ---
+        println!("⚡ Max Throughput: ~{} tiles/sec", throughput_sec);
+        println!("⚡ Diagnostics: {:.2} Million tiles/ms", throughput_ms / 1_000_000.0);
+        
+        // --- Performance Analysis ---
+        const MVG_BASELINE: u64 = 10_000_000;
+        const ITERATION5_TARGET: u64 = 18_000_000;
+
+        if throughput_sec >= ITERATION5_TARGET {
+            info!("🚀 CRITICAL SUCCESS: Throughput of {} tiles/sec EXCEEDS the Iteration 5 Target of {} tiles/sec!", throughput_sec, ITERATION5_TARGET);
+        } else if throughput_sec >= MVG_BASELINE {
+            info!("📈 Performance OK: Throughput of {} tiles/sec meets or exceeds the MVG Baseline of {} tiles/sec.", throughput_sec, MVG_BASELINE);
+        } else {
+            error!("⚠️ Performance CRITICAL: Throughput of {} tiles/sec is BELOW the MVG Baseline of {} tiles/sec.", throughput_sec, MVG_BASELINE);
+            warn!("Use Signal Inspector [B] to diagnose the concurrency bottleneck.");
+        }
+
+    } else {
+        error!("❌ Benchmark failed: Workload was too small or timer error (duration was 0.0s). Increase WORKLOAD_TILES.");
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_cli\src\cli_util_inspect.rs (162 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_cli/src/cli_util_inspect.rs (Final, Cleaned Code)
+
+//! Inspection utilities for diagnostics and developer introspection.
+
+use walkdir::WalkDir;
+use std::path::{Path, PathBuf};
+use std::fs;
+use regex::Regex;
+use tracing::{info, warn, error};
+use std::thread;
+use std::time::Duration; 
+
+// --- Module Tree Inspection ---
+
+/// 📦 Prints a tree of Rust modules across all workspace crates.
+/// NOTE: This assumes the CLI is executed from the 'rust/' directory.
+pub fn print_module_tree() {
+	println!("\n=========================================================================");
+	println!("| 🌲 RUST WORKSPACE MODULE TREE (Scanning...)                           |");
+	println!("=========================================================================");
+	
+	// Assuming execution from the workspace root (e.g., 'rust/')
+	let crate_dirs = [
+		"ssxl_cache/src",
+		"ssxl_engine_ffi/src",
+		"ssxl_generate/src",
+		"ssxl_godot/src",
+		"ssxl_math/src",
+		"ssxl_shared/src",
+		"ssxl_sync/src",
+		"ssxl_tools/src",
+		"ssxl_cli/src",
+	];
+
+	for crate_dir in crate_dirs {
+        let crate_path = PathBuf::from(crate_dir);
+		println!("\n🔍 Crate: {}", crate_dir);
+
+		if crate_path.exists() && crate_path.is_dir() {
+			for entry in WalkDir::new(&crate_path).min_depth(1) {
+				match entry {
+					Ok(e) => {
+                        let path = e.path();
+                        if path.is_file() && path.extension().map_or(false, |ext| ext == "rs") {
+                            
+                            let file_name = path.file_name().map_or("", |name| name.to_str().unwrap_or(""));
+
+                            let prefix = if file_name == "lib.rs" || file_name == "main.rs" {
+                                // Core files are highlighted
+                                "├── [CORE] "
+                            } else {
+                                "│   └── "
+                            };
+                            
+                            if let Ok(relative_path) = path.strip_prefix(&crate_path) {
+                                println!("{} {}", prefix, relative_path.display());
+                            } else {
+                                println!("{} {}", prefix, path.display());
+                            }
+                        }
+					},
+					Err(e) => warn!("Error walking directory {}: {}", crate_dir, e),
+				}
+			}
+		} else {
+			warn!("Path does not exist or is not a directory: {}", crate_dir);
+		}
+	}
+	println!("=========================================================================\n");
+}
+
+
+// --- API Inspection ---
+
+/// 🧪 Scans for GDScript-callable Rust methods exposed via #[func]
+/// NOTE: This assumes the CLI is executed from the 'rust/' directory.
+pub fn print_godot_api_surface() {
+    // FIX: Define an array of all known Godot API files.
+	let godot_api_files: [&str; 3] = [
+        "ssxl_godot/src/ssxl_engine.rs",
+        "ssxl_godot/src/ssxl_oracle.rs", // Assuming this is where oracle functions live
+        "ssxl_godot/src/ssxl_signals.rs",
+    ];
+
+    println!("🧪 API scan triggered (targeting {} files in ssxl_godot/src/)...", godot_api_files.len());
+    
+    // Regex to find the function signature line that follows #[func].
+    // Captures: 1=method_name, 2=arguments, 3=return_type
+    let fn_signature_regex = Regex::new(
+        r"^\s*pub\s+fn\s+(\w+)\s*(\([^\{]*)\s*(?:->\s*([^\{]*))?\s*\{"
+    ).unwrap();
+
+    // Regex to find the #[func] marker line.
+    let func_marker_regex = Regex::new(r"^\s*#\[func\]\s*$").unwrap();
+
+    // Store API methods with source file name
+    let mut api_methods: Vec<(String, String, String, String)> = Vec::new();
+
+    // Iterate over all target files
+    for file_path_str in godot_api_files.iter() {
+        // FIX: The following variables are correctly scoped to the loop iteration.
+        let godot_lib_path: &Path = Path::new(file_path_str);
+        let file_name = Path::new(file_path_str).file_name().unwrap().to_str().unwrap();
+        let mut func_line_pending = false;
+
+        match fs::read_to_string(godot_lib_path) {
+            Ok(contents) => {
+                info!("Successfully read {}", godot_lib_path.display());
+                
+                for line in contents.lines() {
+                    // 1. Check for the #[func] marker
+                    if func_marker_regex.is_match(line) {
+                        func_line_pending = true;
+                        continue;
+                    }
+
+                    // 2. If marker was found, check for the function signature
+                    if func_line_pending {
+                        if let Some(captures) = fn_signature_regex.captures(line) {
+                            
+                            let method_name = captures.get(1).map(|m| m.as_str()).unwrap_or("unknown_method").to_string();
+                            
+                            // Argument capture: remove surrounding parentheses and trim whitespace
+                            let args = captures.get(2)
+                                .map(|m| m.as_str().trim_start_matches('(').trim_end_matches(')').trim().to_string())
+                                .unwrap_or_default();
+                            
+                            // Return type capture: trim whitespace, default to "()"
+                            let return_type = captures.get(3).map_or("()".to_string(), |m| m.as_str().trim().to_string());
+                            
+                            // Store the method along with its source file name
+                            api_methods.push((method_name, args, return_type, file_name.to_string()));
+                            
+                            func_line_pending = false;
+                        } else if !line.trim().is_empty() {
+                            func_line_pending = false;
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                // FIX: Use `file_path_str` here to report the error correctly.
+                error!("Failed to read file {}: {}", file_path_str, e);
+            }
+        }
+    }
+
+	println!("\n--- 🎮 SSXL Engine Godot API Surface ---");
+    if api_methods.is_empty() {
+        warn!("No #[func] methods found in the targeted ssxl_godot API files. Is the Godot binding active?");
+    } else {
+        println!("Registered {} callable methods:", api_methods.len());
+        for (name, args, return_type, source_file) in &api_methods {
+            // Display as: MethodName(arguments) -> ReturnType [SourceFile]
+            println!("  ✅ func {}({}) -> {} [{}]", name, args, return_type, source_file);
+        }
+    }
+	println!("-------------------------------------------\n");
+
+    info!("API scan complete: {} methods detected.", api_methods.len());
+    thread::sleep(Duration::from_secs(2));
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_shared\src\chunk_data.rs (147 LOC)
+//////////////////////////////////////////////////////
+
+//! Canonical data structure for a single, dimension-agnostic chunk of procedural data.
+
+use serde::{Serialize, Deserialize};
+use std::time::SystemTime;
+
+// Import types from other modules in aetherion_shared
+use crate::grid_bounds::GridBounds;
+use crate::tile_data::TileData;
+use crate::math_primitives; // Used for the SystemTime serde helper
+
+// Import Vec2i from the dedicated aetherion_math crate (External Dependency)
+use ssxl_math::Vec2i;
+
+use serde_big_array::BigArray;
+
+// --- CONSTANTS ---
+
+/// The canonical size for all chunks in the SSXL Engine (32x32 tiles).
+pub const CHUNK_SIZE: u32 = 32;
+/// The total number of tiles in a single chunk (CHUNK_SIZE * CHUNK_SIZE = 1024).
+const TILE_ARRAY_SIZE: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
+
+// --- STRUCT DEFINITION ---
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkData {
+    pub id: u64,
+    pub bounds: GridBounds,
+    /// The fixed-size array containing all tile data. `BigArray` is used for efficient
+    /// serialization of the large array.
+    #[serde(with = "BigArray")]
+    pub tiles: [TileData; TILE_ARRAY_SIZE],
+    pub dimension_tag: String,
+    #[serde(with = "math_primitives::system_time_serde")]
+    pub generated_at: SystemTime,
+}
+
+// --- IMPLEMENTATION ---
+
+impl ChunkData {
+    pub const SIZE: u32 = CHUNK_SIZE;
+
+    /// Creates a new, empty ChunkData instance initialized with default data.
+    pub fn new(id: u64, bounds: GridBounds, dimension_tag: String) -> Self {
+        let tiles = [TileData::default(); TILE_ARRAY_SIZE];
+        ChunkData {
+            id,
+            bounds,
+            tiles,
+            dimension_tag,
+            generated_at: SystemTime::now(),
+        }
+    }
+    
+    /// Creates a new ChunkData instance using only the chunk coordinates.
+    pub fn new_at_coords(chunk_coords: Vec2i) -> Self {
+        let chunk_size_i64 = Self::SIZE as i64;
+        
+        // Convert chunk coordinates (Vec2i is i64-based) to world-space grid coordinates
+        let min_x = chunk_coords.x * chunk_size_i64;
+        let min_y = chunk_coords.y * chunk_size_i64;
+        // Max coordinates are inclusive
+        let max_x = min_x + chunk_size_i64 - 1;
+        let max_y = min_y + chunk_size_i64 - 1;
+
+        let bounds = GridBounds::new(min_x, min_y, max_x, max_y);
+        
+        // Simple, deterministic ID derived from chunk coordinates using XOR for fast hashing.
+        let id = chunk_coords.x as u64 ^ chunk_coords.y as u64;
+        let tiles = [TileData::default(); TILE_ARRAY_SIZE];
+
+        ChunkData {
+            id,
+            bounds,
+            tiles,
+            dimension_tag: "Default".to_string(),
+            generated_at: SystemTime::now(),
+        }
+    }
+
+    /// Converts local (x, y) coordinates to a flattened array index.
+    #[inline(always)]
+    fn coord_to_index(x: u32, y: u32) -> Option<usize> {
+        if x < Self::SIZE && y < Self::SIZE {
+            Some((y * Self::SIZE + x) as usize)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the data for a tile at the given local (x, y) coordinates.
+    pub fn get_tile(&self, x: u32, y: u32) -> Option<&TileData> {
+        Self::coord_to_index(x, y).map(|index| {
+            &self.tiles[index]
+        })
+    }
+    
+    /// Replaces the chunk's fixed-size tile array with a new set of tiles.
+    /// Used by generators (like Cellular Automata) that produce a `Vec<TileData>`.
+    pub fn insert_tiles(&mut self, tiles_vec: Vec<TileData>) {
+        if tiles_vec.len() == TILE_ARRAY_SIZE {
+            // Efficiently copy the vector's contents into the fixed-size array
+            self.tiles.clone_from_slice(&tiles_vec);
+        } else {
+            // Panic signals a contract violation: the generator must produce the correct number of tiles.
+            panic!(
+                "Tile vector size mismatch for chunk {:?}. Generator returned {} tiles, but expected {}.",
+                self.bounds,
+                tiles_vec.len(),
+                TILE_ARRAY_SIZE
+            );
+        }
+    }
+    
+    /// Returns a mutable reference to the tile data at the given local (x, y) coordinates.
+    pub fn get_tile_mut(&mut self, x: u32, y: u32) -> Option<&mut TileData> {
+        Self::coord_to_index(x, y).map(|index| {
+            &mut self.tiles[index]
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tests the coordinate flattening function for standard and edge cases.
+    #[test]
+    fn test_coord_to_index() {
+        // Chunk size is 32 (CHUNK_SIZE)
+        
+        // 1. Basic check (0, 0)
+        assert_eq!(ChunkData::coord_to_index(0, 0), Some(0));
+
+        // 2. Middle point check
+        // (Y=16 * SIZE=32) + X=16 = 512 + 16 = 528
+        assert_eq!(ChunkData::coord_to_index(16, 16), Some(528));
+
+        // 3. Max boundary check (31, 31)
+        // (Y=31 * SIZE=32) + X=31 = 992 + 31 = 1023 (TILE_ARRAY_SIZE - 1)
+        assert_eq!(ChunkData::coord_to_index(31, 31), Some(1023));
+
+        // 4. Out-of-bounds check (size is 32, so 32 is out)
+        assert_eq!(ChunkData::coord_to_index(32, 0), None);
+        assert_eq!(ChunkData::coord_to_index(0, 32), None);
+        assert_eq!(ChunkData::coord_to_index(33, 33), None);
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_sync\src\lib.rs (143 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_sync/src/lib.rs
+//!
+//! Provides the core synchronization and communication channels for the engine,
+//! allowing data exchange between the main thread, Godot, and worker threads.
+
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Arc;
+// We use the tracing framework (configured in Cargo.toml) for logging.
+use tracing::info;
+
+// NOTE: We are using String as a temporary placeholder for the complex
+// AetherionData struct, which will be defined later in the project.
+
+// --- 1. Thread-Safe Resource Wrapper ---
+
+/// A thread-safe wrapper for resources that allows multiple readers
+/// or a single writer at any time.
+#[derive(Debug, Clone)]
+pub struct AtomicResource<T> {
+    data: Arc<RwLock<T>>,
+}
+
+impl<T> AtomicResource<T> {
+    /// Creates a new AtomicResource instance.
+    pub fn new(data: T) -> Self {
+        AtomicResource {
+            data: Arc::new(RwLock::new(data)),
+        }
+    }
+
+    /// Acquires a read lock on the resource.
+    pub fn read(&self) -> RwLockReadGuard<'_, T> {
+        self.data.read()
+    }
+
+    /// Acquires a write lock on the resource.
+    pub fn write(&self) -> RwLockWriteGuard<'_, T> {
+        self.data.write()
+    }
+}
+
+// --- 2. Channel Utilities ---
+
+/// Creates an unbounded crossbeam channel pair.
+pub fn create_sync_channel() -> (Sender<String>, Receiver<String>) {
+    unbounded()
+}
+
+/// Starts the main synchronization worker task.
+pub fn start_sync_worker() {
+    info!("SSXL Synchronization Worker placeholder started.");
+}
+
+// ---------------------------
+// IMPL: Unit Tests (Phase 1 Validation)
+// ---------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    // --- Channel Tests ---
+
+    #[test]
+    fn test_channel_functionality() {
+        let (sender, receiver) = create_sync_channel();
+        let test_message = "Test data for Phase 1 sync check".to_string();
+
+        sender.send(test_message.clone()).expect("Failed to send test message");
+        let received_message = receiver.recv().expect("Failed to receive test message");
+
+        assert_eq!(received_message, test_message, "Received message did not match sent message.");
+    }
+
+    #[test]
+    fn test_sync_worker_placeholder_runs() {
+        start_sync_worker();
+    }
+    
+    // --- AtomicResource Tests ---
+
+    /// Tests that the AtomicResource correctly handles concurrent reads and a single write.
+    /// FIX: Explicitly join reader threads to eliminate the race condition.
+    #[test]
+    fn test_concurrent_read_write() {
+        let resource = AtomicResource::new(0);
+
+        // 1. Concurrent Reads (Must all read 0)
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let res_clone = resource.clone();
+            handles.push(thread::spawn(move || {
+                let value = *res_clone.read();
+                assert_eq!(value, 0);
+            }));
+        }
+
+        // CRITICAL FIX: Wait for all initial readers to complete before allowing the writer to run.
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // 2. Single Write (Set to 42)
+        let mut writer_guard = resource.write();
+        *writer_guard = 42;
+        drop(writer_guard); // Lock released
+
+        // 3. New Concurrent Reads (Must all read 42)
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let res_clone = resource.clone();
+            handles.push(thread::spawn(move || {
+                let value = *res_clone.read();
+                assert_eq!(value, 42); // Verify the change
+            }));
+        }
+        
+        // Wait for all subsequent reader threads to complete.
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    /// Tests basic read/write access without concurrency.
+    #[test]
+    fn test_basic_read_write() {
+        let resource = AtomicResource::new(10);
+        
+        {
+            let value = *resource.read();
+            assert_eq!(value, 10);
+        }
+        
+        {
+            let mut writer = resource.write();
+            *writer = 20;
+        }
+
+        assert_eq!(*resource.read(), 20, "Basic write failed.");
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_math\src\coordinate_system.rs (140 LOC)
+//////////////////////////////////////////////////////
+
+//!
+//! Defines the coordinate system types used throughout the engine and provides
+//! conversion utilities between them.
+//!
+//! The Aetherion engine uses a chunked, tile-based world system.
+//! - WorldPos: Global coordinate, precise to the tile (i64).
+//! - ChunkKey: Identifier for the chunk the tile belongs to (i64).
+//! - TileOffset: Local position of the tile within its chunk (i64, though 0-31).
+
+use serde::{Serialize, Deserialize};
+// 📐 BULLDOZER FIX: Imported CHUNK_SIZE_I64 and switched from IVec3 to I64Vec3.
+use crate::primitives::CHUNK_SIZE_I64;
+use glam::I64Vec3;
+
+
+// --- 1. Coordinate Types ---
+
+/// A global coordinate precise to the tile level.
+/// Used for physics, networking, and high-level queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct WorldPos(pub I64Vec3);
+
+/// The key/identifier for a specific chunk in the world grid.
+/// Used for data fetching, loading/unloading, and persistent storage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ChunkKey(pub I64Vec3);
+
+/// The local coordinate of a tile *within* its chunk.
+/// Used for array indexing and rendering offsets.
+// Switched to I64Vec3 for consistency with I64 world coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TileOffset(pub I64Vec3);
+
+
+// --- 2. Coordinate Conversion Functions ---
+
+impl WorldPos {
+    /// Converts a global WorldPos into its corresponding ChunkKey and local TileOffset.
+    ///
+    /// The conversion uses the relationship:
+    /// WorldPos = (ChunkKey * CHUNK_SIZE) + TileOffset
+    ///
+    /// This requires using the Euclidean remainder (`rem_euclid`) for the offset,
+    /// and then deriving the ChunkKey via floor division to correctly handle negative coordinates.
+    pub fn to_chunk_coords(&self) -> (ChunkKey, TileOffset) {
+        
+        let chunk_size: i64 = CHUNK_SIZE_I64;
+
+        // 1. Tile Offset calculation (uses Euclidean remainder, which is correct)
+        // Self.0 is I64Vec3, so all coordinates are i64.
+        let tile_x = self.0.x.rem_euclid(chunk_size);
+        let tile_y = self.0.y.rem_euclid(chunk_size);
+        let tile_z = self.0.z.rem_euclid(chunk_size);
+
+        // 2. Chunk Key calculation (Use Euclidean quotient derivation)
+        // ChunkKey = (WorldPos - TileOffset) / CHUNK_SIZE_I64
+        let chunk_x = (self.0.x - tile_x) / chunk_size;
+        let chunk_y = (self.0.y - tile_y) / chunk_size;
+        let chunk_z = (self.0.z - tile_z) / chunk_size;
+
+        let chunk_key = ChunkKey(I64Vec3::new(chunk_x, chunk_y, chunk_z));
+        let tile_offset = TileOffset(I64Vec3::new(tile_x, tile_y, tile_z));
+
+        (chunk_key, tile_offset)
+    }
+}
+
+impl ChunkKey {
+    /// Converts a ChunkKey and a local TileOffset back into a global WorldPos.
+    pub fn to_world_pos(&self, offset: TileOffset) -> WorldPos {
+        let chunk_size: i64 = CHUNK_SIZE_I64;
+
+        let world_x = self.0.x * chunk_size + offset.0.x;
+        let world_y = self.0.y * chunk_size + offset.0.y;
+        let world_z = self.0.z * chunk_size + offset.0.z;
+
+        WorldPos(I64Vec3::new(world_x, world_y, world_z))
+    }
+}
+
+// ---------------------------
+// IMPL: Unit Tests (Updated to use I64Vec3 and test high coordinates)
+// ---------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::I64Vec3;
+    // NOTE: CHUNK_SIZE_I64 is 32 for test context.
+
+    #[test]
+    fn test_world_to_chunk_positive() {
+        // Test high coordinate (i64 test)
+        let huge_coord = 5_000_000_000i64; // Well over i32::MAX
+        let expected_chunk_key = huge_coord / CHUNK_SIZE_I64; // 156,250,000
+        let expected_offset = huge_coord % CHUNK_SIZE_I64; // 0
+        
+        // Position (huge_coord, 10, 64)
+        let pos = WorldPos(I64Vec3::new(huge_coord, 10, 64));
+        let (key, offset) = pos.to_chunk_coords();
+        
+        assert_eq!(key.0, I64Vec3::new(expected_chunk_key, 0, 2), "ChunkKey failed for i64 coord");
+        assert_eq!(offset.0, I64Vec3::new(expected_offset, 10, 0), "TileOffset failed for i64 coord");
+    }
+
+    #[test]
+    fn test_world_to_chunk_negative_crucial() {
+        // Test 1: Position (-1, -1, -1) - The critical check for Euclidean remainder.
+        let pos = WorldPos(I64Vec3::new(-1, -1, -1));
+        let (key, offset) = pos.to_chunk_coords();
+
+        // Must correctly resolve to chunk key (-1, -1, -1)
+        assert_eq!(key.0, I64Vec3::new(-1, -1, -1), "ChunkKey for -1 failed to be -1");
+        // Must correctly resolve to max offset (31, 31, 31)
+        assert_eq!(offset.0, I64Vec3::new(31, 31, 31), "TileOffset for -1 failed to be 31");
+
+        // Test 2: Deep inside the negative space
+        let pos_deep = WorldPos(I64Vec3::new(-33, -64, -100));
+        let (key_deep, offset_deep) = pos_deep.to_chunk_coords();
+        
+        // Expected Key: -2, -2, -4. Expected Offset: 31, 0, 28.
+        assert_eq!(key_deep.0, I64Vec3::new(-2, -2, -4), "Deep negative ChunkKey failed");
+        assert_eq!(offset_deep.0, I64Vec3::new(31, 0, 28), "Deep negative TileOffset failed");
+    }
+
+    #[test]
+    fn test_round_trip() {
+        // Test round trip with large negative coordinate to ensure no i64 overflow errors
+        let original_pos = WorldPos(I64Vec3::new(-9_876_543_210, 456, -789));
+        
+        // 1. Convert
+        let (key, offset) = original_pos.to_chunk_coords();
+        
+        // 2. Convert back
+        let final_pos = key.to_world_pos(offset);
+
+        // 3. Verify
+        assert_eq!(original_pos, final_pos, "WorldPos to ChunkKey and back must be idempotent with i64");
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_tools\src\lib.rs (128 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_tools/src/lib.rs (Final, Corrected Code)
+
+//! Core utilities for configuration, asset management, and data validation.
+
+// Restored missing necessary imports
+use once_cell::sync::Lazy;
+use regex::Regex;
+use tracing::{info, warn}; 
+use std::io::{self, Read}; 
+use std::fs::File; 
+
+// --- CRATE DEPENDENCIES ---
+use ssxl_shared::SSXLData; 
+
+// --- CONFIGURATION CONSTANTS ---
+const DEFAULT_CONFIG_PATH: &str = "./config/engine.toml"; 
+const DEFAULT_GENERATOR: &str = "cellular_automata_basic";
+const DEFAULT_CA_RULESET: u8 = 0; 
+
+// -----------------------------------------------------------------------------
+// SSXL CONFIGURATION UTILITIES (RESTORED DEFINITION)
+// -----------------------------------------------------------------------------
+
+/// 🔧 Stores all global, static configuration settings for the SSXL Engine.
+// E0412 & E0433 Fix: SSXLConfig struct definition is now present.
+pub struct SSXLConfig {
+    default_generator_id: String,
+    ca_default_ruleset: u8,
+}
+
+impl SSXLConfig {
+    /// Private constructor to initialize config with defaults.
+    fn new_with_defaults() -> Self {
+        SSXLConfig {
+            default_generator_id: DEFAULT_GENERATOR.to_string(),
+            ca_default_ruleset: DEFAULT_CA_RULESET,
+        }
+    }
+
+    /// Attempts to load configuration from the specified path.
+    fn load_from_path(path: &str) -> Result<Self, io::Error> {
+        info!("SSXLConfig: Attempting to load configuration from: {}", path);
+
+        match File::open(path) {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                file.read_to_string(&mut contents)?;
+
+                // --- SIMULATED PARSING ---
+                info!("SSXLConfig: File read successfully. Simulating config override.");
+                // Return a simulated config that is NOT the default
+                Ok(SSXLConfig {
+                    default_generator_id: "perlin_basic_2d".to_string(), 
+                    ca_default_ruleset: 1, 
+                })
+            },
+            Err(e) => {
+                // Return the I/O error
+                Err(e)
+            }
+        }
+    }
+
+    /// Accessor for the default generator ID.
+    pub fn get_default_generator_id(&self) -> &str {
+        &self.default_generator_id
+    }
+
+    /// Accessor for the Cellular Automata default ruleset ID.
+    pub fn get_ca_default_ruleset(&self) -> u8 {
+        self.ca_default_ruleset
+    }
+}
+
+/// Public function to load config, allowing the caller (Conductor) to specify the path.
+pub fn get_config_from_path(path: Option<&str>) -> Result<SSXLConfig, io::Error> {
+    let path_to_load = path.unwrap_or(DEFAULT_CONFIG_PATH);
+
+    match SSXLConfig::load_from_path(path_to_load) {
+        Ok(config) => {
+            info!("SSXLConfig loaded from path: {}", path_to_load);
+            Ok(config)
+        },
+        Err(e) => {
+            // Log error and return defaults (Crucial for FFI stability)
+            warn!("Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.", path_to_load, e);
+            Ok(SSXLConfig::new_with_defaults())
+        }
+    }
+}
+
+/// Provides thread-safe, static access to a configuration instance *initialized only with defaults*.
+static CONFIG: Lazy<SSXLConfig> = Lazy::new(SSXLConfig::new_with_defaults);
+
+/// DEPRECATED: Public function to retrieve a reference to the global configuration.
+pub fn get_config() -> &'static SSXLConfig {
+    warn!("DEPRECATED: Called `get_config()`. Use `get_config_from_path()` for correct FFI CWD handling.");
+    &CONFIG
+}
+
+// -----------------------------------------------------------------------------
+// DATA VALIDATION UTILITIES (RESTORED DEFINITION)
+// -----------------------------------------------------------------------------
+
+/// Provides a thread-safe, lazily initialized Regex instance for data ID validation.
+// E0425 Fix: ID_REGEX static definition is now present.
+static ID_REGEX: Lazy<Regex> = Lazy::new(|| {
+    // Requires IDs to be numeric strings.
+    Regex::new(r"^\d+$").expect("Failed to compile ID validation regex")
+});
+
+/// Validates the ID field of an AetherionData primitive against a standard regex pattern.
+pub fn validate_data_id(data: &SSXLData) -> bool {
+    // Assumes AetherionData::id is accessible and implements ToString (e.g., u64).
+    ID_REGEX.is_match(&data.id.to_string())
+}
+
+
+// -----------------------------------------------------------------------------
+// CRATE ENTRY
+// -----------------------------------------------------------------------------
+
+/// Initializes the `aetherion_tools` crate.
+pub fn initialize() {
+    // Force initialization of the static regex.
+    let _ = &*ID_REGEX; 
+    info!("SSXL Tools: Configuration and data validation utilities initialized.");
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_cli\src\main.rs (122 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_cli/src/main.rs
+
+// --- MODULES ---
+// These files must be created in the ssxl_cli/src directory.
+mod cli_util_actions;	// Contains the menu action functions (e.g., run_tests)
+mod cli_util_inspect;	// Contains inspection functions (API surface, module tree)
+mod cli_util_menu;		// Contains MenuItem struct, build_menu, and print_menu
+mod cli_util_bench;		// Contains benchmark/conversion functions
+mod cli_util_loc_scan;	// ADDED: Recursive LOC scanning utility (Space fixed here)
+
+// --- EXTERNAL IMPORTS ---
+use std::collections::HashSet;
+use std::thread;
+use std::time::Duration;
+use std::io::{self, Write};
+use crossterm::event::{self, Event, KeyCode};
+// 🆕 Added necessary imports for DLL copy automation
+use std::{fs, path::PathBuf}; 
+
+// Tracing imports are correct.
+use tracing::{info, error};
+use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
+
+// --- INTERNAL IMPORTS ---
+use crate::cli_util_menu::{build_menu, print_menu};
+use ssxl_engine_ffi::ssxl_initialize_engine; // To be called once on startup
+use crate::cli_util_loc_scan::execute_loc_scan; // ADDED: Import the LOC function
+// 🆕 Import the public copy function
+use crate::cli_util_actions::copy_dll_to_tester_project_at_boot; 
+
+
+/// 🖐️ Optional pause after action
+fn wait_for_enter() {
+	println!("\nPress Enter to return to menu...");
+	let _ = io::stdin().read_line(&mut String::new());
+}
+
+fn init_logging_and_engine() {
+	// This sets up a simple console logger for the CLI environment.
+	tracing_subscriber::registry()
+		.with(
+			tracing_subscriber::fmt::layer()
+				.with_writer(io::stdout) // Direct output to stdout
+				.with_filter(LevelFilter::INFO),
+		)
+		.init();
+
+	info!("SSXLBinary: Interactive CLI initializing.");
+
+	// Call the FFI initialization (placeholder for engine boot)
+	if ssxl_initialize_engine() {
+		info!("Engine FFI core initialized.");
+	} else {
+		error!("Failed to initialize Engine FFI core.");
+	}
+    
+    // 🆕 AUTOMATIC DLL COPY on boot
+	if let Err(e) = copy_dll_to_tester_project_at_boot() {
+		error!("{}", e);
+	}
+}
+
+fn main() {
+	// 🧠 Startup
+	init_logging_and_engine();
+	
+	// Execute LOC scan on startup and generate file
+	execute_loc_scan(); // ADDED: Run the LOC scan at bootup
+
+	println!(
+     r#"
+           (__)
+           (oo)
+    /-------\/
+   / |     ||
+  * ||-----||
+    ~~    ~~
+SSXL-ext Engine Console Initialized
+"#
+);
+
+	// 🧭 Menu setup
+	let menu = build_menu();
+	let mut last_keys = HashSet::new();
+
+	// 🔁 Main loop
+	loop {
+		print_menu(&menu);
+		info!("Console: Awaiting menu selection...");
+		print!("> ");
+		io::stdout().flush().unwrap();
+
+		// Wait for keypress
+		loop {
+			if event::poll(Duration::from_millis(500)).unwrap() {
+				if let Event::Key(key_event) = event::read().unwrap() {
+					if let KeyCode::Char(c) = key_event.code {
+						if last_keys.insert(c) {
+							if let Some(item) = menu.iter().find(|m| m.key == c) {
+								info!("Menu: Selected: {}", item.label);
+								println!("\n[{}] {}\n", c, item.label);
+								(item.action)();
+
+								if c == '9' {
+									info!("Exit: Engine shutdown complete.");
+									return;
+								}
+
+								wait_for_enter();
+								break;	
+							}
+						}
+					}
+				}
+			} else {
+				last_keys.clear();
+			}
+
+			thread::sleep(Duration::from_millis(10));
+		}
+	}
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_generate\src\perlin_generator.rs (109 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_generate/src/perlin_generator.rs
+
+use crate::Generator;
+// FIX 1: Import ChunkData and CHUNK_SIZE directly from chunk_data.
+use ssxl_shared::chunk_data::{ChunkData, CHUNK_SIZE};
+// FIX 2: Import GridBounds directly from its sub-module (aetherion_shared/src/grid_bounds.rs).
+use ssxl_shared::grid_bounds::GridBounds;
+use ssxl_math::Vec2i;
+use ssxl_shared::tile_data::TileData;
+use ssxl_shared::tile_type::TileType;
+
+// --- External Dependency ---
+// FIX 3 (Warning): Removed unused 'Seedable' import.
+use noise::{NoiseFn, Perlin};
+use tracing::info;
+
+/// Implements the Minimal Viable Generator (MVG) using Perlin Noise.
+pub struct PerlinGenerator {
+    /// Noise function instance for generation.
+    perlin: Perlin,
+    /// The scale factor to control the 'zoom' of the noise.
+    scale: f64,
+}
+
+impl PerlinGenerator {
+    /// Creates a new PerlinGenerator with a fixed seed and configurable scale.
+    pub fn new(scale: f64) -> Self {
+        const DEFAULT_SEED: u32 = 42; // A simple, fixed seed for consistency
+        PerlinGenerator {
+            // FIX: Supply the required u32 seed argument to Perlin::new()
+            perlin: Perlin::new(DEFAULT_SEED), // <--- CHANGE THIS LINE
+            scale,
+        }
+    }
+}
+
+impl Generator for PerlinGenerator {
+    fn id(&self) -> &str {
+        "perlin_basic_2d"
+    }
+
+    /// Generates the content for a single chunk using 2D Perlin noise.
+    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
+        // FIX: Cast CHUNK_SIZE to i64 to match chunk_coords.x/y type
+        let chunk_tile_size = CHUNK_SIZE as i64;
+
+        // 1. Calculate the World-Space Start Position of the chunk
+        // These are now i64 * i64 = i64. No error.
+        let world_start_x = chunk_coords.x * chunk_tile_size;
+        let world_start_y = chunk_coords.y * chunk_tile_size;
+
+        // ChunkData::new arguments: id, bounds, dimension_name
+        let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
+
+        // FIX: GridBounds::new uses i64. Calculations are now i64 + i64 = i64.
+        let bounds = GridBounds::new(
+            world_start_x,
+            world_start_y,
+            world_start_x + chunk_tile_size,
+            world_start_y + chunk_tile_size
+        );
+
+        let dimension_name = "2D_Noise".to_string();
+
+        let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
+
+        let mut tiles: Vec<TileData> = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+
+        // 2. Loop through every tile in the chunk
+        // FIX: Iterate from 0..chunk_tile_size (i64) to make x and y i64, fixing inner loop errors.
+        for y in 0..chunk_tile_size {
+            for x in 0..chunk_tile_size {
+                // FIX: world_start_x/y (i64) + x/y (i64) is valid, then cast to f64.
+                let world_x = (world_start_x + x) as f64;
+                let world_y = (world_start_y + y) as f64;
+
+                // 3. Use the noise function to get a height value
+                let noise_value = self.perlin.get([world_x / self.scale, world_y / self.scale]);
+
+                // Map the noise range [-1.0, 1.0] to a positive range [0.0, 1.0]
+                let normalized_value = (noise_value + 1.0) / 2.0;
+
+                // 4. Map the height value to a TileType and populate the ChunkData
+                let tile_type = if normalized_value < 0.35 {
+                    TileType::Water
+                } else if normalized_value < 0.60 {
+                    TileType::Grass
+                } else {
+                    TileType::Mountain
+                };
+
+                // TileData::new requires 2 arguments: tile_type, noise_value: f32
+                let tile = TileData::new(tile_type, normalized_value as f32);
+                tiles.push(tile);
+            }
+        }
+
+        // set_tiles renamed to insert_tiles
+        chunk_data.insert_tiles(tiles);
+
+        info!(
+            "MVG generated Chunk {:?} using Perlin ({} tiles processed)",
+            chunk_coords,
+            (CHUNK_SIZE * CHUNK_SIZE)
+        );
+
+        chunk_data // Return the generated and populated chunk data
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_shared\src\tile_data.rs (107 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_shared/src/tile_data.rs
+//! Defines the TileData structure: a compact, serializable unit holding all
+//! generated and runtime data for a single tile in the world grid.
+//!
+//! Total size is 6 bytes (1 + 4 + 1), which is highly memory-efficient for bulk storage.
+
+use super::tile_type::TileType;
+use serde::{Serialize, Deserialize};
+
+/// A compact structure holding the state of a single tile in the world.
+///
+/// This type is designed to be small, cheap to copy, and highly serializable for
+/// use in the aetherion_cache.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TileData {
+    /// The fundamental type of terrain/feature, determined by the MVG.
+    /// This uses the u8 discriminant of the TileType enum.
+    pub tile_type: TileType,
+    
+    /// The raw noise value V ∈ [0.0, 1.0] used to determine the `tile_type`.
+    /// This serves as the primary elevation/metric field, combining the roles of 
+    /// the previous `height_value` and potentially `aux_value` for simplicity.
+    pub noise_value: f32, // 4 bytes
+    
+    /// An 8-bit field for general-purpose runtime flags (e.g., IsModified, IsTraversable).
+    pub flags: u8, // 1 byte
+}
+
+impl Default for TileData {
+    /// Provides a default, uninitialized state.
+    fn default() -> Self {
+        TileData {
+            tile_type: TileType::default(), // Defaults to Void
+            noise_value: 0.0,
+            flags: 0,
+        }
+    }
+}
+
+// ---------------------------
+// IMPL: Constructor, Flags Utility and Logic
+// ---------------------------
+
+/// Bitmask constants for the `flags` field
+pub mod tile_flags { 
+    pub const IS_TRAVERSABLE: u8 = 0b0000_0001; // Bit 0: Is the tile physically passable?
+    pub const IS_RENDERED:    u8 = 0b0000_0010; // Bit 1: Is the tile currently visible/rendered?
+    pub const IS_MODIFIED:    u8 = 0b0000_0100; // Bit 2: Has this tile been manually changed post-generation?
+    pub const HAS_RESOURCE:   u8 = 0b0000_1000; // Bit 3: Does this tile contain a gatherable resource?
+    // Bits 4-7 are available for future logic.
+}
+
+impl TileData {
+    /// Creates a new TileData instance with the generated type and noise value.
+    /// This is the primary constructor used by the aetherion_generate MVG.
+    pub fn new(tile_type: TileType, noise_value: f32) -> Self {
+        // Initialize other fields to their defaults when constructed by the generator
+        TileData {
+            tile_type,
+            noise_value,
+            flags: 0, 
+        }
+    }
+
+    /// Checks if the tile is considered solid or non-traversable (Air/Void).
+    /// This relies on the `TileType`'s inherent logic for better consistency.
+    pub const fn is_solid(&self) -> bool {
+        !self.tile_type.is_empty()
+    }
+
+    /// Sets a specific bit flag by index (0-7).
+    pub fn set_flag_by_index(&mut self, flag_index: u8) {
+        if flag_index < 8 {
+            self.flags |= 1 << flag_index;
+        }
+    }
+
+    /// Clears a specific bit flag by index (0-7).
+    pub fn clear_flag_by_index(&mut self, flag_index: u8) {
+        if flag_index < 8 {
+            self.flags &= !(1 << flag_index);
+        }
+    }
+
+    /// Checks if a specific bit flag is set by index (0-7).
+    pub fn check_flag_by_index(&self, flag_index: u8) -> bool {
+        if flag_index < 8 {
+            (self.flags & (1 << flag_index)) != 0
+        } else {
+            false
+        }
+    }
+    
+    /// Sets or clears a flag using the public constant masks (e.g., tile_flags::IS_TRAVERSABLE).
+    pub fn set_flag(&mut self, flag_mask: u8, value: bool) {
+        if value {
+            self.flags |= flag_mask;
+        } else {
+            self.flags &= !flag_mask;
+        }
+    }
+
+    /// Checks if a specific flag is set using the public constant masks.
+    pub const fn has_flag(&self, flag_mask: u8) -> bool {
+        (self.flags & flag_mask) != 0
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_math\src\hashing.rs (103 LOC)
+//////////////////////////////////////////////////////
+
+//! Core hashing utilities for converting coordinate data into unique identifiers (hashes).
+//! These hashes are primarily used as stable keys for the cache and storage layers.
+
+use crate::primitives::SSXLResult;
+// 📐 BULLDOZER FIX: Changed IVec3 (i32) to I64Vec3 (i64) to support coordinates beyond 2.1 billion chunks.
+use glam::I64Vec3; 
+use sha2::{Digest, Sha256};
+
+/// Generates a unique SHA-256 hash string for a given 3D integer coordinate (chunk position).
+///
+/// This hash is deterministic and collision-resistant, making it ideal for use as a
+/// primary key in the cache or database for persistent data lookup.
+///
+/// # Arguments
+///
+/// * `coords` - The 3D integer coordinates (e.g., chunk index).
+///
+/// # Returns
+///
+/// A `String` containing the hexadecimal representation of the SHA-256 hash.
+pub fn hash_chunk_coords(coords: I64Vec3) -> SSXLResult<String> {
+    // 1. Format the coordinate string: "x:y:z"
+    let coord_string = format!("{}:{}:{}", coords.x, coords.y, coords.z);
+
+    // 2. Hash the string using SHA-256
+    let mut hasher = Sha256::new();
+    hasher.update(coord_string.as_bytes());
+    let result = hasher.finalize();
+
+    // 3. Convert the hash result to a hexadecimal string
+    Ok(format!("{:x}", result))
+}
+
+/// Generates a unique content hash for a piece of data (e.g., a ChunkData struct).
+///
+/// This is a placeholder function that will be fully implemented later once we have the
+/// full `ChunkData` structure. For now, it returns a simple hash based on a u64 key.
+///
+/// # Arguments
+///
+/// * `data_key` - A unique identifier or version number for the data.
+///
+/// # Returns
+///
+/// A `String` containing a placeholder hash.
+pub fn hash_content_data(data_key: u64) -> SSXLResult<String> {
+    let key_string = data_key.to_string();
+    let mut hasher = Sha256::new();
+    hasher.update(key_string.as_bytes());
+    let result = hasher.finalize();
+
+    Ok(format!("content_{:x}", result))
+}
+
+// ---------------------------
+// IMPL: Unit Tests
+// ---------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tests that the SHA-256 hashing of coordinates is strictly deterministic.
+    #[test]
+    fn test_chunk_coords_determinism() {
+        // Test with a coordinate that exceeds i32 limits to prove i64 is active.
+        let coords = I64Vec3::new(3_000_000_000, -5, 100); 
+        let hash1 = hash_chunk_coords(coords).unwrap();
+        let hash2 = hash_chunk_coords(coords).unwrap();
+        
+        assert_eq!(hash1, hash2, "Deterministic hashing failed: hashes must be identical for same input.");
+    }
+
+    /// Tests that adjacent coordinates produce different hashes and verifies the format.
+    #[test]
+    fn test_chunk_coords_uniqueness_and_format() {
+        let coords1 = I64Vec3::new(1, 1, 1);
+        let coords2 = I64Vec3::new(1, 1, 2); // Only Z differs
+        let hash1 = hash_chunk_coords(coords1).unwrap();
+        let hash2 = hash_chunk_coords(coords2).unwrap();
+
+        // SHA-256 produces 64 characters in hex format
+        assert_eq!(hash1.len(), 64, "Chunk hash is not the expected SHA-256 hex length (64).");
+        assert_ne!(hash1, hash2, "Uniqueness failed: adjacent coordinates produced same hash.");
+    }
+
+    /// Tests that the content hash is deterministic and prepends the 'content_' prefix.
+    #[test]
+    fn test_content_data_determinism_and_format() {
+        let key: u64 = 987654321;
+        
+        let hash1 = hash_content_data(key).unwrap();
+        let hash2 = hash_content_data(key).unwrap();
+
+        // Determinism check
+        assert_eq!(hash1, hash2, "Content hash determinism failed.");
+
+        // Format check
+        assert!(hash1.starts_with("content_"), "Content hash is missing the 'content_' prefix.");
+        // The SHA-256 hex part is 64 chars long. "content_" is 8 chars. Total: 72 chars.
+        assert_eq!(hash1.len(), 8 + 64, "Content hash is not the expected total length (72).");
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_engine_ffi\src\lib.rs (101 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_engine_ffi/src/lib.rs (Functional Fix)
+
+//! Low-level C FFI Bridge for Godot Communication.
+//!
+//! This module exposes functions to C/Godot that manage the SSXL runtime lifecycle
+//! and facilitate the transfer of generated chunk data.
+
+use std::ffi::CString;
+use std::sync::OnceLock;
+
+// --- EXTERNAL CRATE DEPENDENCIES ---
+use ssxl_generate::{Conductor, start_runtime_placeholder};
+// FIX: Removed unused import `ssxl_math::Vec2i`
+use ssxl_shared::initialize_shared_data;
+use tracing::{info, error};
+
+// --- 1. Conductor Management (Singleton State) ---
+
+/// A thread-safe, lazily initialized global instance of the Conductor.
+static CONDUCTOR: OnceLock<Conductor> = OnceLock::new();
+
+/// Initializes the Aetherion Runtime (Conductor) and stores it globally.
+#[no_mangle]
+pub extern "C" fn ssxl_start_runtime() -> bool {
+    // ... [Function Body Remains Unchanged]
+    initialize_shared_data(); 
+
+    if CONDUCTOR.get().is_some() {
+        info!("FFI Bridge: Runtime already running.");
+        return true;
+    }
+
+    match Conductor::new(None) {
+        Ok((conductor, _state, _receiver)) => {
+            if CONDUCTOR.set(conductor).is_err() {
+                error!("FFI Bridge: Conductor::set() failed (Possible race condition).");
+                return false;
+            }
+            info!("FFI Bridge: Conductor Runtime started successfully.");
+            true
+        }
+        Err(e) => {
+            tracing::error!("FFI Bridge: Failed to initialize Conductor: {:?}", e);
+            false
+        }
+    }
+}
+
+/// Gracefully shuts down the Conductor by signaling its internal state.
+#[no_mangle]
+pub extern "C" fn ssxl_shutdown_runtime() {
+    if let Some(conductor) = CONDUCTOR.get() {
+        conductor.signal_shutdown_graceful();
+        info!("FFI Bridge: Conductor Runtime signalled for shutdown.");
+    }
+}
+
+/// Checks if the engine's asynchronous core has been successfully initialized.
+#[no_mangle]
+pub extern "C" fn ssxl_is_runtime_ready() -> bool {
+    CONDUCTOR.get().is_some()
+}
+
+// --- 2. Generation Bridge (If applicable, call internal logic here) ---
+
+// --- 3. Compatibility and Utility Functions (Kept for CLI) ---
+
+/// Triggers the structural test of the Conductor (used by CLI menu).
+#[no_mangle]
+pub extern "C" fn ssxl_trigger_runtime_test() {
+    info!("FFI Bridge: Received command to trigger Conductor structural test.");
+    start_runtime_placeholder();
+    info!("FFI Bridge: Conductor test sequence complete.");
+}
+
+#[no_mangle]
+pub extern "C" fn ssxl_initialize_engine() -> bool {
+    ssxl_start_runtime()
+}
+
+#[no_mangle]
+pub extern "C" fn ssxl_get_status(id: u32) -> *mut std::os::raw::c_char {
+    let status = format!(
+        "Engine status for id {}: Runtime Running: {}",
+        id,
+        CONDUCTOR.get().is_some()
+    );
+    match CString::new(status) {
+        Ok(c_string) => c_string.into_raw(),
+        Err(_) => CString::new("Error: Invalid Status String").unwrap().into_raw(),
+    }
+}
+
+/// FFI function to free strings allocated by Rust.
+#[no_mangle]
+pub extern "C" fn ssxl_free_string(s: *mut std::os::raw::c_char) {
+    unsafe {
+        if s.is_null() { return }
+        let _ = CString::from_raw(s);
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_shared\src\tile_type.rs (91 LOC)
+//////////////////////////////////////////////////////
+
+//! Defines the canonical set of fundamental types that a Tile can represent.
+//!
+//! This enum is used by the generation modules to assign meaning to raw noise values,
+//! and by the rendering engine (Godot) to select the correct visual asset.
+
+use serde::{Serialize, Deserialize};
+
+/// The fundamental, physical classification of a tile, aligned with the MVG schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)] // Ensures compact storage for cache serialization
+pub enum TileType {
+    /// 0: The default, empty, or uninitialized state (Void/Air).
+    Void = 0,
+    /// 1: Represents a water body (V < 0.3).
+    Water = 1,
+    /// 2: Represents standard ground/plains (0.3 <= V < 0.6).
+    Grass = 2,
+    /// 3: Represents high-elevation terrain (V >= 0.6).
+    Mountain = 3,
+    /// 4: Represents a boundary or special-condition tile that cannot be traversed or modified easily.
+    Boundary = 4,
+    /// 5: Reserved for future structured objects/built environment (Structure/Roads).
+    Structure = 5,
+    /// 6: **(CA GENERATOR)** Represents solid ground or a wall, used as the 'live' cell by the Cellular Automata Generator.
+    Rock = 6,
+    /// 7: Reserved for future expansion or custom user types.
+    Custom1 = 7,
+    /// 8: Reserved for future expansion or custom user types.
+    Custom2 = 8,
+}
+
+// ---------------------------
+// IMPL: Default and Conversion
+// ---------------------------
+
+impl Default for TileType {
+    /// The default state of a tile is non-solid and empty.
+    fn default() -> Self {
+        TileType::Void
+    }
+}
+
+impl TileType {
+    /// Helper function to convert the enum variant into its underlying u8 representation.
+    #[inline] // Hint to the compiler for potential inlining for performance
+    pub const fn to_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Attempts to convert a u8 into a TileType. Returns None if the value is outside the defined range.
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(TileType::Void),
+            1 => Some(TileType::Water),
+            2 => Some(TileType::Grass),
+            3 => Some(TileType::Mountain),
+            4 => Some(TileType::Boundary),
+            5 => Some(TileType::Structure),
+            6 => Some(TileType::Rock),
+            7 => Some(TileType::Custom1),
+            8 => Some(TileType::Custom2),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------
+// IMPL: Gameplay Logic Helpers
+// ---------------------------
+
+impl TileType {
+    /// Checks if the tile type indicates a ground-based, traversable surface.
+    pub const fn is_walkable(self) -> bool {
+        matches!(self, 
+            TileType::Grass 
+            | TileType::Mountain 
+            | TileType::Structure 
+            | TileType::Rock
+        )
+    }
+
+    /// Checks if the tile type indicates a liquid that typically requires fluid dynamics simulation.
+    pub const fn is_fluid(self) -> bool {
+        matches!(self, TileType::Water)
+    }
+
+    /// Checks if the tile is a placeholder state that hasn't been generated yet.
+    pub const fn is_empty(self) -> bool {
+        matches!(self, TileType::Void)
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: manifest.rs (86 LOC)
+//////////////////////////////////////////////////////
+
+SSXL-ext is a mythic core — a modular, dimension-agnostic  
+procedural generation engine coded in Rust as a GDExtension  
+for Godot 4.2+ →).
+
+🪶 Manifest v9.0.seed
+
+
+#files
+
+
+📦 zv9.SSXL-ext/ — Unified Workspace Root
+
+C:/ZV9/zv9.SSXL-ext/rust
+
+rust/                                # Workspace Member Root
+├── ssxl_cache/             # 💾 Data Caching and Chunk Storage
+	├── cargo.toml
+	├── /src
+		├──lib.rs
+	
+├── ssxl_cli/               # 🧰 Interactive Console, Benchmarks, and Diagnostics
+	├── cargo.toml
+	├── src/
+		├──cli_util_actions.rs
+		├──cli_util_bench.rs
+		├──cli_util_inspect.rs
+		├──cli_util_menu.rs
+		├──main.rs
+	
+├── ssxl_engine_ffi/        # 🔗 Low-level C FFI Bridge for Godot Communication
+	├──cargo.toml
+	├── src/
+		├──lib.rs
+   
+├── ssxl_generate/          # ⚙️ Core Generation Algorithms (Noise, Pattern Mapping)
+	├──cargo.toml
+	├── src/
+		├──cellular_automata_generator.rs
+		├──conductor.rs
+		├──generator.rs
+		├──lib.rs
+		├──perlin_generator.rs
+		├──benchmark_logic.rs
+   
+├── ssxl_godot/             # 🎮 High-level Godot Bindings (GDExtension API)
+	├──cargo.toml
+	├── src/
+		├──lib.rs
+   
+├── ssxl_math/              # 📐 Mathematical Primitives and Coordinate Systems
+	├──cargo.toml
+	├── src/
+		├──lib.rs
+		├──coordinate_system.rs
+		├──generation_utils.rs
+		├──hashing.rs
+		├──primitives.rs
+			
+   
+├── ssxl_shared/            # 🧱 Global Data Primitives (Chunk, Tile, Grid Types)
+	├──cargo.toml
+	├── src/
+		├──lib.rs
+		├──chunk_data.rs
+		├──errors.rs
+		├──grid_bounds.rs
+		├──math_primitives.rs
+		├──tile_data.rs
+		├──tile_type.rs
+   
+├── ssxl_sync/              # 🚦 Concurrency Primitives and Thread Safety
+	├──cargo.toml
+	├── src/
+		├──lib.rs
+   
+├── ssxl_tools/             # 🔧 Utility Logic (Configuration, Logging, Profiling)
+	├──cargo.toml
+	├── src/
+		├──lib.rs
+   
+└── iteration5/                  # 🗑️ Obsolete/Temporary Directory (For cleanup)
+
+C:/ZV9/zv9.gdext/ //<-- local clone of fork of godot-rust master linked in toml's
+
+
+
+
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_godot\src\ssxl_oracle.rs (84 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_godot/src/aetherion_oracle.rs (Cleaned and updated for v8.2)
+
+use godot::prelude::*;
+use godot::classes::Node;
+use godot::obj::{Base, Gd};
+use godot::builtin::Variant;
+use crate::ssxl_engine::SSXLEngine; 
+
+/// 🔮 AetherionOracle — Godot-facing node for manually driving the AetherionEngine 
+/// and providing complex query/lookup logic (future state).
+#[derive(GodotClass)]
+#[class(tool, base = Node, init)]
+pub struct SSXLOracle {
+    #[base]
+    base: Base<Node>,
+    /// Link to the SSXL instance. Stored as Gd<SSXLEngine> for safety.
+    engine: Option<Gd<SSXLEngine>>, 
+    tick_count: u64,
+}
+
+impl SSXLOracle {
+    pub fn init(base: Base<Node>) -> Self { 
+        Self { 
+            base, 
+            engine: None, 
+            tick_count: 0 
+        } 
+    }
+}
+
+#[godot_api]
+impl SSXLOracle {
+
+    /// Called when the node enters the scene tree.
+    #[func]
+    fn _ready(&mut self) {
+        godot_print!("🔮 SSXLOracle (v8.2) is online. I await the ignition.");
+        self.base_mut().set_process(true);
+    }
+
+    /// Links the Oracle to a target engine node.
+    #[func]
+    pub fn set_engine(&mut self, engine: Gd<SSXLEngine>) {
+        self.engine = Some(engine);
+        godot_print!("🔗 Oracle: Engine link established.");
+    }
+
+    /// Sends a tick to the linked engine (via an explicit call to the engine's tick function).
+    #[func]
+    pub fn tick(&mut self) {
+        match self.engine.as_mut() {
+            Some(engine) => {
+                // Assuming SSXLEngine will have a #[func] called 'tick'
+                let args = [Variant::from(self.tick_count)];
+                engine.call("tick", &args); 
+                
+                godot_print!("🔮 Oracle: Tick {} → Engine", self.tick_count);
+                self.tick_count += 1;
+            }
+            None => {
+                godot_warn!("⚠️ Oracle: No engine linked. Tick aborted.");
+            }
+        }
+    }
+
+    /// Responds to a ping from external systems.
+    #[func]
+    pub fn ping(&self) {
+        godot_print!("🔮 Oracle: Ping received. I am awake.");
+    }
+
+    /// Resets the internal tick counter.
+    #[func]
+    pub fn reset(&mut self) {
+        self.tick_count = 0;
+        godot_print!("🔄 Oracle: Tick counter reset.");
+    }
+
+    /// Returns the current tick count.
+    #[func]
+    pub fn get_tick(&self) -> u64 {
+        self.tick_count
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_cache\src\lib.rs (77 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_cache/src/lib.rs
+//! In-memory caching layer for storing and retrieving procedural generation data (Chunks).
+
+use ssxl_math::coordinate_system::ChunkKey;
+use ssxl_sync::AtomicResource;
+use ssxl_shared::chunk_data::ChunkData; // NEW: Use the final data structure
+use std::collections::HashMap;
+use std::io; // NEW: Required for Result type in new(), load_chunk, and save_chunk
+use tracing::{info, warn};
+
+// --- 1. Obsolete ChunkDataPlaceholder structure removed for Phase 6. ---
+
+// --- 2. Cache Structure ---
+
+// Type alias for the thread-safe core map
+type CacheMap = HashMap<ChunkKey, ChunkData>; // FIX: Switched to ChunkData
+
+/// The thread-safe, in-memory cache for generated Chunk data.
+/// Uses AtomicResource to allow safe concurrent read/write access across worker threads.
+#[derive(Debug, Clone)]
+pub struct ChunkCache {
+    storage: AtomicResource<CacheMap>,
+}
+
+impl ChunkCache {
+    /// Creates a new, empty, thread-safe cache instance.
+    // FIX: Changed return type to Result<Self, io::Error> to satisfy Conductor's initialization.
+    pub fn new() -> Result<Self, io::Error> {
+        info!("SSXL ChunkCache initialized: Ready for thread-safe storage.");
+        Ok(ChunkCache {
+            storage: AtomicResource::new(HashMap::new()),
+        })
+    }
+
+    /// Attempts to retrieve a ChunkData by its ChunkKey (Cache Load implementation).
+    // FIX: Implemented load_chunk as required by the Conductor (Fixes E0599).
+    pub fn load_chunk(&self, key: &ChunkKey) -> Result<Option<ChunkData>, io::Error> {
+        let map = self.storage.read();
+        // Returns a clone of the ChunkData, or None. Wrapped in Ok.
+        Ok(map.get(key).cloned()) 
+    }
+
+    /// Inserts a ChunkData into the cache (Cache Save implementation).
+    // FIX: Implemented save_chunk as required by the Conductor (Fixes E0599).
+    pub fn save_chunk(&self, key: &ChunkKey, data: &ChunkData) -> Result<(), io::Error> {
+        let mut map = self.storage.write();
+        
+        if map.insert(*key, data.clone()).is_none() {
+            info!("Saved new chunk to cache: {:?}", key);
+        } else {
+            warn!("Overwrote existing chunk in cache: {:?}", key);
+        }
+        Ok(())
+    }
+
+    /// Reports the current number of chunks stored in the cache.
+    pub fn len(&self) -> usize {
+        self.storage.read().len()
+    }
+
+    /// Clears all entries from the cache.
+    pub fn clear(&self) {
+        self.storage.write().clear();
+        info!("SSXL ChunkCache cleared.");
+    }
+
+    /// Checks if the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+// ---------------------------
+// IMPL: Unit Tests (Removed obsolete tests)
+// ---------------------------
+// Note: Obsolete unit tests relying on ChunkDataPlaceholder and old methods (get/insert) 
+// have been removed for project cleanup.
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_cli\src\cli_util_menu.rs (74 LOC)
+//////////////////////////////////////////////////////
+
+// FIX: Replace the log import with the tracing import.
+use tracing::warn;
+// NEW IMPORT: Add the new function to be called from the menu
+use crate::cli_util_actions::{
+    run_cargo_tests, 
+    // FIX: Renaming this to reflect the Phase 8 goal: launch the actual Godot client.
+    launch_godot_client, // <--- NEW ACTION (Replaced start_aetherion_runtime)
+    launch_headless_godot, 
+    run_priority_1_tests, 
+    start_signal_inspector,
+    run_ffi_bridge_validation,
+}; 
+use crate::cli_util_inspect::{print_godot_api_surface, print_module_tree};
+use crate::cli_util_bench::{run_bitmask_conversion, run_max_grid_benchmark, test_generation_and_placement_cli};
+
+/// 🧩 Menu item definition
+pub struct MenuItem {
+	pub key: char,
+	pub label: &'static str,
+	pub action: Box<dyn Fn()>,
+}
+
+/// 🧭 Builds the interactive dev console menu
+pub fn build_menu() -> Vec<MenuItem> {
+	vec![
+		// ✅ Core Actions & Inspection
+		MenuItem { key: '0', label: "✅ Run: Cargo Test Suite", action: Box::new(run_cargo_tests) },
+		MenuItem { key: '1', label: "✅ Inspect: Godot-Callable API Surface", action: Box::new(print_godot_api_surface) },
+		MenuItem { key: '2', label: "✅ Inspect: Rust Module Tree", action: Box::new(print_module_tree) },
+		MenuItem { key: '3', label: "⚠️ Run: Trailkeeper Scan (TODO)", action: Box::new(|| warn!("TODO: Trailkeeper scan not yet implemented.")) },
+		
+		// 🚀 Runtime & Benchmarks
+		// FIX: Update to the Phase 8 goal: Launch the full Godot client.
+		MenuItem { 
+            key: '4', 
+            label: "🚀 Launch: Godot Client (Non-Headless)", 
+            action: Box::new(launch_godot_client) // <--- UPDATED ACTION
+        },
+		MenuItem { key: '5', label: "🧪 Test: Generation & Placement CLI", action: Box::new(test_generation_and_placement_cli) },
+		MenuItem { key: '6', label: "✅ Perform: Bitmask PNG Conversion", action: Box::new(run_bitmask_conversion) },
+		MenuItem { key: '7', label: "🧪 Benchmark: Max Grid Placement", action: Box::new(run_max_grid_benchmark) },
+		
+		// 🎮 Engine Integration (Phase 8 Focus)
+		MenuItem { 
+            key: '8', 
+            label: "🎮 Launch: Headless Godot (External)", 
+            action: Box::new(launch_headless_godot) 
+        },
+		// FIX: The FFI test is now confirmed successful (✅) and moved to a final validation status.
+		MenuItem { 
+            key: '9', 
+            label: "✅ Validate: FFI Bridge Data Transfer (E2E Final)", 
+            action: Box::new(run_ffi_bridge_validation) 
+        },
+		
+		// 🚪 Exit
+		MenuItem { key: 'E', label: "✅ Exit", action: Box::new(|| {}) },
+		
+		// 🔮 Future Expansion / TODOs / Final Checks
+		MenuItem { key: 'A', label: "🔮 TODO: Export Chunk Hashes for Streaming", action: Box::new(|| warn!("TODO: Chunk hashing not yet implemented.")) },
+		MenuItem { key: 'B', label: "🔮 Start: Signal Inspector / Live Feed", action: Box::new(start_signal_inspector) }, 
+		MenuItem { key: 'C', label: "✅ Validate: Phase 1 Final Integration Check", action: Box::new(run_priority_1_tests) },
+	]
+}
+
+/// 🖥 Prints the menu to the console
+pub fn print_menu(menu: &[MenuItem]) {
+	
+	println!("\n🧭 SSXL-ext Engine Dev Console\n");
+	for item in menu {
+		println!("[{}] {}", item.key, item.label);
+	}
+	println!("\nSelect an option by pressing its number key or letter key...\n");
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_shared\src\lib.rs (70 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_shared/src/lib.rs
+
+//! The Foundation Layer crate. Defines all core data structures, common utilities,
+//! and the canonical error type for the entire Aetherion Engine workspace.
+
+use serde::{Serialize, Deserialize};
+use tracing; // Import tracing for logging initialization
+
+// --- MODULE DEFINITIONS ---
+// P1 Data Structures
+pub mod chunk_data;
+pub mod tile_data;
+pub mod grid_bounds;
+pub mod tile_type;
+pub mod errors;
+
+// P1 Math/Utility (To be implemented next)
+pub mod math_primitives;
+
+// --- CRITICAL TYPE EXPORTS ---
+// Export the primary data structures
+pub use chunk_data::ChunkData;
+pub use tile_data::TileData;
+pub use grid_bounds::GridBounds;
+pub use tile_type::TileType;
+
+// Export the canonical error type and the engine-wide Result alias
+pub use errors::{SSXLError, SSXLResult};
+
+// ------------------------------------------------------------------
+// CORE ENGINE FUNCTIONALITY
+// ------------------------------------------------------------------
+
+/// Initializes global data primitives and configuration for the engine.
+/// This function is typically called once on engine startup by the FFI bridge.
+// FIX: Added the missing function (E0425) expected by aetherion_engine_ffi.
+pub fn initialize_shared_data() {
+    tracing::info!("SSXL Shared Data Primitives initialized (Priority 1 complete).");
+    // Future work: Add validation of global constants (e.g., CHUNK_SIZE) here.
+}
+
+// ------------------------------------------------------------------
+// COMPATIBILITY EXPORTS (Temporary/Legacy/Simple Structures)
+// ------------------------------------------------------------------
+
+// Re-export the anyhow crate for macro usage (e.g., anyhow!("...")).
+pub use anyhow;
+
+/// A simple, generic data structure used by placeholder logic (e.g., aetherion_cache).
+/// This structure provides the fields expected by the current implementation of calculate_data_hash.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SSXLData {
+    pub id: u64,
+    pub timestamp: u64,
+    pub value: String,
+}
+
+// --- COMMON EXPORTS (PRELUDE) ---
+/// A common prelude to be imported by other crates for quick access
+/// to fundamental types and the core error handling alias.
+pub mod prelude {
+    // Shared Data
+    pub use super::chunk_data::ChunkData;
+    pub use super::tile_data::TileData;
+    pub use super::grid_bounds::GridBounds;
+    pub use super::tile_type::TileType;
+    
+    // Shared Error Handling
+    pub use super::errors::{SSXLError, SSXLResult};
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_generate\src\lib.rs (67 LOC)
+//////////////////////////////////////////////////////
+
+//! Core generation algorithms, runtime orchestration, and task management.
+
+// -------------------------------------------------------------------------------------------------
+// MODULE EXPOSURE
+// -------------------------------------------------------------------------------------------------
+// Expose the Conductor (the validated Runtime/Orchestration core).
+pub mod conductor;
+pub mod benchmark_logic;
+pub mod perlin_generator;
+pub mod cellular_automata_generator;
+
+// Direct re-exports of concrete implementations
+pub use cellular_automata_generator::CellularAutomataGenerator;
+pub use perlin_generator::PerlinGenerator;
+
+// -------------------------------------------------------------------------------------------------
+// CORE TRAIT DEFINITION (Generator Interface)
+// -------------------------------------------------------------------------------------------------
+use ssxl_shared::chunk_data::ChunkData;
+use ssxl_math::Vec2i;
+
+/// Defines the core contract for all procedural generation algorithms.
+/// Every generator (Perlin, CA, DiamondSquare, etc.) must implement this trait.
+pub trait Generator {
+    /// The unique identifier for this specific algorithm (e.g., "perlin_2d_v1").
+    fn id(&self) -> &str;
+
+    /// Generates the content for a single Chunk.
+    /// It takes a Vec2i which is the world-space coordinate of the chunk.
+    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData;
+}
+
+
+// -------------------------------------------------------------------------------------------------
+// PUBLIC EXPORTS
+// -------------------------------------------------------------------------------------------------
+// Re-export the main components for easy use by other crates (aetherion_godot, aetherion_cli).
+pub use conductor::Conductor;
+// PHASE 8.3 EXPORT: Expose GeneratorConfig for use by the FFI/Godot wrapper.
+pub use conductor::GeneratorConfig;
+
+// EXPOSED BENCHMARK FUNCTION: This resolves the E0432 error in aetherion_cli
+pub use benchmark_logic::benchmark_generation_workload;
+
+// -------------------------------------------------------------------------------------------------
+// PUBLIC API FOR CLI/FFI (Validation Entry Points)
+// -------------------------------------------------------------------------------------------------
+use tracing::{info, error};
+
+/// Starts the ssxl Runtime, creating and immediately shutting down the Conductor.
+///
+/// NOTE: This is the **structural validation test for CLI Menu [4]** (Start Runtime).
+pub fn start_runtime_placeholder() {
+    // Pass None as the config_path argument to satisfy the updated Conductor::new signature.
+    match Conductor::new(None) {
+        // FIX: Properly destructure the 3-element tuple (Conductor, ConductorState, Receiver).
+        Ok((conductor, _state, _receiver)) => {
+            info!("Runtime created successfully. Testing immediate graceful teardown...");
+            
+            // Call the consuming teardown method.
+            conductor.graceful_teardown();
+        }
+        Err(e) => {
+            error!("Failed to initialize Conductor/Runtime: {:?}", e);
+        }
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_shared\src\errors.rs (64 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_shared/src/errors.rs
+//! Defines the canonical error type for the entire Aetherion Engine workspace.
+//!
+//! All crates should return an 'AetherionError' to ensure clean, consistent
+//! error propagation throughout the engine layers (Core, Generation, Godot Interface).
+
+use thiserror::Error;
+
+/// The primary result type used throughout the Aetherion Engine.
+/// Aliases the standard Result using the engine's canonical error type.
+pub type SSXLResult<T> = Result<T, SSXLError>;
+
+/// Canonical error type for all Aetherion Engine components.
+#[derive(Error, Debug)]
+pub enum SSXLError {
+    /// Errors related to file operations, configuration loading, or I/O failure.
+    #[error("I/O Error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Errors related to data serialization or deserialization (e.g., failed bincode/serde operation).
+    #[error("Serialization/Data Error: {0}")]
+    Serialization(String),
+
+    /// Errors caused by data structures being in an invalid or impossible state (e.g., malformed GridBounds).
+    #[error("Data Consistency Error: {0}")]
+    DataConsistency(String),
+
+    /// Errors specific to the generation pipeline, often due to configuration or boundary failures.
+    #[error("Generation Failure: {0}")]
+    GenerationPipeline(String),
+
+    /// Errors related to external FFI or GDExtension communication.
+    #[error("Interface Bridge Error: {0}")]
+    InterfaceBridge(String),
+
+    /// An error that should never happen, indicating a fundamental bug in logic or state management.
+    #[error("Mythic Core Logic Failure (BUG!): {0}")]
+    CoreLogicBug(String),
+
+    /// Catch-all for other external errors, often used when converting from third-party crates.
+    /// This variant is primarily used to wrap `anyhow::Error`.
+    #[error("External Crate Error: {0}")]
+    External(String),
+}
+
+// --- Helper Conversion Implementations (for common libraries) ---
+
+/// Example conversion for the 'bincode' serialization library.
+impl From<bincode::Error> for SSXLError {
+    fn from(err: bincode::Error) -> Self {
+        SSXLError::Serialization(format!("Bincode failure: {}", err))
+    }
+}
+
+/// Allows conversion from a generic `anyhow::Error` into the canonical `AetherionError`.
+/// This is CRITICAL for using the `anyhow!` macro in dependent crates.
+impl From<anyhow::Error> for SSXLError {
+    fn from(err: anyhow::Error) -> Self {
+        SSXLError::External(format!("General anyhow error: {}", err))
+    }
+}
+
+// You can add more 'From' implementations here as you introduce new dependencies,
+// like 'tokio::JoinError' or 'rand::Error'.
+
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_shared\src\grid_bounds.rs (58 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_shared/src/grid_bounds.rs
+//! Defines the spatial boundaries for a Chunk or any defined area within the procedural world.
+//!
+//! Uses i64 coordinates to support extremely large, super-massive, expansive arcs.
+
+use serde::{Serialize, Deserialize};
+
+/// Represents a simple 2D integer coordinate (X, Y).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Coord2D {
+    pub x: i64,
+    pub y: i64,
+}
+
+/// Defines the minimum (min) and maximum (max) corners of a rectangular area
+/// in the Aetherion world space, typically used to bound a Chunk or Region.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct GridBounds {
+    /// The inclusive minimum corner of the bounding box (bottom-left).
+    pub min: Coord2D,
+    /// The exclusive maximum corner of the bounding box (top-right + 1).
+    pub max: Coord2D,
+}
+
+impl GridBounds {
+    /// Creates a new GridBounds instance.
+    pub fn new(min_x: i64, min_y: i64, max_x: i64, max_y: i64) -> Self {
+        GridBounds {
+            min: Coord2D { x: min_x, y: min_y },
+            max: Coord2D { x: max_x, y: max_y },
+        }
+    }
+
+    /// Calculates the size of the bounded area along the X and Y axes.
+    /// The size is calculated as max - min.
+    pub fn size(&self) -> Coord2D {
+        Coord2D {
+            x: self.max.x - self.min.x,
+            y: self.max.y - self.min.y,
+        }
+    }
+
+    /// Checks if a given coordinate is contained within these bounds (inclusive minimum, exclusive maximum).
+    pub fn contains(&self, coord: Coord2D) -> bool {
+        coord.x >= self.min.x && coord.x < self.max.x &&
+        coord.y >= self.min.y && coord.y < self.max.y
+    }
+}
+
+impl Default for GridBounds {
+    /// Provides a default (zero-sized) GridBounds instance.
+    fn default() -> Self {
+        GridBounds {
+            min: Coord2D { x: 0, y: 0 },
+            max: Coord2D { x: 0, y: 0 },
+        }
+    }
+}
+
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_godot\src\ssxl_signals.rs (58 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_godot/src/ssxl_signals.rs (Final, Clean Code)
+
+use godot::prelude::*;
+use godot::classes::Node;
+use godot::obj::Base;
+// FIX: Removed unused imports `GString`, `Dictionary`, and `Array`
+
+// -------------------------------------------------------------------------------------------------
+// SSXL SIGNALS GODOT WRAPPER
+// -------------------------------------------------------------------------------------------------
+
+/// A dedicated Godot Node class used purely for emitting signals from the Rust core back to GDScript.
+#[derive(GodotClass)]
+#[class(tool, base=Node, init)]
+pub struct SSXLSignals {
+    #[base]
+    base: Base<Node>,
+}
+
+#[godot_api]
+impl SSXLSignals {
+    pub fn init(base: Base<Node>) -> Self {
+        SSXLSignals {
+            base,
+        }
+    }
+    
+    // --- Signal Declarations ---
+
+    #[signal] 
+    fn build_map_start();
+
+    #[signal]
+    fn chunk_generated(x: i32, y: i32);
+    
+    #[signal]
+    fn build_map_complete();
+
+    // --- Signal Emitter Functions ---
+
+    /// Emits the signal that the map build process has started.
+    #[func]
+    pub fn emit_build_map_start(&mut self) {
+        self.base_mut().emit_signal("build_map_start", &[]);
+    }
+
+    /// Emits the signal that a new chunk has been generated and is ready to be loaded.
+    #[func]
+    pub fn emit_chunk_generated(&mut self, x: i32, y: i32) {
+        self.base_mut().emit_signal("chunk_generated", &[x.to_variant(), y.to_variant()]);
+    }
+
+    /// Emits the signal that the entire map build process is complete.
+    #[func]
+    pub fn emit_build_map_complete(&mut self) {
+        self.base_mut().emit_signal("build_map_complete", &[]);
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_godot\src\build.rs (53 LOC)
+//////////////////////////////////////////////////////
+
+// rust/SSXL_godot/build.rs
+
+use std::env;
+use std::path::PathBuf;
+use std::process::Command; // 🛑 New import for executing shell commands
+
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+
+    // The directory where cargo.toml resides (e.g., .../rust/aetherion_godot)
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    
+    // The name of the resulting GDExtension DLL (must match your .gdextension file)
+    let dll_name = "ssxl_engine.dll"; 
+    
+    // Determine the profile (debug or release)
+    let profile = env::var("PROFILE").unwrap();    
+
+    // --- 1. Calculate Source Path ---
+    let src_path = manifest_dir
+        .parent().unwrap() // .. to rust/
+        .join("target")
+        .join(&profile)
+        .join(dll_name);
+
+    // --- 2. Calculate Destination Path ---
+    let dst_path = manifest_dir
+        .parent().unwrap()      // up to rust/
+        .parent().unwrap()      // up to zv9.aetherion/
+        .join("ssxl_engine_tester")
+        .join(dll_name);
+
+    // --- 3. Execute Native Windows Copy Command ---
+    // Using `cmd /C copy /Y` is more robust on Windows than fs::copy.
+    let status = Command::new("cmd")
+        // /C runs the command and terminates; copy /Y overwrites without prompt
+        .args(&["/C", "copy", "/Y"]) 
+        .arg(&src_path)
+        .arg(&dst_path)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("cargo:warning=✅ SUCCESS (CMD): Deployed {} to {}", dll_name, dst_path.display());
+        }
+        _ => {
+            println!("cargo:warning=🚨 CRITICAL FAILURE (CMD): DLL deployment failed!");
+            println!("cargo:warning=  Source Path: {}", src_path.display());
+            println!("cargo:warning=  Dest Path: {}", dst_path.display());
+            println!("cargo:warning=  Note: The shell command failed. Check file locks or path permissions.");
+        }
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_math\src\generation_utils.rs (45 LOC)
+//////////////////////////////////////////////////////
+
+//! Utility module for core functions used by the generation pipeline.
+
+use crate::primitives::SSXLData; 
+// FIX: Simplified imports. thread_rng is now used, removing the need for SeedableRng, Pcg64, etc.
+use rand::Rng; 
+
+// -----------------------------------------------------------------------------
+// I. RANDOMNESS UTILITIES
+// -----------------------------------------------------------------------------
+
+/// A simple, thread-local generator for random values.
+/// This uses the standard library's thread-local RNG (`rand::thread_rng()`)
+/// to efficiently generate random numbers, bypassing the complex manual
+/// setup that caused trait resolution errors.
+/// 
+/// Returns `0` if a generated random value (0-99) is less than `target_percent`.
+pub fn generate_percent_roll(target_percent: u8) -> u32 {
+    // thread_rng() returns a thread-local, seeded generator.
+    let rand_val = rand::thread_rng().gen_range(0..100) as u8;
+
+    if rand_val < target_percent {
+        0
+    } else {
+        1
+    }
+}
+
+// -----------------------------------------------------------------------------
+// II. CORE PROCESS UTILITIES
+// -----------------------------------------------------------------------------
+
+/// Processes the input data, applying a placeholder mathematical transformation.
+///
+/// # Arguments
+///
+/// * `data` - A reference to the core `AetherionData` structure containing relevant state.
+///
+/// # Returns
+///
+/// A simple derived u64 value.
+pub fn process_data(data: &impl SSXLData) -> u64 {
+    // Uses the trait methods defined on SSXLData in ssxl_math/src/primitives.rs
+    let processed_value = data.get_id() + data.get_value_len() as u64;
+    processed_value
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_math\src\primitives.rs (45 LOC)
+//////////////////////////////////////////////////////
+
+//! Core types and constants for the Aetherion math foundation layer.
+
+use serde::{Serialize, Deserialize};
+
+// -------------------------------------------------------------------------
+// I. PRIMITIVE TYPES AND TRAITS (MUST BE PUB)
+// -------------------------------------------------------------------------
+
+/// 📐 **BULLDOZER FIX:** The canonical signed 2D integer vector for coordinate system logic (Chunk Coords).
+/// Must use i64 to support a world scale that exceeds 2.1 billion chunks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Vec2i {
+    pub x: i64, // Updated from i32
+    pub y: i64, // Updated from i32
+}
+
+/// A simplified, common result type.
+pub type SSXLResult<T> = Result<T, String>;
+
+/// A simplified, common data structure trait implemented by data structs like ChunkData.
+pub trait SSXLData: Send + Sync {
+    fn get_id(&self) -> u64; 
+    fn get_value_len(&self) -> usize;
+}
+
+// -------------------------------------------------------------------------
+// II. CORE CONSTANTS (MUST BE PUB)
+// -------------------------------------------------------------------------
+
+/// **BULLDOZER FIX:** The standard size (width, height, depth) of a chunk in tiles,
+/// defined as i64 to ensure seamless arithmetic with the new i64-based Vec2i and GridBounds.
+pub const CHUNK_SIZE_I64: i64 = 32;
+
+/// Standard epsilon value for floating-point comparisons (f32).
+pub const F32_EPSILON: f32 = 1.0e-6;
+
+// -------------------------------------------------------------------------
+// III. IMPLEMENTATION
+// -------------------------------------------------------------------------
+
+impl Vec2i {
+    pub fn new(x: i64, y: i64) -> Self { // Updated arguments to i64
+        Vec2i { x, y }
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_generate\src\benchmark_logic.rs (43 LOC)
+//////////////////////////////////////////////////////
+
+use tracing::{info, warn};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}}; // ADDED: For concurrent progress reporting
+
+/// 🧪 Executes a fixed tile generation workload for throughput benchmarking.
+///
+/// This function simulates the work of the Minimal Viable Generator (MVG) by
+/// iterating a fixed number of times, representing the processing of each tile.
+///
+/// It accepts an atomic counter to update real-time progress for the CLI ticker.
+pub fn benchmark_generation_workload(
+    workload_tiles: u64, 
+    processed_tiles_counter: Arc<AtomicU64> // NEW: Shared atomic counter for progress
+) {
+    warn!("Generator: Executing generation workload for {} tiles...", workload_tiles);
+
+    // We only update the progress counter every 10 million tiles to minimize atomic overhead.
+    const UPDATE_INTERVAL: u64 = 10_000_000; 
+
+    // Placeholder for actual generation work.
+    let mut result: u64 = 0;
+    
+    for i in 0..workload_tiles {
+        // A minimal, but non-trivial, calculation that depends on the loop variable 'i'.
+        // This simulates the core work (e.g., noise lookup, pattern mapping).
+        result = result.wrapping_add(i % 17);
+        
+        // --- REAL-TIME PROGRESS UPDATE ---
+        if (i + 1) % UPDATE_INTERVAL == 0 {
+            // Atomically increment the counter by the interval.
+            // Ordering::Relaxed is sufficient as we only care about the final value and ordering within the thread.
+            processed_tiles_counter.fetch_add(UPDATE_INTERVAL, Ordering::Relaxed);
+        }
+    }
+
+    // Ensure the counter is set to the final value, covering any remaining tiles in the last batch.
+    let final_update = workload_tiles % UPDATE_INTERVAL;
+    if final_update > 0 {
+        processed_tiles_counter.fetch_add(final_update, Ordering::Relaxed);
+    }
+    
+    // Print a result outside the loop to ensure the calculation itself is not optimized away.
+    info!("Generator: Workload simulation complete. Final check value: {}", result);
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_shared\src\math_primitives.rs (41 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_shared/src/math_primitives.rs
+//! This module holds utility functions and constants needed by shared data structures,
+//! primarily serialization helpers for standard library types.
+
+use std::time::{SystemTime, UNIX_EPOCH};
+use serde::{Serializer, Deserializer, Deserialize};
+
+// NOTE: CHUNK_SIZE_I32 and F32_EPSILON are removed from here.
+// CHUNK_SIZE_I32 should be moved to aetherion_math/src/primitives.rs to break the cycle.
+// F32_EPSILON is a generic math constant and should also live in aetherion_math.
+
+// -----------------------------------------------------------------------------
+// SERDE HELPERS (Remains in Shared, as it aids shared data structures)
+// -----------------------------------------------------------------------------
+
+/// Serde serialization and deserialization helpers for `std::time::SystemTime`.
+///
+/// This allows `SystemTime` to be used in structs with `#[derive(Serialize/Deserialize)]`
+/// by converting it to and from a serializable `u64` (milliseconds since epoch).
+pub mod system_time_serde {
+    use super::*;
+
+    /// Serializes `SystemTime` as milliseconds elapsed since the Unix epoch (u64).
+    pub fn serialize<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let duration = time.duration_since(UNIX_EPOCH).map_err(serde::ser::Error::custom)?;
+        let ms = duration.as_millis() as u64;
+        serializer.serialize_u64(ms)
+    }
+
+    /// Deserializes milliseconds (u64) back into a `SystemTime` struct.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let ms = u64::deserialize(deserializer)?;
+        Ok(UNIX_EPOCH + std::time::Duration::from_millis(ms))
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_math\src\lib.rs (34 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_math/src/lib.rs
+
+//! The Foundation Layer crate for all spatial types, vector math,
+//! coordinate systems, and deterministic hashing algorithms.
+
+// --- MODULE DEFINITIONS ---
+pub mod coordinate_system;
+pub mod generation_utils;
+pub mod hashing;
+// --- FIX: Renamed to primitives to match usage below ---
+pub mod primitives; 
+
+// -------------------------------------------------------------------------
+// EXPORTS FOR DOWNSTREAM CRATES
+// -------------------------------------------------------------------------
+pub use coordinate_system::{ChunkKey, WorldPos, TileOffset};
+pub use crate::generation_utils::process_data;
+// Exports correctly point to the 'primitives' module
+pub use crate::primitives::Vec2i; 
+pub use crate::primitives::SSXLResult;
+pub use crate::primitives::SSXLData;
+
+/// Math-specific prelude for convenient imports in downstream crates.
+pub mod prelude {
+    pub use super::coordinate_system::*;
+    pub use super::generation_utils::*;
+    pub use super::hashing::*;
+    // Exports correctly point to the 'primitives' module
+    pub use super::primitives::*; 
+}
+
+pub fn initialize_math_system() {
+    tracing::info!("SSXL Math system initialized and ready.");
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_godot\src\lib.rs (23 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_godot/src/lib.rs
+
+// 🛑 Declare sub-modules (no change needed here)
+pub mod ssxl_engine;
+pub mod ssxl_signals;
+pub mod ssxl_oracle;
+
+use godot::prelude::*;
+use godot::init::{ExtensionLibrary, InitLevel}; 
+
+// --- GDEXTENSION ENTRY POINT ---
+
+struct SSXLExtension;
+
+// 🛑 FIX: Use the simple, stable, declarative ExtensionLibrary implementation.
+// This is the correct signature for your version and relies on the #[derive(GodotClass)] 
+// in the sub-modules to perform registration.
+#[gdextension]
+unsafe impl ExtensionLibrary for SSXLExtension {
+    fn on_level_init(_level: InitLevel) {
+        // Leave the body empty. Registration happens automatically via macros.
+    }
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: ssxl_generate\src\generator.rs (18 LOC)
+//////////////////////////////////////////////////////
+
+// ssxl_generate/src/generator.rs
+
+use ssxl_shared::chunk_data::ChunkData;
+// FIX: Imported Vec2i from aetherion_math, where it is now defined and exported.
+
+use ssxl_math::Vec2i;
+
+/// Defines the core contract for all procedural generation algorithms.
+/// Every generator (Perlin, CA, DiamondSquare, etc.) must implement this trait.
+#[allow(dead_code)]
+pub trait Generator {
+    /// The unique identifier for this specific algorithm (e.g., "perlin_2d_v1").
+    fn id(&self) -> &str;
+
+    /// Generates the content for a single Chunk.
+    /// It takes a Vec2i which is the world-space coordinate of the chunk.
+    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData;
+}
+
+
+//////////////////////////////////////////////////////
+// FILE: manifest_tips.rs (16 LOC)
+//////////////////////////////////////////////////////
+
+tidbits:
+
+1.
+Search the Windows Start Menu for "Edit the system environment variables" and open it.
+
+Click the "Environment Variables..." button.
+
+Under "User variables for [YourName]", click "New...".
+
+Set the Variable name to GODOT4_BIN.
+
+Set the Variable value to C:\zv9\zv9.SSXL-ext\SSXL_engine_tester\godot.windows.editor.x86_64.exe.
+
+Click OK.
+
+
+
+
+======================================================
+END OF REPORT
+======================================================

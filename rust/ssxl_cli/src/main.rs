@@ -2,11 +2,11 @@
 
 // --- MODULES ---
 // These files must be created in the ssxl_cli/src directory.
-mod cli_util_actions;	// Contains the menu action functions (e.g., run_tests)
+mod actions;	        // CONSOLIDATED: Contains the menu action functions (e.g., run_tests)
 mod cli_util_inspect;	// Contains inspection functions (API surface, module tree)
 mod cli_util_menu;		// Contains MenuItem struct, build_menu, and print_menu
 mod cli_util_bench;		// Contains benchmark/conversion functions
-mod cli_util_loc_scan;	// ADDED: Recursive LOC scanning utility (Space fixed here)
+mod scan;	            // RENAMED: Recursive LOC scanning utility (was cli_util_loc_scan)
 
 // --- EXTERNAL IMPORTS ---
 use std::collections::HashSet;
@@ -14,8 +14,7 @@ use std::thread;
 use std::time::Duration;
 use std::io::{self, Write};
 use crossterm::event::{self, Event, KeyCode};
-// 🆕 Added necessary imports for DLL copy automation
-use std::{fs, path::PathBuf}; 
+//use std::fs; // Now commented, as it was in the original
 
 // Tracing imports are correct.
 use tracing::{info, error};
@@ -24,9 +23,9 @@ use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 // --- INTERNAL IMPORTS ---
 use crate::cli_util_menu::{build_menu, print_menu};
 use ssxl_engine_ffi::ssxl_initialize_engine; // To be called once on startup
-use crate::cli_util_loc_scan::execute_loc_scan; // ADDED: Import the LOC function
-// 🆕 Import the public copy function
-use crate::cli_util_actions::copy_dll_to_tester_project_at_boot; 
+use crate::scan::execute_loc_scan; // UPDATED: Import the LOC function from the new `scan` module
+// 🆕 Import the public copy function from the new `actions::godot_harness` module
+use crate::actions::copy_dll_to_tester_project_at_boot; 
 
 
 /// 🖐️ Optional pause after action
@@ -65,16 +64,16 @@ fn main() {
 	init_logging_and_engine();
 	
 	// Execute LOC scan on startup and generate file
-	execute_loc_scan(); // ADDED: Run the LOC scan at bootup
+	execute_loc_scan(); // UPDATED: Run the LOC scan at bootup
 
 	println!(
-     r#"
-           (__)
-           (oo)
-    /-------\/
-   / |     ||
-  * ||-----||
-    ~~    ~~
+        r#"
+            (__)
+            (oo)
+     /-------\/
+    / |     ||
+   * ||-----||
+      ~~     ~~
 SSXL-ext Engine Console Initialized
 "#
 );

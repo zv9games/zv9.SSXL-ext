@@ -1,4 +1,4 @@
-// ssxl_godot/src/aetherion_oracle.rs (Cleaned and updated for v8.2)
+// ssxl_godot/src/SSXL_oracle.rs (Cleaned and updated for v8.2)
 
 use godot::prelude::*;
 use godot::classes::Node;
@@ -6,7 +6,7 @@ use godot::obj::{Base, Gd};
 use godot::builtin::Variant;
 use crate::ssxl_engine::SSXLEngine; 
 
-/// 🔮 AetherionOracle — Godot-facing node for manually driving the AetherionEngine 
+/// 🔮 SSXLOracle — Godot-facing node for manually driving the AetherionEngine 
 /// and providing complex query/lookup logic (future state).
 #[derive(GodotClass)]
 #[class(tool, base = Node, init)]
@@ -46,6 +46,7 @@ impl SSXLOracle {
     }
 
     /// Sends a tick to the linked engine (via an explicit call to the engine's tick function).
+    /// This is the primary driver for processing tasks in the SSXLEngine.
     #[func]
     pub fn tick(&mut self) {
         match self.engine.as_mut() {

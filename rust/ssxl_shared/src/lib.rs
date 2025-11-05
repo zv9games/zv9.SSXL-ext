@@ -13,6 +13,9 @@ pub mod tile_data;
 pub mod grid_bounds;
 pub mod tile_type;
 pub mod errors;
+pub mod messages;
+pub mod config; // Add this line
+pub mod generation_message; // Add this line
 
 // P1 Math/Utility (To be implemented next)
 pub mod math_primitives;
@@ -20,6 +23,7 @@ pub mod math_primitives;
 // --- CRITICAL TYPE EXPORTS ---
 // Export the primary data structures
 pub use chunk_data::ChunkData;
+pub use chunk_data::CHUNK_SIZE;
 pub use tile_data::TileData;
 pub use grid_bounds::GridBounds;
 pub use tile_type::TileType;

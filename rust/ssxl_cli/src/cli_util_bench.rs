@@ -2,7 +2,7 @@
 
 use tracing::{info, warn, error};
 use std::time::Instant;
-// NEW IMPORTS for Concurrency and Live Ticker
+// Imports for Concurrency and Live Ticker
 use std::thread;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 use std::io::{self, Write};
@@ -10,8 +10,8 @@ use std::time::Duration;
 
 // --- EXTERNAL CRATE DEPENDENCIES ---
 use ssxl_generate::benchmark_generation_workload; 
-use ssxl_generate::conductor::Conductor; // Import Conductor
-use ssxl_math::Vec2i; // Import Vec2i for chunk coordinates
+use ssxl_generate::conductor::Conductor;
+use ssxl_math::Vec2i;
 
 // --- Test Utilities ---
 
@@ -21,8 +21,8 @@ pub fn test_generation_and_placement_cli() {
     warn!("🧪 Running CLI Test: Generation and Placement (Conductor Validation)...");
 
     // 1. Initialize Conductor and retrieve state
-    // FIX: Update destructuring to handle the new 3-element tuple (Conductor, ConductorState, Receiver).
-    let (mut conductor, _state, _receiver) = match Conductor::new(None) {
+    // FIX E0308: Updated destructuring to handle the new 4-element tuple (Conductor, ConductorState, Progress Receiver, Request Sender).
+    let (mut conductor, _state, _progress_receiver, _request_sender) = match Conductor::new(None) {
         Ok(result) => result,
         Err(e) => {
             error!("❌ Failed to initialize Conductor/Runtime: {}", e);
@@ -42,10 +42,8 @@ pub fn test_generation_and_placement_cli() {
     if conductor.set_active_generator(perlin_id).is_ok() {
         info!("-> Active Generator set to: {}", perlin_id);
         for &coords in &test_coords {
-            // FIX: Renamed 'chunk' to '_chunk' to suppress the unused variable warning.
             let _chunk = conductor.generate_single_chunk(coords);
             info!("  - Generated chunk {:?} successfully.", coords);
-            // In a real scenario, we would assert properties of '_chunk' here.
             chunks_generated += 1;
         }
     } else {
@@ -57,7 +55,6 @@ pub fn test_generation_and_placement_cli() {
     if conductor.set_active_generator(ca_id).is_ok() {
         info!("-> Active Generator set to: {}", ca_id);
         let coords = Vec2i::new(50, 50);
-        // FIX: Renamed 'chunk' to '_chunk' to suppress the unused variable warning.
         let _chunk = conductor.generate_single_chunk(coords);
         info!("  - Generated chunk {:?} successfully.", coords);
         chunks_generated += 1;
@@ -75,7 +72,7 @@ pub fn test_generation_and_placement_cli() {
         error!("❌ CLI Generation Test FAILED: Zero chunks were generated. Check Conductor initialization and generator IDs.");
     }
 
-    // FIX: Use the renamed, consuming shutdown method.
+    // Use the consuming teardown method.
     conductor.graceful_teardown();
 }
 
@@ -107,9 +104,7 @@ pub fn run_max_grid_benchmark() {
 
     // --- 2. START THE WORKLOAD (GENERATION) THREAD ---
     // NOTE: Conductor::new() is called inside benchmark_generation_workload 
-    // and is assumed to be fixed there (to pass None).
     let workload_handle = thread::spawn(move || {
-        // NOTE: The function signature in aetherion_generate now includes the counter.
         benchmark_generation_workload(WORKLOAD_TILES, workload_counter_clone); 
     });
 
