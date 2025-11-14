@@ -9,7 +9,7 @@ ssxl_shared = { path = "../ssxl_shared" }
 ssxl_math   = { path = "../ssxl_math" }
 ssxl_sync   = { path = "../ssxl_sync" }
 ssxl_tools = { path = "../ssxl_tools" }
-ssxl_cache = { path = "../ssxl_cache" }
+ssxl_cache  = { path = "../ssxl_cache" }
 
 # --- EXTERNAL DEPENDENCIES (Core Computation) ---
 # For parallel execution of generation algorithms

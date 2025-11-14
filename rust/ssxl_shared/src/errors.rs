@@ -1,64 +1,74 @@
 // ssxl_shared/src/errors.rs
-//! Defines the canonical error type for the entire Aetherion Engine workspace.
+
+//! # SSXL Error Definitions (`ssxl_shared::errors`)
 //!
-//! All crates should return an 'AetherionError' to ensure clean, consistent
-//! error propagation throughout the engine layers (Core, Generation, Godot Interface).
+//! This module defines the global, canonical error type for the entire SSXL-ext
+//! procedural generation engine. Centralizing error handling ensures that failures
+//! across different crates (math, generate, cache, godot) can be consistently
+//! reported, managed, and debugged, particularly across FFI boundaries.
 
 use thiserror::Error;
 
-/// The primary result type used throughout the Aetherion Engine.
-/// Aliases the standard Result using the engine's canonical error type.
+/// A specialized `Result` type for the SSXL-ext project.
+///
+/// All function calls that can fail within the SSXL ecosystem should return this
+/// type, wrapping the concrete `SSXLError` enum.
 pub type SSXLResult<T> = Result<T, SSXLError>;
 
-/// Canonical error type for all Aetherion Engine components.
+/// The comprehensive enumeration of all possible errors within the SSXL-ext engine.
 #[derive(Error, Debug)]
 pub enum SSXLError {
-    /// Errors related to file operations, configuration loading, or I/O failure.
+    /// Wrapper for standard I/O errors (e.g., file system access, network issues).
+    /// This variant automatically handles conversion from `std::io::Error`.
     #[error("I/O Error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Errors related to data serialization or deserialization (e.g., failed bincode/serde operation).
+    /// Errors encountered during data serialization (e.g., using Bincode or Serde).
+    /// Indicates problems with converting data to or from a byte stream.
     #[error("Serialization/Data Error: {0}")]
     Serialization(String),
 
-    /// Errors caused by data structures being in an invalid or impossible state (e.g., malformed GridBounds).
+    /// Errors related to unexpected or invalid data states, such as a generator
+    /// returning a tile array of the wrong size or an invalid chunk key.
     #[error("Data Consistency Error: {0}")]
     DataConsistency(String),
 
-    /// Errors specific to the generation pipeline, often due to configuration or boundary failures.
+    /// Errors specific to the procedural generation pipeline (e.g., a generator
+    /// failing to find a valid output after too many iterations).
     #[error("Generation Failure: {0}")]
     GenerationPipeline(String),
 
-    /// Errors related to external FFI or GDExtension communication.
+    /// Errors occurring in the Godot GDExtension bridge or FFI layer.
+    /// Crucial for debugging communication issues between Rust and the Godot runtime.
     #[error("Interface Bridge Error: {0}")]
     InterfaceBridge(String),
 
-    /// An error that should never happen, indicating a fundamental bug in logic or state management.
+    /// A critical, unexpected error indicating a bug in the core logic that
+    /// should never occur under normal execution (a **"BUG!"**).
     #[error("Mythic Core Logic Failure (BUG!): {0}")]
     CoreLogicBug(String),
 
-    /// Catch-all for other external errors, often used when converting from third-party crates.
-    /// This variant is primarily used to wrap `anyhow::Error`.
+    /// Generic wrapper for errors originating from third-party libraries or crates
+    /// that are not covered by other specific variants.
     #[error("External Crate Error: {0}")]
     External(String),
 }
 
-// --- Helper Conversion Implementations (for common libraries) ---
 
-/// Example conversion for the 'bincode' serialization library.
+// --- Error Conversion Implementations ---
+
+/// Implements conversion from the `bincode::Error` type into the SSXL `Serialization` error.
 impl From<bincode::Error> for SSXLError {
     fn from(err: bincode::Error) -> Self {
         SSXLError::Serialization(format!("Bincode failure: {}", err))
     }
 }
 
-/// Allows conversion from a generic `anyhow::Error` into the canonical `AetherionError`.
-/// This is CRITICAL for using the `anyhow!` macro in dependent crates.
+/// Implements conversion from the generic `anyhow::Error` type into the SSXL `External` error.
+/// This provides a convenient way to integrate external library errors into the SSXL system.
 impl From<anyhow::Error> for SSXLError {
     fn from(err: anyhow::Error) -> Self {
-        SSXLError::External(format!("General anyhow error: {}", err))
+        // Use the debug message of the anyhow error to retain the source chain.
+        SSXLError::External(format!("General anyhow error: {:?}", err))
     }
 }
-
-// You can add more 'From' implementations here as you introduce new dependencies,
-// like 'tokio::JoinError' or 'rand::Error'.

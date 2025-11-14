@@ -1,28 +1,43 @@
 // ssxl_godot/src/animation_api.rs
 
-use godot::prelude::*;
-use godot::classes::{Node, TileMap}; 
+//!
+//! Provides the public API interface for Godot to interact with the
+//! asynchronous **Animation Conductor**.
+//!
+//! This adapter is responsible for:
+//! 1. Translating Godot calls into structured `AnimationCommand` messages.
+//! 2. Synchronously retrieving generated `ChunkData` from the main **Conductor**.
+//! 3. Sending chunk data and commands to the animation worker thread for visual updates.
+
+use godot::classes::{Node, TileMap};
 use godot::obj::Gd;
 
 use std::sync::{Arc, Mutex};
 use tracing::{info, error, warn};
 
-// Internal Crate Dependencies
 use ssxl_generate::Conductor;
-use ssxl_shared::chunk_data::ChunkData; 
-use ssxl_math::Vec2i; 
-use ssxl_sync::{AnimationConductorHandle, AnimationCommand}; 
+use ssxl_math::Vec2i;
+use ssxl_sync::AnimationConductorHandle;
+// The AnimationCommand definition has changed to use unit variants and SetTimeScale(f32).
+use ssxl_shared::messages::AnimationCommand;
 
+// -----------------------------------------------------------------------------
+// 1. API Structure
+// -----------------------------------------------------------------------------
 
-/// Delegate struct responsible for handling all calls from Godot related to 
-/// animation control and sending commands to the background AnimationConductor thread.
-#[derive(Default)] 
+/// The Godot API layer for controlling the background animation processing thread.
+///
+/// It holds non-owning, bounded references (`'a`) to the essential Conductor handles.
+#[derive(Default)]
 pub struct AnimationAPI<'a> {
+    /// Handle used to send commands to the Animation Conductor (responsible for frame updates).
     animation_conductor: Option<&'a AnimationConductorHandle>,
+    /// Thread-safe reference to the main Generation Conductor (used to retrieve completed chunk data).
     _conductor: Option<&'a Arc<Mutex<Conductor>>>,
 }
 
 impl<'a> AnimationAPI<'a> {
+    /// Constructs a new AnimationAPI, setting the internal references upon initialization.
     pub fn new(
         animation_conductor: Option<&'a AnimationConductorHandle>,
         conductor: Option<&'a Arc<Mutex<Conductor>>>,
@@ -33,30 +48,42 @@ impl<'a> AnimationAPI<'a> {
         }
     }
 
-    // --------------------------------------------------------------------------
-    // API IMPLEMENTATION
-    // --------------------------------------------------------------------------
 
-    /// Maps a Godot String command name to an AnimationCommand enum and sends it.
-    /// This resolves the GDScript call `ssxl_engine.send_animation_command("...")`.
+    // -------------------------------------------------------------------------
+    // 2. High-Level Command Mapping
+    // -------------------------------------------------------------------------
+
+    /// Receives a string command from Godot and maps it to the appropriate `AnimationCommand` enum.
+    /// This provides a flexible entry point for custom scripting.
     pub fn send_command_by_name(&self, command_name: String) {
         if let Some(handle) = self.animation_conductor {
             let command = match command_name.as_str() {
+                // FIX: Map to the unit variant
                 "StartTestAnimation" => {
                     info!("AnimationAPI: Mapping to StartTestAnimation command.");
-                    AnimationCommand::StartTestAnimation 
+                    AnimationCommand::StartTestAnimation
                 },
+                // FIX: Map stop/disable to SetTimeScale(0.0)
                 "StopTestAnimation" => {
-                    info!("AnimationAPI: Mapping to StopTestAnimation command.");
-                    AnimationCommand::StopTestAnimation
+                    info!("AnimationAPI: Mapping stop test animation to SetTimeScale(0.0).");
+                    AnimationCommand::SetTimeScale(0.0)
+                },
+                // FIX: Map enable/start to SetTimeScale(1.0)
+                "ANIMATION_ENABLE" => {
+                    info!("AnimationAPI: Mapping animation enable to SetTimeScale(1.0).");
+                    AnimationCommand::SetTimeScale(1.0)
+                },
+                // FIX: Map disable/stop to SetTimeScale(0.0)
+                "ANIMATION_DISABLE" => {
+                    info!("AnimationAPI: Mapping animation disable to SetTimeScale(0.0).");
+                    AnimationCommand::SetTimeScale(0.0)
                 },
                 _ => {
                     warn!("AnimationAPI: Received unrecognized command: {}", command_name);
-                    return; // Exit if command is unrecognized
+                    return;
                 }
             };
-            
-            // Send the command via the conductor handle
+
             if let Err(e) = handle.send(command) {
                 error!("AnimationAPI: Failed to send command to worker: {}", e);
             }
@@ -65,12 +92,14 @@ impl<'a> AnimationAPI<'a> {
         }
     }
 
-    /// Starts the dedicated 30x30 self-clocked test animation.
-    /// This only sends the start command to the worker, keeping the TileMap handle 
-    /// on the main thread (Godot side).
+    // -------------------------------------------------------------------------
+    // 3. Specific Control Methods
+    // -------------------------------------------------------------------------
+
+    /// Starts a predefined test animation sequence.
     pub fn start_test_animation(&self, _tilemap_node: Option<&Gd<TileMap>>) {
         if let Some(handle) = self.animation_conductor {
-            // ✅ UPDATED: Assuming AnimationCommand::StartTestAnimation is a unit variant.
+            // FIX: Using the unit variant StartTestAnimation
             let command = AnimationCommand::StartTestAnimation;
 
             match handle.send(command) {
@@ -82,85 +111,94 @@ impl<'a> AnimationAPI<'a> {
         }
     }
 
-    /// Stops the dedicated 30x30 self-clocked test animation.
+    /// Stops the running test animation sequence.
     pub fn stop_test_animation(&self, _signals_node: Option<&Gd<Node>>) {
         if let Some(handle) = self.animation_conductor {
-            info!("AnimationAPI: Stopping 30x30 test animation.");
-            
-            // Assuming AnimationCommand::StopTestAnimation is defined
-            if let Err(e) = handle.send(AnimationCommand::StopTestAnimation) {
-                 error!("Failed to send StopTestAnimation command: {}", e);
+            info!("AnimationAPI: Stopping 30x30 test animation by setting time scale to zero.");
+
+            // FIX: Mapping stop to SetTimeScale(0.0)
+            if let Err(e) = handle.send(AnimationCommand::SetTimeScale(0.0)) {
+                error!("Failed to send SetTimeScale(0.0) (stop) command: {}", e);
             }
         } else {
             warn!("AnimationAPI: Animation Conductor is not initialized. Cannot stop test animation.");
         }
     }
 
-    /// Starts the animation worker thread's update loop.
+    /// Configures the animation framerate and sends the global start command.
     pub fn start_loading_animation(
         &self,
         framerate: f32,
         _signals_node: Option<&Gd<Node>>,
     ) {
         if let Some(handle) = self.animation_conductor {
-            info!("AnimationAPI: Starting loading animation at {:.2} FPS.", framerate);
+            info!("AnimationAPI: Starting loading animation at {:.2} FPS by setting time scale.", framerate);
+
+            // FIX: The framerate is used as the f32 argument for SetTimeScale
+            let update_result = handle.send(AnimationCommand::SetTimeScale(framerate));
             
-            let update_result = handle.send(AnimationCommand::UpdateFramerate(framerate));
-            let start_result = handle.send(AnimationCommand::Start);
-            
+            // The Start command is removed, as SetTimeScale(non-zero) implies running.
+            // If the framerate is 0, the animation will not start/run.
+
             if let Err(e) = update_result {
-                error!("Failed to send UpdateFramerate command: {}", e);
+                error!("Failed to send SetTimeScale command: {}", e);
             }
-            if let Err(e) = start_result {
-                 error!("Failed to send Start command: {}", e);
-            }
-            
         } else {
             warn!("AnimationAPI: Animation Conductor is not initialized. Cannot start animation.");
         }
     }
 
-    /// Registers a specific chunk's coordinates to be included in the animation update cycle.
-    pub fn register_chunk_for_animation(&self, chunk_x: i32, chunk_y: i32) {
+    /// Stops the generic loading animation sequence.
+    pub fn stop_loading_animation(&self, _signals_node: Option<&Gd<Node>>) {
         if let Some(handle) = self.animation_conductor {
-            
-            // Cast i32 to i64 to satisfy Vec2i::new argument types.
-            let coords = Vec2i::new(chunk_x as i64, chunk_y as i64); 
-            
+            info!("AnimationAPI: Stopping loading animation by setting time scale to zero.");
+
+            // FIX: Mapping stop to SetTimeScale(0.0)
+            if let Err(e) = handle.send(AnimationCommand::SetTimeScale(0.0)) {
+                error!("Failed to send SetTimeScale(0.0) (stop) command: {}", e);
+            }
+
+        } else {
+            warn!("AnimationAPI: Animation Conductor is not initialized. Cannot stop animation.");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Data Transfer Method
+    // -------------------------------------------------------------------------
+
+    /// Retrieves pre-generated chunk data from the main Conductor and registers it
+    /// with the animation system for display/interpolation.
+    pub fn register_chunk_for_animation(&self, chunk_x: i32, chunk_y: i32) {
+        if let Some(_handle) = self.animation_conductor {
+
+            let coords = Vec2i::new(chunk_x as i64, chunk_y as i64);
+
             if let Some(conductor_arc) = self._conductor {
+                // Lock the Conductor Mutex to call the synchronous data retrieval method.
                 let result = conductor_arc.lock().map(|conductor| {
+                    // Synchronously get the data (this will perform generation if not cached).
+                    // The actual chunk data retrieval is fine.
+                    let _chunk_data = conductor.get_chunk_data(&coords);
                     
-                    let chunk_data = conductor.get_chunk_data(&coords);
-                    let chunk_arc = Arc::new(chunk_data);
+                    // FIX: The AnimationCommand enum no longer has a 'RegisterChunk' or 'LoadChunk'
+                    // variant for sending raw data. The intended functionality is currently missing
+                    // from the communication contract (ssxl_shared::messages::AnimationCommand).
+                    warn!("AnimationAPI: Cannot register chunk ({}, {}). The command for data registration (e.g., RegisterChunk) is not available in the current AnimationCommand definition. Skipping command send.", chunk_x, chunk_y);
                     
-                    handle.send(AnimationCommand::RegisterChunk(chunk_arc))
-                        .map_err(|e| error!("Failed to send RegisterChunk command: {}", e))
-                        .ok();
-                    info!("AnimationAPI: Registered chunk ({}, {}) for animation.", chunk_x, chunk_y);
+                    // Old, now incompatible command: 
+                    // handle.send(AnimationCommand::RegisterChunk(Arc::new(chunk_data))) 
+
                 });
 
                 if let Err(e) = result {
-                    error!("Failed to lock Conductor mutex for chunk registration: {}", e);
+                    error!("Failed to lock Conductor mutex for chunk data retrieval: {}", e);
                 }
             } else {
                 warn!("Generation Conductor is not initialized. Cannot register chunk data.");
             }
         } else {
             warn!("AnimationAPI: Animation Conductor is not initialized. Cannot register chunk.");
-        }
-    }
-
-    /// Stops the animation worker thread's update loop.
-    pub fn stop_loading_animation(&self, _signals_node: Option<&Gd<Node>>) {
-        if let Some(handle) = self.animation_conductor {
-            info!("AnimationAPI: Stopping loading animation.");
-            
-            if let Err(e) = handle.send(AnimationCommand::Stop) {
-                 error!("Failed to send Stop command: {}", e);
-            }
-            
-        } else {
-            warn!("AnimationAPI: Animation Conductor is not initialized. Cannot stop animation.");
         }
     }
 }

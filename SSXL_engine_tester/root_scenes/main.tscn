@@ -471,13 +471,23 @@ offset_top = 328.0
 offset_right = 616.0
 offset_bottom = 544.0
 
-[node name="ignition" type="Button" parent="main/controlpanel" unique_id=804737985]
+[node name="map_gen_button" type="Button" parent="main/controlpanel" unique_id=804737985]
 layout_mode = 0
 offset_left = 336.0
 offset_top = 152.0
 offset_right = 464.0
 offset_bottom = 183.0
 text = "GENERATE"
+icon_alignment = 1
+
+[node name="animate_button" type="Button" parent="main/controlpanel" unique_id=1337190477]
+layout_mode = 0
+offset_left = 336.0
+offset_top = 200.0
+offset_right = 464.0
+offset_bottom = 231.0
+text = "ANIMATE
+"
 icon_alignment = 1
 
 [node name="toggleterminalbutton" type="Button" parent="main/controlpanel" unique_id=1009396468]
@@ -528,6 +538,8 @@ anchor_mode = 0
 position = Vector2(552, 304)
 
 [node name="scenescanner" type="Node" parent="main" unique_id=994167943]
+
+[node name="controlpanel1" type="Node" parent="main" unique_id=1783469105]
 
 [node name="init" type="Node" parent="." unique_id=24988245]
 script = ExtResource("6_ragr5")

@@ -5,8 +5,8 @@ edition = "2021"
 [dependencies]
 # Internal Dependencies (Local Crates)
 ssxl_shared = { path = "../ssxl_shared" }
-ssxl_sync = { path = "../ssxl_sync" }
 ssxl_math = { path = "../ssxl_math" }
+ssxl_sync = { path = "../ssxl_sync" }
 
 # External Dependencies (Workspace-Inherited)
 bincode = { workspace = true }

@@ -1,98 +1,144 @@
-// ssxl_godot/src/channel_handler.rs (CONFIRMED FIXED)
+//! # ChannelHandler
+//!
+//! This module implements the `ChannelHandler`. It acts as the central **dispatcher**
+//! on the Godot main thread, receiving raw messages from the `AsyncPoller` and delegating:
+//! 1. Generation messages to the `ChunkPresenter` for deferred rendering.
+//! 2. Animation updates directly into Godot signals for real-time responsiveness.
 
+// --- Godot GDExtension Imports ---
 use godot::prelude::*;
-use godot::classes::{Node, TileMap};
-// FIX 1: TRef is deprecated and should be removed. Gd handles object references.
+use godot::classes::Node;
 use godot::obj::Gd;
 use godot::builtin::GString;
 
-// Internal Crate Dependencies
+// --- SSXL-ext Internal Crates Imports ---
 use ssxl_generate::Conductor;
-// FIX 2: Correct imports based on where the messages actually live or should live.
-use ssxl_shared::tile_data::AnimationUpdate;
-// Assuming ChunkMessage is defined in a new shared messages module
-use ssxl_shared::messages::ChunkMessage;
+// Added AnimationPayload import for the match statement
+use ssxl_shared::messages::{AnimationUpdate, AnimationPayload};
+use ssxl_shared::messages::ChunkMessage; 
+use ssxl_generate::task_queue::GenerationMessage; 
 
-// We need the ChunkPresenter type to be accessible
+// --- Local Crate Imports ---
 use crate::chunk_presenter::ChunkPresenter;
 
+// --- Standard Library Imports ---
 use std::sync::{Arc, Mutex};
+use tracing::{info, error};
 
-/// Handles incoming messages and data from the background worker threads (Conductor)
-/// and applies the changes to the Godot world (TileMap and Signals).
+
+// -----------------------------------------------------------------------------
+// ChannelHandler Struct
+// -----------------------------------------------------------------------------
+
+/// Manages the context required to process messages and apply them to the Godot scene tree.
 #[derive(Debug, Default, Clone)]
 pub struct ChannelHandler {
-    // Reference to the presenter delegate
-    // ⚡️ E0277 FIXED by adding #[derive(Debug)] to ChunkPresenter
     presenter: Option<ChunkPresenter>,
-    
-    // Node references are required for emitting signals
     signals_node: Option<Gd<Node>>,
 }
 
 impl ChannelHandler {
     pub fn new() -> Self {
-        ChannelHandler::default()
+        Self::default()
     }
 
-    /// Sets the presenter delegate.
-    pub fn set_presenter(&mut self, presenter: ChunkPresenter) {
+    pub fn set_presenter_handle(&mut self, presenter: ChunkPresenter) {
         self.presenter = Some(presenter);
     }
 
-    /// Sets the signals node reference.
     pub fn set_signals_node(&mut self, signals_node: Option<Gd<Node>>) {
         self.signals_node = signals_node;
     }
 
-    /// Processes a batch of ChunkMessages from the generation thread.
-    /// Returns a status update message if an important state change occurred.
-    pub fn process_generation_messages(
+    // -------------------------------------------------------------------------
+    // Processing Logic: Generation (Deferred Rendering)
+    // -------------------------------------------------------------------------
+
+    /// Processes a batch of newly generated chunk messages.
+    pub fn process_generation_messages_deferred(
         &mut self,
         messages: Vec<ChunkMessage>,
-        _conductor: Option<Arc<Mutex<Conductor>>>,
-        tilemap_node: Option<&mut Gd<TileMap>>,
+        conductor: Option<Arc<Mutex<Conductor>>>,
     ) -> Option<GString> {
         if messages.is_empty() {
             return None;
         }
 
-        // Delegate chunk presentation to the ChunkPresenter
-        if let Some(ref mut presenter) = self.presenter {
-            if let Some(tilemap) = tilemap_node {
-                for msg in messages {
-                    // ⚡️ E0599 FIXED by implementing present_chunk on ChunkPresenter
-                    presenter.present_chunk(tilemap, msg);
+        let mut is_complete = false;
+
+        if let Some(ref presenter) = self.presenter {
+            for msg in messages {
+                if let ChunkMessage::Generated(data) = &msg {
+                    if data.dimension_tag == "complete" {
+                        is_complete = true;
+                        continue;
+                    }
+                }
+
+                if let Some(deferred_call) = presenter.create_deferred_present_call(msg) {
+                    deferred_call.call_deferred(&[]);
+                } else {
+                    error!("Failed to create deferred call for chunk message. Is TileMap set on Presenter?");
                 }
             }
         }
 
-        // Placeholder for emitting final status or errors
+        // --- Post-Processing: Handle Completion Status ---
+        if is_complete {
+            if let Some(arc_mutex_conductor) = conductor {
+                match arc_mutex_conductor.lock() {
+                    Ok(conductor_lock) => {
+                        conductor_lock.signal_generation_complete();
+                        info!("GenerationComplete received. Conductor status set to Running (Idle).");
+                    },
+                    Err(e) => {
+                        error!("Failed to acquire Conductor lock to set status: {}", e);
+                        return Some(GString::from("ERR_CONDUCTOR_MUTEX_POISONED"));
+                    }
+                }
+            } else {
+                error!("GenerationComplete received, but Conductor reference is None.");
+            }
+        }
+
         None
     }
 
-    /// Processes a batch of AnimationUpdates from the animation thread.
-    /// Returns a status update message if an important state change occurred.
-    pub fn process_animation_updates(
-        &mut self,
-        updates: Vec<AnimationUpdate>,
-        tilemap_node: Option<&mut Gd<TileMap>>,
-    ) -> Option<GString> {
+    // -------------------------------------------------------------------------
+    // Processing Logic: Animation (Real-time Signal Emission)
+    // -------------------------------------------------------------------------
+
+    /// Processes a batch of real-time animation updates and emits Godot signals.
+    pub fn process_animation_messages(&mut self, updates: Vec<AnimationUpdate>) {
         if updates.is_empty() {
-            return None;
+            return;
         }
 
-        // Delegate animation updates to the ChunkPresenter
-        if let Some(ref mut presenter) = self.presenter {
-            if let Some(tilemap) = tilemap_node {
-                for update in updates {
-                    // ⚡️ E0599 FIXED by implementing update_animated_tile on ChunkPresenter
-                    presenter.update_animated_tile(tilemap, update);
-                }
+        if let Some(mut node) = self.signals_node.clone() {
+            for update in updates {
+                
+                // Use a match statement to safely extract the frame ID from the payload enum.
+                let new_frame_id = match update.payload {
+                    AnimationPayload::FrameUpdate { new_frame } => new_frame,
+                    
+                    // Handle other variants gracefully
+                    AnimationPayload::TweenValue { .. } => {
+                        error!("Received unhandled TweenValue payload. Expected FrameUpdate.");
+                        0
+                    },
+                };
+                
+                // Emitting the signal that the TileMap code should be listening to.
+                node.emit_signal(
+                    "tile_flip_updated",
+                    &[
+                        // 1. Tile ID (from the coord field, using x component)
+                        (update.coord.x as i32).to_variant(), 
+                        // 2. New Frame ID (the value extracted from the payload match)
+                        (new_frame_id as i32).to_variant(), 
+                    ],
+                );
             }
         }
-        
-        // Note: Real implementation would emit signals for animation completion
-        None
     }
 }

@@ -1,48 +1,55 @@
+//! # SSXLEngine (The Core Orchestrator)
+//!
+//! This minimal module defines the `SSXLEngine` Godot class. Its sole focus is **orchestration**
+//! and **lifecycle management**. All complex logic for thread initialization, API access,
+//! and scene manipulation is strictly delegated to specialized components, resulting in
+//! a clean, fast main-thread component.
+
+// --- Godot GDExtension Imports (Minimized) ---
 use godot::prelude::*;
 use godot::classes::{Node, TileMap};
-use godot::obj::{Base, Gd, WithBaseField};
+use godot::obj::Base;
 use godot::builtin::GString;
 
-// Standard library dependencies
+// --- Standard Library Imports (Synchronization) ---
 use std::sync::{Arc, Mutex};
-use tracing::info;
 
-// Internal Crate Dependencies for State
+// --- Core Handles & State ---
 use ssxl_generate::Conductor;
 use ssxl_generate::conductor_state::ConductorState;
 use ssxl_sync::AnimationConductorHandle;
-use ssxl_sync::primitives::AnimationState;
+use ssxl_shared::AnimationState;
 
-// --- NEW DELEGATE MODULES ---
+// --- Local Crate Imports (Components & Delegates) ---
 use crate::async_poll::AsyncPoller;
 use crate::chunk_presenter::ChunkPresenter;
 use crate::channel_handler::ChannelHandler;
 use crate::api_initializers::EngineInitializer;
-use crate::generation_api::GenerationAPI;
-use crate::animation_api::AnimationAPI; // This module must contain the command sending logic
+use crate::status_reporter::StatusReporter;
+use crate::engine_api_extension::EngineApiExtension; // Trait providing delegated API methods
 
-// -------------------------------------------------------------------------------------------------
-// SSXL ENGINE GODOT WRAPPER
-// -------------------------------------------------------------------------------------------------
 
-/// The Godot-facing wrapper class for the SSXL Engine.
-// ... (omitted struct definition - no change)
+// -----------------------------------------------------------------------------
+// SSXLEngine Struct Definition
+// -----------------------------------------------------------------------------
+
+/// The central Godot Node that holds the state and handles the orchestration.
 #[derive(GodotClass)]
 #[class(tool, base=Node, init)]
 pub struct SSXLEngine {
-    // --- CORE STATE (Shared with worker threads) ---
+    // --- Threaded Core Handles ---
     conductor: Option<Arc<Mutex<Conductor>>>,
     animation_conductor: Option<AnimationConductorHandle>,
 
-    // Store the thread-safe state objects to access the workers' status.
+    // --- State Accessors ---
     conductor_state: Option<ConductorState>,
     animation_state: Option<AnimationState>,
 
-    // --- GODOT NODE REFERENCES ---
+    // --- Godot Node References ---
     signals_node: Option<Gd<Node>>,
     tilemap_node: Option<Gd<TileMap>>,
 
-    // --- DELEGATE OBJECTS (Perform all work) ---
+    // --- Main-Thread System Components ---
     initializer: EngineInitializer,
     poller: AsyncPoller,
     presenter: ChunkPresenter,
@@ -53,199 +60,143 @@ pub struct SSXLEngine {
 }
 
 
-// ------------------------------------------------------------------------------------
-// Constructor & Lifecycle
-// ------------------------------------------------------------------------------------
-// ... (omitted impl SSXLEngine - no change)
+// -----------------------------------------------------------------------------
+// Internal Logic (Minimal Lifecycle Hooks)
+// -----------------------------------------------------------------------------
+
 impl SSXLEngine {
     pub fn init(base: Base<Node>) -> Self {
+        // Initializes all internal components to their default/empty state.
         Self {
-            conductor: None,
-            animation_conductor: None,
-            conductor_state: None,
-            animation_state: None,
-            signals_node: None,
-            tilemap_node: None,
-            
+            conductor: None, animation_conductor: None,
+            conductor_state: None, animation_state: None,
+            signals_node: None, tilemap_node: None,
             initializer: EngineInitializer::new(),
             poller: AsyncPoller::new(),
             presenter: ChunkPresenter::new(),
             handler: ChannelHandler::new(),
-            
             base,
         }
     }
 
-    // Private helper for safe signal emission (required by GDExtension).
-    fn emit_status_updated(&mut self, status: GString) {
-        self.base_mut().emit_signal("status_updated", &[status.to_variant()]);
-    }
+    /// Centralized Core Initialization Logic (Delegates complexity to EngineInitializer)
+    fn initialize_core(&mut self) -> bool {
+        // Single call to retrieve all handles and states from a dedicated module.
+        let (c, grx, gs, ah, arx, as_) = self.initializer.execute_core_setup(); 
 
-    /// Internal helper called by gde_api_defs::_ready.
-    pub fn on_ready(&mut self) {
-        // Initialize workers and get their channel handles AND the state objects.
-        let (conductor_arc, gen_rx, gen_state) = self.initializer.ensure_conductor();
-        let (anim_handle, anim_rx, anim_state) = self.initializer.ensure_animation_conductor();
+        if c.is_none() || ah.is_none() { 
+            godot_print!("CRITICAL ERROR: Failed to spawn Rust conductors.");
+            return false;
+        }
 
-        self.conductor = conductor_arc;
-        self.conductor_state = gen_state;
-        self.animation_conductor = anim_handle;
-        self.animation_state = anim_state;
-        
-        // Configure the Poller and Handler with the communication channels and presenter.
-        self.poller.set_generation_receiver(gen_rx);
-        self.poller.set_animation_receiver(anim_rx);
-        self.handler.set_presenter(self.presenter.clone());
+        // Store handles and configure main-thread pipeline.
+        self.conductor = c; self.conductor_state = gs;
+        self.animation_conductor = ah; self.animation_state = as_;
+        self.poller.set_generation_receiver(grx);
+        self.poller.set_animation_receiver(arx);
+        self.handler.set_presenter_handle(self.presenter.clone());
         self.handler.set_signals_node(self.signals_node.clone());
+        true
     }
 
-    // Handle generation polling and processing with mutable borrow
+    /// Drains the generation channel and updates the scene if new data is available.
     fn poll_generation(&mut self) {
-        // Poll for completed generation chunks and messages
         let gen_messages = self.poller.poll_generation_messages();
-        
-        // Process generation messages (applies chunk data, emits signals)
-        if let Some(status_update) = self.handler.process_generation_messages(
+
+        if let Some(status_update) = self.handler.process_generation_messages_deferred(
             gen_messages,
             self.conductor.as_ref().map(|arc| arc.clone()),
-            self.tilemap_node.as_mut(),
         ) {
-            self.emit_status_updated(status_update);
+            // Inlined helper: Emit status signal on self.
+            self.base_mut().emit_signal("status_updated", &[status_update.to_variant()]);
         }
     }
 }
 
 
-// ------------------------------------------------------------------------------------
-// GODOT API DELEGATION
-// ------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Exposed Godot API (Minimal)
+// -----------------------------------------------------------------------------
+
 #[godot_api]
 impl SSXLEngine {
-    // ... (omitted get_status, signals, and tick methods - no change)
+    /// Godot `_ready` Hook: Called when the node enters the scene tree.
     #[func]
-    pub fn get_status(&self) -> GString {
-        // Reads the actual, dynamically updated status from the thread-safe state objects.
-        let gen_status = self.conductor_state.as_ref()
-            .map(|state| format!("{:?}", state.get_status()))
-            .unwrap_or_else(|| String::from("Uninitialized"));
-        
-        let anim_status = self.animation_state.as_ref()
-            .map(|state| format!("{:?}", state.get_status()))
-            .unwrap_or_else(|| String::from("Uninitialized"));
+    pub fn _ready(&mut self) { self.initialize_core(); }
 
-        let mut status = String::from("STATUS: ");
-        status.push_str("Generation: ");
-        status.push_str(&gen_status);
-        status.push_str(" | Animation: ");
-        status.push_str(&anim_status);
-
-        GString::from(status.as_str())
+    // --- State and Status (Delegated) ---
+    #[func]
+    pub fn get_current_tile_count(&self) -> u64 {
+        StatusReporter::get_current_tile_count_value(self.conductor_state.as_ref())
     }
 
+    #[func]
+    pub fn get_status(&self) -> GString {
+        StatusReporter::get_status_report(
+            self.conductor_state.as_ref(),
+            self.animation_state.as_ref(),
+        )
+    }
+
+    // --- Signals (Events exposed to Godot) (Unchanged) ---
     #[signal]
     fn status_updated(status_message: godot::prelude::GString);
 
-    // Signal definition for the animation bridge
     #[signal]
     fn tile_flip_updated(tile_id: i32, flip_frame: i32);
 
-    /// Main engine tick method, delegates polling and processing.
-    #[func]
-    // In ssxl_godot\src\ssxl_engine.rs, inside #[godot_api] impl SSXLEngine
-	pub fn tick(&mut self, _current_tick: u64) {
-		// 1. Handle all mutable operations
-		self.poll_generation();
 
-		// 2. Poll for animation updates with mutable base to emit signals
-		{
-			// Clone the base's Gd<Node> reference so it can be passed as a mutable,
-			// independent emitter, avoiding conflicts with the mutable borrow of self.poller.
-			let mut emitter_gd = self.base().clone().upcast::<Node>();
-			self.poller.poll_animations(&mut emitter_gd); // Pass the mutable reference
-		} // emitter_gd is dropped here
-	}
+    // --- Core Game Loop (CLEANED) ---
+    /// Godot `_process` mapped function: Called every frame for updating.
+    #[func]
+    pub fn tick(&mut self, _current_tick: u64) {
+        if self.conductor.is_none() && !self.initialize_core() {
+            return;
+        }
+        
+        // 1. Check for and render newly generated chunks.
+        self.poll_generation();
+        
+        // 2. Check for, drain, and process real-time animation updates.
+        // The Poller only drains messages; the Handler emits the signal to prevent main-thread lag.
+        
+        if let Some(signals_node_gd) = self.signals_node.as_mut() {
+            let anim_messages = self.poller.poll_animations(signals_node_gd);
+            // This line is where the error occurs. It will be fixed by correcting the target method's signature.
+            self.handler.process_animation_messages(anim_messages);
+        } else {
+            // This is a safety check; signals_node should be set in set_signals_node.
+            godot_print!("Warning: Signals node is required for animation polling but is None.");
+        }
+    }
+
+    // --- API Delegation (Provided by EngineApiExtension trait implementation below) ---
     
-    // --- CONDUCTOR API DELEGATION ---
-    // ... (omitted GenerationAPI functions - no change)
-    #[func]
-    pub fn build_map(&mut self, width: i32, height: i32, seed: GString, generator_name: GString) {
-        GenerationAPI::new(self.conductor.as_ref()).build_map(width, height, seed, generator_name, self.signals_node.as_ref());
-    }
-    
-    #[func]
-    pub fn set_generator(&mut self, id: GString) -> bool {
-        GenerationAPI::new(self.conductor.as_ref()).set_generator(id)
-    }
+    // --- Engine Configuration (Minimal Delegation) ---
 
-    #[func]
-    pub fn get_active_generator_id(&self) -> GString {
-        GenerationAPI::new(self.conductor.as_ref()).get_active_generator_id()
-    }
-
-    // --- ANIMATION API DELEGATION ---
-
-    #[func]
-    pub fn start_loading_animation(&mut self, framerate: f32) {
-        AnimationAPI::new(self.animation_conductor.as_ref(), self.conductor.as_ref()).start_loading_animation(framerate, self.signals_node.as_ref());
-    }
-    
-    #[func]
-    pub fn register_chunk_for_animation(&mut self, chunk_x: i32, chunk_y: i32) {
-        AnimationAPI::new(self.animation_conductor.as_ref(), self.conductor.as_ref()).register_chunk_for_animation(chunk_x, chunk_y);
-    }
-
-    #[func]
-    pub fn stop_loading_animation(&mut self) {
-        AnimationAPI::new(self.animation_conductor.as_ref(), self.conductor.as_ref()).stop_loading_animation(self.signals_node.as_ref());
-    }
-
-    // 🌟 REQUIRED FIX: Expose the method the GDScript is trying to call 🌟
-    #[func]
-    pub fn send_animation_command(&mut self, command_name: GString) {
-        AnimationAPI::new(self.animation_conductor.as_ref(), self.conductor.as_ref())
-            .send_command_by_name(command_name.to_string());
-    }
-    
-    // --- NEW TEST ANIMATION API DELEGATION (FIXED LOCATION) ---
-    // ... (omitted start_test_animation and stop_test_animation - no change)
-    /// Starts the dedicated 30x30 self-clocked test animation.
-    /// This runs in the Rust core and uses TileMap::force_update() for rendering.
-    #[func]
-    pub fn start_test_animation(&mut self) {
-        // Pass both conductors and the TileMap reference to the AnimationAPI
-        // The TileMap is critical because the Rust core is now responsible for rendering (force_update).
-        AnimationAPI::new(self.animation_conductor.as_ref(), self.conductor.as_ref())
-            .start_test_animation(self.tilemap_node.as_ref());
-    }
-
-    /// Stops the dedicated 30x30 self-clocked test animation.
-    #[func]
-    pub fn stop_test_animation(&mut self) {
-        // Pass only the animation conductor as the stop command doesn't need the TileMap
-        AnimationAPI::new(self.animation_conductor.as_ref(), self.conductor.as_ref())
-            .stop_test_animation(self.signals_node.as_ref());
-    }
-    
-    // --- NODE SETTERS ---
-    // ... (omitted setters and shutdown_engine - no change)
+    /// Sets the signals node. Delegation is to ChannelHandler.
     #[func]
     pub fn set_signals_node(&mut self, signals_node: Gd<Node>) {
         self.signals_node = Some(signals_node.clone());
         self.handler.set_signals_node(Some(signals_node));
-        info!("SSXLEngine: Signals Node reference set.");
     }
-    
+
+    /// Sets the target TileMap node. Delegation is to ChunkPresenter.
     #[func]
     pub fn set_tilemap(&mut self, tilemap_node: Gd<TileMap>) {
-        self.tilemap_node = Some(tilemap_node);
-        info!("SSXLEngine: TileMap Node reference set.");
+        self.tilemap_node = Some(tilemap_node.clone());
+        self.presenter.set_tilemap_node(tilemap_node.clone());
     }
-    
-    /// Expose a function for Godot to call on cleanup.
+
+    /// Safely shuts down the multi-threaded conductors and clears resources.
     #[func]
     pub fn shutdown_engine(&mut self) {
-        info!("SSXLEngine: Shutting down.");
         self.initializer.shutdown(self.animation_conductor.take(), self.conductor.take());
         self.poller.clear_receivers();
     }
 }
+
+// -----------------------------------------------------------------------------
+// Trait Implementation: Brings back the public API functionality without the bulk.
+// -----------------------------------------------------------------------------
+impl EngineApiExtension for SSXLEngine {}

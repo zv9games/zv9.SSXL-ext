@@ -1,29 +1,41 @@
 // ssxl_shared/src/grid_bounds.rs
-//! Defines the spatial boundaries for a Chunk or any defined area within the procedural world.
+
+//! # Grid Bounds Structures (`ssxl_shared::grid_bounds`)
 //!
-//! Uses i64 coordinates to support extremely large, super-massive, expansive arcs.
+//! This module defines the core structures for representing 2D world-space points
+//! and rectangular bounding boxes (bounds) used throughout the SSXL-ext engine.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-/// Represents a simple 2D integer coordinate (X, Y).
+// --- Coordinate Structure ---
+
+/// Represents a single 2D world-space coordinate point.
+///
+/// Uses `i64` to support the massive scale of the SSXL world coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Coord2D {
+    /// The X component of the coordinate.
     pub x: i64,
+    /// The Y component of the coordinate.
     pub y: i64,
 }
 
-/// Defines the minimum (min) and maximum (max) corners of a rectangular area
-/// in the Aetherion world space, typically used to bound a Chunk or Region.
+// --- Bounding Box Structure ---
+
+/// Defines a rectangular region in the world by its minimum and maximum coordinate points.
+///
+/// **Convention:** `GridBounds` uses a **half-open range** (`[min, max)`), meaning
+/// the minimum coordinates are **inclusive** and the maximum coordinates are **exclusive**.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GridBounds {
-    /// The inclusive minimum corner of the bounding box (bottom-left).
+    /// The inclusive minimum coordinate (e.g., the bottom-left point of the region).
     pub min: Coord2D,
-    /// The exclusive maximum corner of the bounding box (top-right + 1).
+    /// The exclusive maximum coordinate (one unit past the top-right point of the region).
     pub max: Coord2D,
 }
 
 impl GridBounds {
-    /// Creates a new GridBounds instance.
+    /// Creates a new `GridBounds` instance from four explicit coordinate components.
     pub fn new(min_x: i64, min_y: i64, max_x: i64, max_y: i64) -> Self {
         GridBounds {
             min: Coord2D { x: min_x, y: min_y },
@@ -31,8 +43,10 @@ impl GridBounds {
         }
     }
 
-    /// Calculates the size of the bounded area along the X and Y axes.
-    /// The size is calculated as max - min.
+    /// Calculates the size (width and height) of the bounds.
+    ///
+    /// For a half-open range, the size is simply `max - min`, which correctly
+    /// yields the number of unique integer coordinates contained within the bounds.
     pub fn size(&self) -> Coord2D {
         Coord2D {
             x: self.max.x - self.min.x,
@@ -40,7 +54,9 @@ impl GridBounds {
         }
     }
 
-    /// Checks if a given coordinate is contained within these bounds (inclusive minimum, exclusive maximum).
+    /// Checks if a given coordinate is contained within the bounds.
+    ///
+    /// Follows the half-open range convention: `[min.x, max.x)` and `[min.y, max.y)`.
     pub fn contains(&self, coord: Coord2D) -> bool {
         coord.x >= self.min.x && coord.x < self.max.x &&
         coord.y >= self.min.y && coord.y < self.max.y
@@ -48,7 +64,7 @@ impl GridBounds {
 }
 
 impl Default for GridBounds {
-    /// Provides a default (zero-sized) GridBounds instance.
+    /// Returns a default, zero-sized bounds at the origin (0, 0) to (0, 0).
     fn default() -> Self {
         GridBounds {
             min: Coord2D { x: 0, y: 0 },

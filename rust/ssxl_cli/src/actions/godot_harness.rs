@@ -1,10 +1,18 @@
+// FILE: ssxl_cli/src/actions/godot_harness.rs
+
+//! # CLI Actions: Godot Harness (`ssxl_cli::actions::godot_harness`)
+//!
+//! Utilities for managing and launching the Godot editor or the Godot game
+//! client from the command line, including necessary setup steps like copying
+//! the compiled Rust dynamic library (DLL/SO/DYLIB) into the Godot project's
+//! GDExtension directory.
+
 use std::process::Command;
 use tracing::{info, warn, error};
 use std::fs;
 use std::env;
 
-// Import constants and core pathing utility from the parent module (actions/mod.rs).
-// CORRECTED PATH: Changed 'super::super' to 'super'.
+// Imports of constants and utility functions from the parent module.
 use super::{
     get_godot_project_abs_path,
     GODOT_EXE_PATH,
@@ -14,55 +22,63 @@ use super::{
 };
 
 
-// -----------------------------------------------------------------------------
-// DLL COPY FUNCTION
-// -----------------------------------------------------------------------------
-
-/// Copies the latest compiled DLL from the Rust target directory to the Godot tester project.
-/// Designed to be run automatically during CLI boot.
+/// Copies the compiled Rust dynamic library (DLL/SO/DYLIB) from the `target/release`
+/// or `target/debug` folder to the Godot tester project's GDExtension directory.
+///
+/// This is a critical step to ensure Godot loads the latest engine code.
 pub fn copy_dll_to_tester_project_at_boot() -> Result<(), String> {
     info!("Attempting to copy {} to Godot tester project...", DLL_NAME);
 
-    // 1. Construct Source Path
+    // --- 1. Construct Source Path ---
     let mut source = env::current_dir()
-        .map_err(|e| format!("Failed to get current directory for source: {}", e))?;
+        .map_err(|e| format!("Failed to get current directory for source path construction: {}", e))?;
+    // Navigate to the target directory (e.g., `target/debug/`).
     source.push(SOURCE_DLL_PATH_FRAGMENT);
+    // Add the DLL file name (e.g., `SSXL_engine.dll`).
     source.push(DLL_NAME);
     let source_path = source.as_path();
 
-    // 2. Construct Destination Path
+    // --- 2. Construct Destination Path ---
     let mut destination = env::current_dir()
-        .map_err(|e| format!("Failed to get current directory for destination: {}", e))?;
+        .map_err(|e| format!("Failed to get current directory for destination path construction: {}", e))?;
+    // Navigate to the Godot project's GDExtension folder.
     destination.push(RELATIVE_PROJECT_PATH_FRAGMENT);
+    // Add the DLL file name.
     destination.push(DLL_NAME);
     let destination_path = destination.as_path();
 
-    // 3. Check if Source DLL exists (implies a successful cargo build run)
+    // --- 3. Validation and Copy ---
+
     if !source_path.exists() {
-        // If the DLL is missing, it's not a fatal error for the CLI, just a warning
-        warn!("Source DLL not found at: {}. Have you run `cargo build` recently?", source_path.display());
+        warn!(
+            "Source DLL not found at: {}. Have you run `cargo build` recently?", 
+            source_path.display()
+        );
+        // Treat missing source as a non-fatal warning to continue CLI usage.
         return Ok(());
     }
 
-    // 4. Perform Copy
     match fs::copy(source_path, destination_path) {
         Ok(_) => {
-            info!("✅ DLL Copied: {} -> {}", source_path.file_name().unwrap_or_default().to_string_lossy(), destination_path.display());
+            info!(
+                "✅ DLL Copied: {} -> {}", 
+                source_path.file_name().unwrap_or_default().to_string_lossy(), 
+                destination_path.display()
+            );
             Ok(())
         }
         Err(e) => {
-            // Note: If Godot is running and locked the file, this will fail.
-            Err(format!("❌ FAILED to copy DLL. Check permissions/if Godot is running. Error: {}", e))
+            // This often fails if the target DLL is locked by a running Godot instance.
+            Err(format!(
+                "❌ FAILED to copy DLL. Check permissions or if the Godot Editor is currently running and locking the file. Error: {}", 
+                e
+            ))
         }
     }
 }
 
 
-// -----------------------------------------------------------------------------
-// GODOT CLIENT LAUNCH
-// -----------------------------------------------------------------------------
-
-/// 🚀 Launches the full **Godot Editor** (non-headless) with the project loaded.
+/// Launches the Godot Editor in a non-blocking subprocess.
 pub fn launch_godot_client() {
     info!("🚀 LAUNCHING: Godot Editor (Non-Headless) for scene debugging...");
 
@@ -75,12 +91,17 @@ pub fn launch_godot_client() {
     };
 
     info!("Attempting to launch Godot from: {}", GODOT_EXE_PATH);
-    info!("Loading project at (Absolute Path): {}", project_path_abs);
+    // FIX: Call .display() on PathBuf to implement Display trait
+    info!("Loading project at (Absolute Path): {}", project_path_abs.display()); 
 
+    // Execute the Godot process.
     match Command::new(GODOT_EXE_PATH)
-        .arg("--editor") 
+        // Flag to launch the editor window instead of running the game directly.
+        .arg("--editor")
+        // Argument specifying the path to the Godot project folder.
         .arg("--path")
         .arg(&project_path_abs)
+        // Use `spawn()` to run the command asynchronously, allowing the CLI process to continue.
         .spawn()
     {
         Ok(_) => {
@@ -88,31 +109,47 @@ pub fn launch_godot_client() {
         }
         Err(e) => {
             error!("❌ Failed to execute Godot command: {}", e);
-            warn!("Please ensure the Godot executable is in the correct path relative to your CLI: {}", GODOT_EXE_PATH);
+            warn!("Please ensure the Godot executable is correctly set in the path configuration: {}", GODOT_EXE_PATH);
         }
     }
 }
 
-
-/// 🎮 Placeholder to launch headless Godot
+/// Launches Godot in a non-blocking subprocess using the `--headless` flag.
+/// 
+/// This is used for automated testing where no GUI is needed.
 pub fn launch_headless_godot() {
-	warn!("🎮 Placeholder: Attempting to launch headless Godot (simple path check)...");
-	
-	match Command::new(GODOT_EXE_PATH).arg("--version").status() {
-		Ok(status) if status.success() => info!("🚀 Headless Godot launch command ready (path check OK)."),
-		_ => error!("❌ Godot executable not found or command failed. Check path: {}", GODOT_EXE_PATH),
-	}
-}
+    info!("🚀 LAUNCHING: Godot Headless Client...");
 
-// -----------------------------------------------------------------------------
-// HARNESS EXECUTION (ADDED)
-// -----------------------------------------------------------------------------
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Launch failed: {}", e);
+            return;
+        }
+    };
 
-/// ⚙️ Executes the Godot test harness, typically running a specific scene 
-/// or script in headless mode to validate FFI communication.
-/// This function is added to resolve the E0432 unresolved import error in 
-/// ssxl_cli/src/actions/mod.rs.
-pub fn run_godot_harness() {
-    warn!("⚙️ Godot Test Harness execution not yet fully implemented. Placeholder called.");
-    // Implementation will go here later: call headless Godot to run a test scene.
+    info!("Attempting to launch Godot from: {}", GODOT_EXE_PATH);
+    // FIX: Call .display() on PathBuf to implement Display trait
+    info!("Loading project at (Absolute Path): {}", project_path_abs.display()); 
+
+    match Command::new(GODOT_EXE_PATH)
+        // Flag to run Godot without a graphical interface.
+        .arg("--headless")
+        // Argument specifying the path to the Godot project folder.
+        .arg("--path")
+        .arg(&project_path_abs)
+        // Use `spawn()` to run the command asynchronously.
+        .spawn()
+    {
+        Ok(_) => {
+            info!("✅ Godot HEADLESS client spawned successfully.");
+        }
+        Err(e) => {
+            error!("❌ Failed to execute Godot headless command: {}", e);
+            warn!(
+                "Please ensure the Godot executable is correctly set in the path configuration: {}", 
+                GODOT_EXE_PATH
+            );
+        }
+    }
 }

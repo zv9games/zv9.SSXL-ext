@@ -8,6 +8,7 @@ edition = "2021"
 # Required for shared data types and the canonical error type
 ssxl_shared = { path = "../ssxl_shared" }
 ssxl_math = { path = "../ssxl_math" }
+ssxl_animate = { path = "../ssxl_animate" }
 
 # --- EXTERNAL CONCURRENCY & DIAGNOSTICS ---
 # Primary async runtime

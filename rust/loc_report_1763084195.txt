@@ -1,0 +1,48 @@
+SSXL-ext Codebase LOC Report
+Generated (Epoch Seconds): 1763084195
+Root Directories: .
+Target Extensions: rs, gd, gdc, toml, md
+Scan Time: 0.00s
+Total Files Scanned: 3
+Total Lines of Code (LOC): 165
+
+------------------------------------------------------
+ FILE LOC | Relative File Path
+------------------------------------------------------
+  100 LOC | src/main.rs
+   50 LOC | client/game.gd
+   15 LOC | docs/readme.md
+
+
+
+
+======================================================
+SSXL-ext Codebase DETAILED CONTENT DUMP
+======================================================
+
+
+
+//////////////////////////////////////////////////////
+// FILE: src/main.rs (100 LOC)
+//////////////////////////////////////////////////////
+
+
+[ ERROR: FAILED TO READ FILE CONTENT: The system cannot find the path specified. (os error 3) ]
+
+
+
+//////////////////////////////////////////////////////
+// FILE: client/game.gd (50 LOC)
+//////////////////////////////////////////////////////
+
+
+[ ERROR: FAILED TO READ FILE CONTENT: The system cannot find the path specified. (os error 3) ]
+
+
+
+//////////////////////////////////////////////////////
+// FILE: docs/readme.md (15 LOC)
+//////////////////////////////////////////////////////
+
+
+[ ERROR: FAILED TO READ FILE CONTENT: The system cannot find the path specified. (os error 3) ]

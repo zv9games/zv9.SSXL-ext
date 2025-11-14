@@ -1,66 +1,96 @@
-// ssxl_cli/src/actions/mod.rs (Consolidated and Cleaned)
+// FILE: ssxl_cli/src/actions/mod.rs
 
-// --- MODULE DECLARATION (Only once) ---
-mod benchmarking;
-mod godot_harness;
-mod testing;
+//! # CLI Actions Module (`ssxl_cli::actions`)
+//!
+//! This module acts as the public interface (façade) for all complex command-line
+//! actions, such as launching Godot, running tests, or initiating benchmarks.
+//! It aggregates constants, external dependencies, and exports from its child modules.
 
-// --- CRATE IMPORTS & RE-EXPORTS ---
-// OLD: use ssxl_generate::Conductor; // <-- DELETE THIS LINE
-use ssxl_tools::get_config_from_path;
-use tracing::{info, error, warn};
-
-// Import necessary std libraries
-use std::process::{Command, Stdio};
-use std::io;
 use std::env;
-use std::fs;
+use std::path::PathBuf;
 
-// Import Conductor types for re-export (This line correctly handles the import and re-export)
-pub use ssxl_generate::conductor::Conductor; // Conductor is pub in its module
-// FIX: Import ConductorStatus from its correct, publicly accessible path, as it is not
-// directly re-exported by the 'conductor' module.
-pub use ssxl_generate::conductor_state::ConductorStatus;
+// --- Internal Modules ---
 
+/// Tools for real-time monitoring of the Conductor and placeholder for benchmark logic.
+mod benchmarking;
+/// Utilities for launching and managing the external Godot engine tester project.
+mod godot_harness;
+/// The main menu and delegation stub for all test suites.
+mod testing;
+/// Contains self-contained architectural and data validation tests.
+mod test_suites;
+/// Contains tests requiring external processes like `cargo` and Godot FFI validation.
+mod test_core_suites;
 
-// --- CONSTANTS ---
-pub const GODOT_EXE_PATH: &str = "./../SSXL_engine_tester/godot.windows.editor.x86_64.exe";
-pub const RELATIVE_PROJECT_PATH_FRAGMENT: &str = "../SSXL_engine_tester";
-pub const GODOT_TEST_SCENE: &str = "res://test_scene/test_ffi_data.tscn";
-pub const DLL_NAME: &str = "SSXL_engine.dll";
+// --- Public Re-exports from Sibling Crates ---
+// ... (omitted for brevity)
+
+// --- Configuration Constants ---
+
+/// The absolute path to the Godot executable file.
+pub const GODOT_EXE_PATH: &str = "C:/Program Files/Godot_v4.2.1/Godot_v4.2.1-stable_win64.exe"; 
+/// The project-relative path fragment pointing to the GDExtension folder (e.g., `godot_tester_project/gde/`).
+pub const RELATIVE_PROJECT_PATH_FRAGMENT: &str = "godot_tester_project/gde/";
+/// The expected file name of the compiled Rust dynamic library (e.g., `ssxl_engine.dll`).
+pub const DLL_NAME: &str = "ssxl_engine.dll";
+/// The project-relative path fragment where the compiled DLL is found (e.g., `target/debug/`).
 pub const SOURCE_DLL_PATH_FRAGMENT: &str = "target/debug/";
+/// The scene path within the Godot project used for FFI bridge validation tests.
+pub const GODOT_TEST_SCENE: &str = "res://tests/ffi_bridge_test.tscn"; // <--- ADDED THIS LINE
 
+// --- Utility Functions ---
 
-// --- CORE CLI ACTIONS ---
+/// Calculates the absolute path to the Godot tester project root.
+///
+/// The calculation starts from the current working directory, navigates to the 
+/// GDExtension path, and then steps back one level to find the project root.
+pub fn get_godot_project_abs_path() -> Result<PathBuf, String> {
+    // Start from the current working directory (usually the crate root)
+    let mut path = env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
 
-/// Helper to calculate the absolute path to the Godot project tester directory.
-pub fn get_godot_project_abs_path() -> Result<String, String> {
-    let mut current_dir = env::current_dir()
-        .map_err(|e| format!("Failed to determine CWD: {}", e))?;
+    // Append the relative project fragment path (e.g., 'godot_tester_project/gde/')
+    path.push(RELATIVE_PROJECT_PATH_FRAGMENT);
 
-    current_dir.push(RELATIVE_PROJECT_PATH_FRAGMENT);
-
-    current_dir.canonicalize()
-        .map(|p| p.to_string_lossy().to_string())
-        .map_err(|e| format!("Cannot resolve project path fragment '{}': {}. Does the directory exist?", RELATIVE_PROJECT_PATH_FRAGMENT, e))
+    // Remove the last component (the `gde/` part) to get the project root
+    if path.pop() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "Failed to determine parent directory for project path: {}",
+            path.display()
+        ))
+    }
 }
 
-// --- PUBLIC RE-EXPORTS ---
 
-// Re-export functions from the three sub-modules for the CLI's main entry point.
+// --- Public Module Exports (Façade) ---
+
+/// Re-export for starting the **real-time status feed**.
 pub use benchmarking::start_signal_inspector;
-pub use benchmarking::run_benchmark;
 
+// 🎯 FIX: Add the missing pub use statements for all functions required by cli_util_menu.rs.
+// Exports from godot_harness (Includes the requested launch_headless_godot).
 pub use godot_harness::{
     copy_dll_to_tester_project_at_boot,
     launch_godot_client,
     launch_headless_godot,
-    run_godot_harness,
 };
 
-pub use testing::{
+// Exports from test_core_suites.
+pub use test_core_suites::{
     run_cargo_tests,
     run_ffi_bridge_validation,
-    run_priority_1_tests,
-    run_test_suite,
 };
+
+// Exports from test_suites.
+pub use test_suites::{
+    run_communication_channel_test,
+    run_data_channel_test,
+    run_map_generation_test,
+    run_animation_conductor_test,
+};
+
+
+/// Exports related to **testing and validation**.
+pub use testing::execute_testing_menu;

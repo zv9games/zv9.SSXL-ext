@@ -1,51 +1,73 @@
+//! # Godot Engine Initializers (`ssxl_godot::api_initializers`)
+//!
+//! Manages the initialization and graceful shutdown of the two core background
+//! asynchronous systems: the **Generation Conductor** and the **Animation Conductor**.
+//! This is the FFI layer's entry point for starting the Rust engine runtime.
+
 use std::sync::{Arc, Mutex};
 use tracing::{info, error};
 
-// Internal Crate Dependencies
+// --- Standard Library Imports for Concurrency ---
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedReceiver;
+
+// --- Imports from ssxl_generate ---
 use ssxl_generate::{
     Conductor,
     ConductorProgressReceiver,
-    ConductorRequestSender,
 };
-use ssxl_generate::conductor_state::ConductorState; // Corrected import path
+use ssxl_generate::conductor_state::ConductorState;
 
+// --- Imports from ssxl_sync ---
 use ssxl_sync::{
     AnimationConductor,
     AnimationConductorHandle,
-    AnimationReceiver,
-    AnimationCommand,
 };
-use ssxl_sync::primitives::AnimationState; // Corrected import path (assuming primitives)
+
+// --- Corrected Imports based on Compiler Hints and Context ---
+use ssxl_shared::{
+    messages::AnimationCommand,
+    AnimationState,
+    messages::AnimationUpdate as CoreAnimationUpdate,
+};
+
+// This is an internal type alias within the current crate's async polling module.
+use crate::async_poll::AnimationReceiver;
 
 
-/// Responsible for initializing and managing the lifetime of the core Rust
-/// worker threads (`Conductor` and `AnimationConductor`).
+/// Responsible for initializing and managing the lifecycle of the entire SSXL Engine runtime.
 #[derive(Debug, Default)]
 pub struct EngineInitializer {}
 
 impl EngineInitializer {
+    /// Creates a new, default instance of the initializer.
     pub fn new() -> Self {
         EngineInitializer {}
     }
 
-    /// Ensures the Conductor runtime is initialized and returns the thread-safe
-    /// handle, the generation channel receiver, and the **ConductorState**.
-    ///
-    /// Returns: (Arc<Mutex<Conductor>>, ConductorProgressReceiver, ConductorState)
+    // -------------------------------------------------------------------------
+    // 1. Generation Conductor Initialization
+    // -------------------------------------------------------------------------
+
+    /// Initializes the main world generation system (`Conductor`).
     pub fn ensure_conductor(
         &self
     ) -> (
+        // Thread-safe handle to the Conductor struct itself.
         Option<Arc<Mutex<Conductor>>>,
+        // Receiver for generated chunk data and progress messages.
         Option<ConductorProgressReceiver>,
+        // The thread-safe state tracker for the generation pipeline.
         Option<ConductorState>
     ) {
         info!("EngineInitializer: Attempting to initialize Conductor...");
         
-        // Conductor::new returns: (Conductor, ConductorState, ProgressReceiver, RequestSender).
+        // Conductor::new starts the Tokio runtime and the main request loop.
         match Conductor::new(None) {
             Ok((conductor, state, gen_rx, _request_tx)) => {
                 info!("Conductor initialized and background thread started successfully.");
-                (Some(Arc::new(Mutex::new(conductor))), Some(gen_rx), Some(state)) 
+                // We return the Conductor in a Mutex/Arc for thread-safe access from Godot.
+                (Some(Arc::new(Mutex::new(conductor))), Some(gen_rx), Some(state))
             }
             Err(e) => {
                 error!("Failed to initialize Conductor: {}", e);
@@ -54,35 +76,75 @@ impl EngineInitializer {
         }
     }
 
-    /// Ensures the AnimationConductor runtime is initialized and returns the
-    /// thread-safe handle, the animation channel receiver, and the **AnimationState**.
-    ///
-    /// Returns: (AnimationConductorHandle, AnimationReceiver, AnimationState)
+    // -------------------------------------------------------------------------
+    // 2. Animation Conductor Initialization
+    // -------------------------------------------------------------------------
+
+    /// Initializes the dedicated animation processing system (`AnimationConductor`).
     pub fn ensure_animation_conductor(
         &self
     ) -> (
+        // Sender for control commands (e.g., Start, Stop, UpdateFramerate).
         Option<AnimationConductorHandle>,
-        Option<AnimationReceiver>,
+        // Explicitly use UnboundedReceiver<CoreAnimationUpdate> here to match `update_rx`.
+        Option<UnboundedReceiver<CoreAnimationUpdate>>, 
+        // The thread-safe state tracker for the animation pipeline.
         Option<AnimationState>
     ) {
         info!("EngineInitializer: Attempting to initialize AnimationConductor...");
-        
-        // AnimationConductor::new() returns: (ConductorStruct, AnimationReceiver, AnimationState).
-        let Ok((conductor_struct, anim_rx_found, anim_state_found)) = AnimationConductor::new() else {
-            error!("Failed to initialize AnimationConductor.");
-            return (None, None, None);
-        };
+
+        // Create the update channel using the *correct* message type (`CoreAnimationUpdate`).
+        let (anim_tx, anim_rx) = mpsc::unbounded_channel::<AnimationCommand>();
+        let (update_tx, update_rx) = mpsc::unbounded_channel::<CoreAnimationUpdate>(); 
+        let anim_state = AnimationState::default();
+
+        // REFINEMENT: Clone the AnimationState before passing it into the conductor.
+        // This prevents a "use of moved value" error since `anim_state` must be returned later.
+        // This assumes AnimationState implements the Clone trait.
+        let state_to_pass = anim_state.clone(); 
+
+        // Pass the channels and initial state to the Conductor constructor.
+        // FIX: AnimationConductor::new no longer returns a Result, resolving E0308.
+        let _conductor = AnimationConductor::new(anim_rx, update_tx, state_to_pass);
         
         info!("AnimationConductor initialized and thread started successfully.");
-        
-        (
-            Some(conductor_struct.get_command_sender()),
-            Some(anim_rx_found),
-            Some(anim_state_found)
+        return (
+            Some(anim_tx), 
+            Some(update_rx), 
+            // Return the original state variable, which was never moved.
+            Some(anim_state) 
         )
     }
 
-    /// Gracefully shuts down both conductors and ensures worker threads join.
+    // -------------------------------------------------------------------------
+    // 3. Core Setup Orchestration
+    // -------------------------------------------------------------------------
+
+    /// Orchestrates the setup for both the Generation and Animation cores.
+    pub fn execute_core_setup(
+        &self
+    ) -> (
+        // Conductor Handles
+        Option<Arc<Mutex<Conductor>>>,
+        Option<ConductorProgressReceiver>,
+        Option<ConductorState>,
+        // Animation Handles
+        Option<AnimationConductorHandle>,
+        // The corrected receiver type for animation updates.
+        Option<UnboundedReceiver<CoreAnimationUpdate>>,
+        Option<AnimationState>,
+    ) {
+        let (c, grx, gs) = self.ensure_conductor();
+        let (ah, arx, as_) = self.ensure_animation_conductor();
+
+        (c, grx, gs, ah, arx, as_)
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Graceful Shutdown
+    // -------------------------------------------------------------------------
+
+    /// Performs a **graceful shutdown** of both background conductors.
     pub fn shutdown(
         &self,
         mut anim_handle: Option<AnimationConductorHandle>,
@@ -90,8 +152,9 @@ impl EngineInitializer {
     ) {
         info!("EngineInitializer: Starting graceful shutdown process...");
         
-        // 1. Shutdown the Generation Conductor
+        // 1. Shut down Generation Conductor (requires unique ownership)
         if let Some(arc) = conductor_arc.take() {
+            // Attempt to unwrap the Arc to ensure we have the *only* reference.
             match Arc::try_unwrap(arc) {
                 Ok(mutex) => {
                     info!("Shutting down Conductor...");
@@ -99,19 +162,19 @@ impl EngineInitializer {
                     info!("Conductor shutdown complete.");
                 }
                 Err(_) => {
-                    error!("Could not unwrap Conductor Arc; other references may exist.");
+                    error!("Could not unwrap Conductor Arc; other references may exist. Conductor may leak resources.");
                 }
             }
         }
 
-        // 2. Shutdown the Animation Conductor
+        // 2. Shut down Animation Conductor (by sending a command)
         if let Some(handle) = anim_handle.take() {
-            // ✅ FIX: Using AnimationCommand::Stop for clearer graceful shutdown.
-            match handle.send(AnimationCommand::Stop) { 
+            // Send a Shutdown command to the animation thread's receiver.
+            match handle.send(AnimationCommand::Shutdown) {
                 Ok(_) => info!("AnimationConductor shutdown command sent successfully."),
                 Err(e) => error!("Failed to send shutdown command to AnimationConductor: {}", e),
             }
-            info!("AnimationConductor shutdown complete.");
+            info!("AnimationConductor shutdown command issued.");
         }
         
         info!("EngineInitializer: All background runtimes terminated.");

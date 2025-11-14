@@ -8,10 +8,9 @@ edition = "2021"
 # --- INTERNAL DEPENDENCIES (Core Logic) ---
 # FFI needs access to all the core data and logic it is bridging.
 ssxl_shared   = { path = "../ssxl_shared" }
-ssxl_generate = { path = "../ssxl_generate" }
-ssxl_sync     = { path = "../ssxl_sync" }
-ssxl_cache    = { path = "../ssxl_cache" }
 ssxl_math     = { path = "../ssxl_math" }
+ssxl_godot	  = { path = "../ssxl_godot" }
+ssxl_generate = { path = "../ssxl_generate" }
 
 # --- EXTERNAL DEPENDENCIES ---
 # The standard C library definitions for safe FFI (e.g., c_char, c_void)

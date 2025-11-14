@@ -1,7 +1,7 @@
 // ssxl_generate/src/task_queue.rs
 
-//! The core manager for asynchronous generation tasks, chunk requests,
-//! and the coordination of the blocking work pool.
+//! Manages the asynchronous request loop for chunk generation and the core logic
+//! for handling a single chunk request (cache check, generation, and storage).
 
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
@@ -9,37 +9,35 @@ use tracing::{info, error, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-// Imports updated to support i64 (64-bit) coordinates
 use glam::I64Vec3;
 use ssxl_math::{Vec2i, prelude::ChunkKey};
 
-// Internal Crate Dependencies
 use ssxl_cache::ChunkCache;
-use crate::Generator; // Generator is correctly at crate root (lib.rs)
+use crate::Generator;
 use crate::conductor_state::ConductorState;
 
-// External Crate Dependencies
 use ssxl_shared::chunk_data::ChunkData;
-// ✅ Imports fixed to resolve E0432 for ssxl_shared modules
-pub use ssxl_shared::config::CHUNK_SIZE as SHARED_CHUNK_SIZE;
+// Import the canonical size from ssxl_shared and cast it locally for coordinate math.
+use ssxl_shared::config::CHUNK_SIZE as SHARED_CHUNK_SIZE;
 pub use ssxl_shared::generation_message::{GenerationMessage, GenerationTask};
 
 
-// Define a type alias for the generator trait object
+/// Type alias for a thread-safe, dynamically dispatched Generator trait object.
 type DynGenerator = Box<dyn Generator + Send + Sync>;
 
-// --- CONSTANTS (Moved from Conductor) ---
-/// The size of a chunk in tiles.
-// ✅ Made public to resolve E0603 in batch_processor.rs
-pub const CHUNK_SIZE: i64 = SHARED_CHUNK_SIZE as i64; // Use the canonical size, cast to i64 for coordinate math
+/// Canonical chunk size in i64 format for coordinate math.
+pub const CHUNK_SIZE: i64 = SHARED_CHUNK_SIZE as i64;
 
-// -----------------------------------------------------------------------------
-// ASYNCHRONOUS TASK QUEUE LOGIC
-// -----------------------------------------------------------------------------
 
-/// Encapsulates the core logic for loading from cache, generating, and saving a single chunk.
-/// This function is thread-safe and blocking-pool safe.
-// ✅ Made public to resolve E0432 in conductor.rs (via the missing start_request_loop)
+// --- 1. Single Chunk Processing Unit ---
+
+/// The atomic unit of work for chunk generation.
+///
+/// This synchronous function performs the cache lookup, calls the generator if needed,
+/// saves the result to the cache, and sends a completion message.
+///
+/// **Crucially, this must be run on a blocking thread pool (e.g., via `spawn_blocking`)
+/// because generator functions are CPU-intensive and synchronous.**
 pub fn handle_chunk_unit(
     chunk_coords: Vec2i,
     generator_name: &str,
@@ -51,14 +49,17 @@ pub fn handle_chunk_unit(
     let chunk_key = ChunkKey(key_vec3);
     let chunk_data: ChunkData;
 
+    // Attempt to acquire the lock for the chunk cache
     match chunk_cache.lock() {
-        Ok(cache_lock) => { 
+        Ok(cache_lock) => { // <-- REMOVED `mut` HERE
+            // 1. Check Cache (Crypto-coded memory)
             match cache_lock.load_chunk(&chunk_key) {
                 Ok(Some(data)) => {
                     info!("Chunk Unit: Retrieved chunk {:?} from cache (Gen: {}).", chunk_coords, generator_name);
                     chunk_data = data;
                 },
                 Ok(None) => {
+                    // 2. Generate if Cache Miss
                     info!("Chunk Unit: Chunk {:?} not found in cache. Generating with {}.", chunk_coords, generator_name);
                     let generator_arc = generators
                         .get(generator_name)
@@ -66,7 +67,7 @@ pub fn handle_chunk_unit(
                     
                     chunk_data = generator_arc.generate_chunk(chunk_coords);
                     
-                    // Save to cache (requires mutable cache_lock)
+                    // 3. Save to Cache
                     if let Err(e) = cache_lock.save_chunk(&chunk_key, &chunk_data) {
                         error!("Chunk Unit: Failed to save chunk {:?} to cache: {:?}", chunk_coords, e);
                     } else {
@@ -74,6 +75,7 @@ pub fn handle_chunk_unit(
                     }
                 },
                 Err(e) => {
+                    // Cache system error, generate without caching
                     warn!("Chunk Unit: Cache load failed for {:?}: {:?}. Falling back to generation without caching.", chunk_coords, e);
                     let generator_arc = generators
                         .get(generator_name)
@@ -83,6 +85,7 @@ pub fn handle_chunk_unit(
             }
         },
         Err(e) => {
+            // Cache Mutex Poisoned: Indicates a critical, unrecoverable state. Generate without caching.
             error!("Chunk Unit: Cache Mutex poisoned: {}. Falling back to generation without caching.", e);
             let generator_arc = generators
                 .get(generator_name)
@@ -91,49 +94,51 @@ pub fn handle_chunk_unit(
         }
     }
     
-    // Emit signal with the zero-copy bulk data payload
+    // 4. Send Completion/Progress Message
     let chunk_data_arc = Arc::new(chunk_data);
     
-    // 🛑 IMPROVEMENT: Add proper error handling for channel send.
+    // Use blocking_send as this function is already running on a blocking thread.
     if let Err(e) = progress_sender.blocking_send(
         GenerationMessage::ChunkGenerated(chunk_coords, chunk_data_arc)
     ) {
-        // If the main thread's receiver is dropped, this error occurs.
         error!("Chunk Unit: Failed to send ChunkGenerated message for {:?}: {:?}", chunk_coords, e);
     }
 }
 
 
-/// Starts the asynchronous request loop on the provided Tokio runtime handle.
-/// This loop continuously processes incoming GenerationTask requests.
+// --- 2. Asynchronous Request Loop ---
+
+/// Spawns the main request processing loop onto the Tokio runtime handle.
+///
+/// This loop listens for new generation tasks and offloads the synchronous work
+/// to the dedicated `tokio::task::spawn_blocking` thread pool, maintaining the
+/// asynchronous core's **tempo**.
 pub fn start_request_loop(
     rt_handle: Handle,
-    request_rx: mpsc::UnboundedReceiver<GenerationTask>,
+    mut request_rx: mpsc::UnboundedReceiver<GenerationTask>,
     progress_tx: mpsc::Sender<GenerationMessage>,
     generators: Arc<HashMap<String, Arc<DynGenerator>>>,
     chunk_cache: Arc<Mutex<ChunkCache>>,
     conductor_state: Arc<ConductorState>,
 ) {
-    // Note: We move the request receiver into the async block, 
-    // where it will be polled for new tasks.
     rt_handle.spawn(async move {
-        info!("Generation Task Queue active.");
-
-        let mut request_rx = request_rx;
+        info!("Generation Task Queue active. Listening for requests.");
         
+        // Loop while the sender side of the channel is open.
         while let Some(task) = request_rx.recv().await {
-            // ✅ FIX: Replaced non-existent `is_running()` with the new `is_active()` method from ConductorState.
+            // Check Conductor State (Pause/Shutdown)
             if !conductor_state.as_ref().is_active() { 
-                warn!("Request received while Conductor is paused. Dropping task: {:?}", task.chunk_coords);
+                warn!("Request received while Conductor is paused or shutting down. Dropping task: {:?}", task.chunk_coords);
+                // Decrement queue depth is omitted here as it's assumed to be handled by the caller/request loop logic elsewhere.
                 continue;
             }
 
-            // Spawn the blocking work unit onto the dedicated blocking thread pool
-            // This prevents long-running generation tasks from blocking the Tokio executor.
+            // Prepare thread-safe clones for the blocking task
             let progress_tx_clone = progress_tx.clone();
             let generators_clone = generators.clone();
             let chunk_cache_clone = chunk_cache.clone();
 
+            // Offload CPU-intensive work to the dedicated blocking thread pool.
             tokio::task::spawn_blocking(move || {
                 handle_chunk_unit(
                     task.chunk_coords,
@@ -145,10 +150,10 @@ pub fn start_request_loop(
             });
         }
         
-        // When the command sender is dropped and request_rx closes, we signal completion.
+        // Loop exited (sender was dropped), signifying engine shutdown.
         info!("Generation Task Queue shutting down.");
-        // FIX (E0599): Use the correct variant name: GenerationComplete
-        if progress_tx.blocking_send(GenerationMessage::GenerationComplete).is_err() { 
+        // FIX: Replaced illegal blocking call with the correct asynchronous send.
+        if progress_tx.send(GenerationMessage::GenerationComplete).await.is_err() { 
             error!("Failed to send final GenerationComplete message.");
         }
     });

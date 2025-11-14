@@ -1,83 +1,84 @@
 // ssxl_generate/src/lib.rs
 
-//! Core generation algorithms, runtime orchestration, and task management.
+//! The core library crate for the SSXL procedural generation engine.
+//!
+//! This crate orchestrates the asynchronous runtime, manages generator algorithms,
+//! and provides the central Conductor API for world creation.
 
-// -------------------------------------------------------------------------------------------------
-// MODULE EXPOSURE
-// -------------------------------------------------------------------------------------------------
-// Expose the Conductor (the validated Runtime/Orchestration core).
+use ssxl_shared::chunk_data::ChunkData;
+use ssxl_math::Vec2i;
+use tracing::{info, error};
+
+// --- 1. Internal Module Definitions ---
+
+/// Core command and control center for the generation engine.
 pub mod conductor;
+/// Logic for stress-testing and profiling generator algorithms.
 pub mod benchmark_logic;
+/// Perlin noise based generator implementation.
 pub mod perlin_generator;
+/// Cellular Automata based generator implementation.
 pub mod cellular_automata_generator;
+/// Module containing Cellular Automata specific rules and utilities.
 pub mod ca; 
-
-// Core orchestration modules required by Conductor.
+/// Manages the Tokio asynchronous runtime.
 pub mod runtime_manager; 
+/// Utilities for validating generation request configurations.
 pub mod config_validator;
+/// Manages the asynchronous chunk generation task queue.
 pub mod task_queue;
+/// Thread-safe state tracking for the Conductor.
 pub mod conductor_state;
+/// Registry for all available generation algorithms.
 pub mod generator_manager;
+/// Logic for processing large batch generation requests (**Bulldozer** operation).
 pub mod batch_processor;
-
-// FIX: Add the synchronization module required for channel type aliases.
+/// Module for synchronous types used for external communication (Senders/Receivers).
 pub mod sync; 
 
 
-// -------------------------------------------------------------------------------------------------
-// CORE TRAIT DEFINITION (Generator Interface)
-// -------------------------------------------------------------------------------------------------
-use ssxl_shared::chunk_data::ChunkData;
-use ssxl_math::Vec2i;
+// --- 2. Core Generator Trait Definition ---
 
-/// Defines the core contract for all procedural generation algorithms.
-/// Every generator (Perlin, CA, DiamondSquare, etc.) must implement this trait.
+/// The fundamental contract for all world generation algorithms.
+/// (Duplicated here from `generator.rs` for convenience and to define the public contract).
 pub trait Generator {
-    /// The unique identifier for this specific algorithm (e.g., "perlin_2d_v1").
+    /// Returns a unique, static string identifier for this generator.
     fn id(&self) -> &str;
 
-    /// Generates the content for a single Chunk.
-    /// It takes a Vec2i which is the world-space coordinate of the chunk.
+    /// Executes the deterministic generation algorithm for a single chunk.
     fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData;
 }
 
 
-// -------------------------------------------------------------------------------------------------
-// PUBLIC EXPORTS
-// -------------------------------------------------------------------------------------------------
+// --- 3. Public API Exports (Re-exports for external use) ---
 
-// Direct re-exports of concrete implementations
+// Concrete Generator implementations
 pub use cellular_automata_generator::CellularAutomataGenerator;
 pub use perlin_generator::PerlinGenerator;
 
-// Main components for FFI/Godot use.
+// Conductor and Configuration Types
 pub use conductor::Conductor;
 pub use config_validator::GeneratorConfig; 
 
-// FIX: Re-export the channel types and core Task struct from the `sync` and `task_queue` modules.
+// Synchronization and Task Types (For FFI and API integration)
 pub use sync::ConductorProgressReceiver;
 pub use sync::ConductorRequestSender;
-pub use task_queue::GenerationTask; // Key type sent to the Conductor
+pub use task_queue::GenerationTask; 
 
-// EXPOSED BENCHMARK FUNCTION
+// Benchmark Utility
 pub use benchmark_logic::benchmark_generation_workload;
 
-// -------------------------------------------------------------------------------------------------
-// PUBLIC API FOR CLI/FFI (Validation Entry Points)
-// -------------------------------------------------------------------------------------------------
-use tracing::{info, error};
 
-/// Starts the ssxl Runtime, creating and immediately shutting down the Conductor.
-///
-/// NOTE: This is the **structural validation test for CLI Menu [4]** (Start Runtime).
+// --- 4. Initialization Placeholder (Example/Debug) ---
+
+/// A placeholder function to test Conductor initialization and immediate graceful shutdown.
+/// This simulates a quick external call to verify runtime setup and teardown.
 pub fn start_runtime_placeholder() {
-    // Pass None as the config_path argument to satisfy the updated Conductor::new signature.
     match Conductor::new(None) {
-        // Correctly destructure the 4-element tuple
         Ok((conductor, _state, _progress_receiver, _request_sender)) => {
             info!("Runtime created successfully. Testing immediate graceful teardown...");
             
-            // Call the consuming teardown method.
+            // Execute the cleanup logic
             conductor.graceful_teardown();
         }
         Err(e) => {

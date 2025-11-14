@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 # --- INTERNAL DEPENDENCIES ---
-ssxl_engine_ffi = { path = "../ssxl_engine_ffi" }
 ssxl_shared = { path = "../ssxl_shared" }
 ssxl_math = { path = "../ssxl_math" }
 ssxl_generate = { path = "../ssxl_generate" }
@@ -20,6 +19,8 @@ godot-ffi = { workspace = true }
 # Workspace standard logging framework
 tracing = { workspace = true }
 tokio = { workspace = true }
+rand = { workspace = true }
+serde_json = { workspace = true }
 
 ###############################################################
 # REQUIRED FIX FOR GDExtension LINKER ERROR (E0127)

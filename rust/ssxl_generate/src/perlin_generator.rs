@@ -1,58 +1,70 @@
 // ssxl_generate/src/perlin_generator.rs
 
+//! Implements the Generator trait using the Perlin noise function.
+//!
+//! This provides the engine's primary continuous, organic generation layer,
+//! mapping noise values to different TileTypes based on a fixed threshold.
+
 use crate::Generator;
-// FIX 1: Import ChunkData and CHUNK_SIZE directly from chunk_data.
 use ssxl_shared::chunk_data::{ChunkData, CHUNK_SIZE};
-// FIX 2: Import GridBounds directly from its sub-module (aetherion_shared/src/grid_bounds.rs).
 use ssxl_shared::grid_bounds::GridBounds;
 use ssxl_math::Vec2i;
 use ssxl_shared::tile_data::TileData;
 use ssxl_shared::tile_type::TileType;
 
-// --- External Dependency ---
-// FIX 3 (Warning): Removed unused 'Seedable' import.
 use noise::{NoiseFn, Perlin};
 use tracing::info;
 
-/// Implements the Minimal Viable Generator (MVG) using Perlin Noise.
+// --- 1. Generator Structure ---
+
+/// A generator that uses the Perlin noise algorithm to create deterministic terrain.
 pub struct PerlinGenerator {
-    /// Noise function instance for generation.
+    /// The noise object instance, which is thread-safe and deterministic based on its seed.
     perlin: Perlin,
-    /// The scale factor to control the 'zoom' of the noise.
+    /// The scaling factor applied to world coordinates before generating noise.
+    /// A smaller scale results in larger, smoother features.
     scale: f64,
 }
 
 impl PerlinGenerator {
-    /// Creates a new PerlinGenerator with a fixed seed and configurable scale.
+    /// Creates a new PerlinGenerator instance.
+    ///
+    /// # Arguments
+    /// * `scale`: The frequency/scale of the noise (e.g., 64.0).
     pub fn new(scale: f64) -> Self {
-        const DEFAULT_SEED: u32 = 42; // A simple, fixed seed for consistency
+        // NOTE: Default seed is currently hardcoded for deterministic, repeatable generation.
+        const DEFAULT_SEED: u32 = 42;
+        
         PerlinGenerator {
-            // FIX: Supply the required u32 seed argument to Perlin::new()
-            perlin: Perlin::new(DEFAULT_SEED), // <--- CHANGE THIS LINE
+            perlin: Perlin::new(DEFAULT_SEED),
             scale,
         }
     }
 }
 
+// --- 2. Generator Trait Implementation ---
+
 impl Generator for PerlinGenerator {
+    /// Returns the unique identifier for this generator.
     fn id(&self) -> &str {
         "perlin_basic_2d"
     }
 
-    /// Generates the content for a single chunk using 2D Perlin noise.
+    /// Generates a single chunk based on the Perlin noise field.
+    ///
+    /// The logic is: 1) Convert chunk coordinates to world tile coordinates,
+    /// 2) Sample the Perlin function, 3) Map the noise value to a `TileType`.
     fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
-        // FIX: Cast CHUNK_SIZE to i64 to match chunk_coords.x/y type
         let chunk_tile_size = CHUNK_SIZE as i64;
 
-        // 1. Calculate the World-Space Start Position of the chunk
-        // These are now i64 * i64 = i64. No error.
+        // Calculate the world coordinate of the chunk's bottom-left corner.
         let world_start_x = chunk_coords.x * chunk_tile_size;
         let world_start_y = chunk_coords.y * chunk_tile_size;
 
-        // ChunkData::new arguments: id, bounds, dimension_name
+        // Create a unique Chunk ID by packing the 2D coordinates into a 64-bit integer.
         let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
 
-        // FIX: GridBounds::new uses i64. Calculations are now i64 + i64 = i64.
+        // Define the world bounds covered by this chunk.
         let bounds = GridBounds::new(
             world_start_x,
             world_start_y,
@@ -64,23 +76,22 @@ impl Generator for PerlinGenerator {
 
         let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
 
+        // Pre-allocate vector to hold all tile data for the chunk.
         let mut tiles: Vec<TileData> = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
 
-        // 2. Loop through every tile in the chunk
-        // FIX: Iterate from 0..chunk_tile_size (i64) to make x and y i64, fixing inner loop errors.
+        // Iterate through all tiles within the chunk.
         for y in 0..chunk_tile_size {
             for x in 0..chunk_tile_size {
-                // FIX: world_start_x/y (i64) + x/y (i64) is valid, then cast to f64.
                 let world_x = (world_start_x + x) as f64;
                 let world_y = (world_start_y + y) as f64;
 
-                // 3. Use the noise function to get a height value
+                // Sample the Perlin noise function. Coordinates are scaled down.
                 let noise_value = self.perlin.get([world_x / self.scale, world_y / self.scale]);
 
-                // Map the noise range [-1.0, 1.0] to a positive range [0.0, 1.0]
+                // Perlin output is typically [-1.0, 1.0]. Normalize to [0.0, 1.0].
                 let normalized_value = (noise_value + 1.0) / 2.0;
 
-                // 4. Map the height value to a TileType and populate the ChunkData
+                // Thresholding: Map the noise value to a concrete TileType (Water, Grass, Mountain).
                 let tile_type = if normalized_value < 0.35 {
                     TileType::Water
                 } else if normalized_value < 0.60 {
@@ -89,13 +100,13 @@ impl Generator for PerlinGenerator {
                     TileType::Mountain
                 };
 
-                // TileData::new requires 2 arguments: tile_type, noise_value: f32
+                // Create the TileData, storing the raw noise value as metadata (useful for blending/details).
                 let tile = TileData::new(tile_type, normalized_value as f32);
                 tiles.push(tile);
             }
         }
 
-        // set_tiles renamed to insert_tiles
+        // Insert the generated tile array into the chunk data structure.
         chunk_data.insert_tiles(tiles);
 
         info!(
@@ -104,6 +115,6 @@ impl Generator for PerlinGenerator {
             (CHUNK_SIZE * CHUNK_SIZE)
         );
 
-        chunk_data // Return the generated and populated chunk data
+        chunk_data
     }
 }

@@ -18,6 +18,7 @@ members = [
     # 4. Tooling & Execution Layer
     "ssxl_tools",
     "ssxl_cli",
+	"ssxl_animate",
 ]
 resolver = "2" # Use the new cargo feature resolver
 
@@ -67,13 +68,14 @@ glam                = "0.28" # High-performance linear algebra library (Vectors,
 sha2                = "0.10"
 image               = "0.24" # For image processing in aetherion_tools
 noise               = "0.9"
+async-trait         = "0.1"
 # ------------------------------------------------------------------
 # CLI AND CONSOLE UTILITIES
 # ------------------------------------------------------------------
 crossterm           = "0.27" 
 walkdir             = "2.5" 
 ctrlc               = "3.4"
-godot = { version = "0.4.0", features = ["serde"] } 
+godot = { path = "../../zv9.gdext/godot", features = ["serde"] } 
 godot-ffi = { path = "../../zv9.gdext/godot-ffi", features = ["api-custom"] }
 fastrand = "2.0"
 num_cpus = "1.17.0"

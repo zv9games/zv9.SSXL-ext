@@ -1,121 +1,148 @@
-// ssxl_cli/src/main.rs
+//! # SSXL-ext CLI Developer Console (`ssxl_cli::main`)
+//!
+//! The main entry point for the interactive developer console. This utility manages
+//! initialization, logging, the main menu loop, and delegates tasks to action modules
+//! for testing, benchmarking, and external tool execution.
 
-// --- MODULES ---
-// These files must be created in the ssxl_cli/src directory.
-mod actions;	        // CONSOLIDATED: Contains the menu action functions (e.g., run_tests)
-mod cli_util_inspect;	// Contains inspection functions (API surface, module tree)
-mod cli_util_menu;		// Contains MenuItem struct, build_menu, and print_menu
-mod cli_util_bench;		// Contains benchmark/conversion functions
-mod scan;	            // RENAMED: Recursive LOC scanning utility (was cli_util_loc_scan)
+mod actions;             // Core functions for tests, benchmarks, and Godot interaction.
+mod cli_util_inspect;    // Utilities for scanning the codebase and API surface.
 
-// --- EXTERNAL IMPORTS ---
+// FIX: Change to `pub mod` so its types (CliAction, CliMenu) are accessible
+// by other modules in the crate (like actions/testing.rs).
+pub mod cli_util_menu;   // Menu structure and display logic.
+
+mod cli_util_bench;      // Functions for running generation tests and benchmarks.
+mod scan;                // Codebase scanning (e.g., Lines of Code - LOC).
+
 use std::collections::HashSet;
 use std::thread;
 use std::time::Duration;
 use std::io::{self, Write};
 use crossterm::event::{self, Event, KeyCode};
-//use std::fs; // Now commented, as it was in the original
 
-// Tracing imports are correct.
 use tracing::{info, error};
 use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 
-// --- INTERNAL IMPORTS ---
 use crate::cli_util_menu::{build_menu, print_menu};
-use ssxl_engine_ffi::ssxl_initialize_engine; // To be called once on startup
-use crate::scan::execute_loc_scan; // UPDATED: Import the LOC function from the new `scan` module
-// 🆕 Import the public copy function from the new `actions::godot_harness` module
-use crate::actions::copy_dll_to_tester_project_at_boot; 
+use ssxl_engine_ffi::ssxl_initialize_engine; // External FFI function to bootstrap the engine core.
+use crate::scan::execute_loc_scan; // Function to run the Lines of Code scanner.
+use crate::actions::copy_dll_to_tester_project_at_boot; // Action to ensure the latest DLL is in the Godot project.
 
 
-/// 🖐️ Optional pause after action
+/// Prompts the user to press Enter before returning to the main menu.
 fn wait_for_enter() {
-	println!("\nPress Enter to return to menu...");
-	let _ = io::stdin().read_line(&mut String::new());
+    println!("\nPress Enter to return to menu...");
+    // Read a line from stdin and discard the result.
+    let _ = io::stdin().read_line(&mut String::new());
 }
 
+/// Sets up the logging system and performs critical engine initialization steps.
 fn init_logging_and_engine() {
-	// This sets up a simple console logger for the CLI environment.
-	tracing_subscriber::registry()
-		.with(
-			tracing_subscriber::fmt::layer()
-				.with_writer(io::stdout) // Direct output to stdout
-				.with_filter(LevelFilter::INFO),
-		)
-		.init();
+    // 1. Initialize Tracing/Logging Subscriber
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(io::stdout) // Direct log output to stdout.
+                .with_filter(LevelFilter::INFO), // Set the minimum logging level to INFO.
+        )
+        .init();
 
-	info!("SSXLBinary: Interactive CLI initializing.");
+    info!("SSXLBinary: Interactive CLI initializing.");
 
-	// Call the FFI initialization (placeholder for engine boot)
-	if ssxl_initialize_engine() {
-		info!("Engine FFI core initialized.");
-	} else {
-		error!("Failed to initialize Engine FFI core.");
-	}
+    // 2. Initialize the Rust Core via FFI
+    // Calls the external C-compatible function to boot the engine's core state and runtime.
+    if ssxl_initialize_engine() {
+        info!("Engine FFI core initialized.");
+    } else {
+        // We log the failure but allow the CLI to continue for non-engine tasks (like LOC scan).
+        error!("Failed to initialize Engine FFI core.");
+    }
     
-    // 🆕 AUTOMATIC DLL COPY on boot
-	if let Err(e) = copy_dll_to_tester_project_at_boot() {
-		error!("{}", e);
-	}
+    // 3. Copy DLL to Godot Project
+    // Ensure the compiled GDExtension DLL is copied into the Godot tester project
+    // before any Godot-related actions are run.
+    if let Err(e) = copy_dll_to_tester_project_at_boot() {
+        // This is a critical warning, as Godot interaction will fail without the DLL.
+        error!("DLL Copy Failed: {}", e);
+    }
 }
 
 fn main() {
-	// 🧠 Startup
-	init_logging_and_engine();
-	
-	// Execute LOC scan on startup and generate file
-	execute_loc_scan(); // UPDATED: Run the LOC scan at bootup
-
-	println!(
+    // Perform initial setup: logging, FFI, and DLL copy.
+    init_logging_and_engine();
+    
+    // Run a Lines of Code (LOC) scan on the codebase at startup.
+    // FIX: Pass "." (the current directory) as the root path argument.
+    if let Err(e) = execute_loc_scan(".") {
+        error!("LOC Scan failed at startup: {}", e);
+    }
+    
+    // Print welcome ASCII art.
+    println!(
         r#"
-            (__)
-            (oo)
-     /-------\/
-    / |     ||
-   * ||-----||
-      ~~     ~~
+                 (__)                    
+                 (oo)
+           /------\/
+          / |    ||
+         * ||----||
+           ~~    ~~
 SSXL-ext Engine Console Initialized
 "#
-);
+    );
 
-	// 🧭 Menu setup
-	let menu = build_menu();
-	let mut last_keys = HashSet::new();
+    // Build the menu structure.
+    let menu = build_menu();
+    // Set for input debouncing to prevent multiple actions from a single key press hold.
+    let mut last_keys = HashSet::new();
 
-	// 🔁 Main loop
-	loop {
-		print_menu(&menu);
-		info!("Console: Awaiting menu selection...");
-		print!("> ");
-		io::stdout().flush().unwrap();
+    // --- Main Interactive Console Loop ---
+    loop {
+        // Display the menu options.
+        print_menu(&menu);
+        info!("Console: Awaiting menu selection...");
+        print!("> ");
+        // Ensure the prompt character is immediately visible.
+        io::stdout().flush().unwrap();
 
-		// Wait for keypress
-		loop {
-			if event::poll(Duration::from_millis(500)).unwrap() {
-				if let Event::Key(key_event) = event::read().unwrap() {
-					if let KeyCode::Char(c) = key_event.code {
-						if last_keys.insert(c) {
-							if let Some(item) = menu.iter().find(|m| m.key == c) {
-								info!("Menu: Selected: {}", item.label);
-								println!("\n[{}] {}\n", c, item.label);
-								(item.action)();
+        // Inner loop handles key polling and processing.
+        loop {
+            // Poll for key events with a timeout to keep the loop responsive (500ms tempo).
+            if event::poll(Duration::from_millis(500)).unwrap() {
+                if let Event::Key(key_event) = event::read().unwrap() {
+                    if let KeyCode::Char(c) = key_event.code {
+                        let c = c.to_ascii_uppercase(); // Normalize input to uppercase.
 
-								if c == '9' {
-									info!("Exit: Engine shutdown complete.");
-									return;
-								}
+                        // Input Debounce Check: Only process if the key hasn't been seen recently.
+                        if last_keys.insert(c) {
+                            // Find the corresponding menu item.
+                            if let Some(item) = menu.iter().find(|m| m.key == c) {
+                                info!("Menu: Selected: {}", item.label);
+                                println!("\n[{}] {}\n", c, item.label);
+                                
+                                // Execute the action associated with the menu item.
+                                (item.action)();
 
-								wait_for_enter();
-								break;	
-							}
-						}
-					}
-				}
-			} else {
-				last_keys.clear();
-			}
+                                // Check for the exit key ('E').
+                                if c == 'E' {
+                                    info!("Exit: Console closed. Engine shutdown complete.");
+                                    return; // Exit the main function, terminating the CLI.
+                                }
 
-			thread::sleep(Duration::from_millis(10));
-		}
-	}
+                                // Wait for user acknowledgment before returning to the main menu screen.
+                                wait_for_enter();
+                                // Break the inner polling loop to redraw the menu.
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // If the poll times out, clear the debounce set, allowing a new key press to be registered.
+                last_keys.clear();
+            }
+
+            // Short pause for general loop control.
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 }

@@ -1,32 +1,23 @@
-// ssxl_cli/src/scan/mod.rs (Cleaned content for LOC utility)
+// ssxl_cli/src/scan/mod.rs 
 
-use tracing::{info, warn, error};
-use std::io;
-use std::env;
-use std::fs;
-use std::process::{Command, Stdio}; // Keeping if any scan logic uses external commands (unlikely)
+//! # Codebase Scan Utilities (`ssxl_cli::scan`)
+//!
+//! This module groups all functionality related to scanning and analyzing the
+//! SSXL-ext codebase, such as calculating Lines of Code (LOC) and generating
+//! reports. It serves as a façade to its internal sub-modules.
 
-// --- MODULE DECLARATION (Only LOC-related modules remain) ---
+// Removed all unused imports: tracing macros, std::io, std::env, std::fs, std::process::Command, and std::process::Stdio.
 
-/// Contains the logic for recursively scanning the codebase.
+/// Internal module responsible for recursively walking the file system.
 mod file_walker;
-/// Contains the logic for processing LOC data and formatting the final report.
+
+/// Internal module responsible for writing the report file contents.
+/// FIX: Declare report_writer as a sibling here, allowing it to be imported in report_formatter.rs via `super::`.
+mod report_writer;
+
+/// Internal module responsible for orchestrating the scan and delegating report formatting.
 mod report_formatter;
 
-// NOTE: benchmarking, godot_harness, and testing declarations removed here.
-// NOTE: All Godot/DLL constants and functions (like get_godot_project_abs_path) 
-// should be moved to ssxl_cli/src/actions/mod.rs or godot_harness.rs.
 
-
-// --- LOC SCANNER CORE FUNCTION ---
-// The direct definition of execute_loc_scan is removed to prevent collision.
-
-// --- PUBLIC RE-EXPORTS ---
-
-// Re-export LOC Scanner entry point from its appropriate sub-module
-// This makes the function available as `crate::scan::execute_loc_scan`
-pub use report_formatter::execute_loc_scan; 
-
-// Re-exports for file_walker and report_formatter utility functions (Optional)
-// pub use file_walker::walk_directory;
-// pub use report_formatter::{format_report, LOCReport};
+// Publicly re-export the main entry point for the LOC scan utility.
+pub use report_formatter::execute_loc_scan;

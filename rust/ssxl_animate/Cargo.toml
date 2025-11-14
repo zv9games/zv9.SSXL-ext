@@ -1,0 +1,29 @@
+# ssxl_animate/Cargo.toml
+
+[package]
+name = "ssxl_animate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES ---
+ssxl_shared = { path = "../ssxl_shared" }
+ssxl_math = { path = "../ssxl_math" }
+
+# --- EXTERNAL DEPENDENCIES ---
+
+# CORE GDExtension BINDINGS
+godot = { workspace = true }
+godot-ffi = { workspace = true }
+# Workspace standard logging framework
+tracing = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+async-trait = { workspace = true }
+
+# customs
+rayon = { workspace = true }
+parking_lot = { workspace = true }
+
+
+

@@ -54,14 +54,27 @@ pub fn spawn_batch_generation_task(
         internal_state_clone.increment_queue_depth();
 
         // Calculate the grid size for the batch, rounding up to the nearest chunk boundary.
-        let chunk_size_i64 = CHUNK_SIZE as i64;
-        let width_in_chunks = (config_clone.width as i64 + chunk_size_i64 - 1) / chunk_size_i64;
-        let height_in_chunks = (config_clone.height as i64 + chunk_size_i64 - 1) / chunk_size_i64;
+        let chunk_size_i64: i64 = CHUNK_SIZE as i64;
+        
+        // Ensure map dimensions are used as i64 for the calculation.
+        let map_width_i64: i64 = config_clone.width as i64;
+        let map_height_i64: i64 = config_clone.height as i64;
+
+        // Calculate the chunk counts using the correct ceiling division formula: (a + b - 1) / b
+        let width_in_chunks = (map_width_i64 + chunk_size_i64 - 1) / chunk_size_i64;
+        let height_in_chunks = (map_height_i64 + chunk_size_i64 - 1) / chunk_size_i64;
 
         // Generate a vector of all ChunkKey coordinates (Vec2i) for the entire batch area.
+        // The range (0..N) correctly includes coordinates 0 up to N-1.
         let all_chunk_coords: Vec<Vec2i> = (0..width_in_chunks)
             .flat_map(|x| (0..height_in_chunks).map(move |y| Vec2i::new(x, y)))
             .collect();
+        
+        // Added check for 0x0 map request, although likely prevented by ConfigValidator.
+        if all_chunk_coords.is_empty() {
+             info!("Batch generation task received a map size of 0x0 chunks. Task finished immediately.");
+        }
+
 
         // --- Core Parallel Processing ---
         all_chunk_coords

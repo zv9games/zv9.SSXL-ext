@@ -1,35 +1,43 @@
-// ssxl_tools/src/lib.rs (Final, Corrected Code)
+// ssxl_tools/src/lib.rs
 
-//! Core utilities for configuration, asset management, and data validation.
+//! # SSXL Engine Tools (`ssxl_tools`)
+//!
+//! Provides utility functions for **configuration management**, **data validation**,
+//! and other engine-wide tooling not specific to generation or synchronization.
 
-// Restored missing necessary imports
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tracing::{info, warn}; 
-use std::io::{self, Read}; 
-use std::fs::File; 
+use tracing::{info, warn};
+use std::io::{self, Read};
+use std::fs::File;
 
-// --- CRATE DEPENDENCIES ---
-use ssxl_shared::SSXLData; 
+use ssxl_shared::SSXLData;
 
-// --- CONFIGURATION CONSTANTS ---
-const DEFAULT_CONFIG_PATH: &str = "./config/engine.toml"; 
+// --------------------------------------------------------------------------------
+// --- Configuration Constants ---
+// --------------------------------------------------------------------------------
+
+/// The default file path to check for engine configuration.
+const DEFAULT_CONFIG_PATH: &str = "./config/engine.toml";
+/// The ID of the generator used when configuration loading fails or is not specified.
 const DEFAULT_GENERATOR: &str = "cellular_automata_basic";
-const DEFAULT_CA_RULESET: u8 = 0; 
+/// The default Cellular Automata ruleset ID to use.
+const DEFAULT_CA_RULESET: u8 = 0;
 
-// -----------------------------------------------------------------------------
-// SSXL CONFIGURATION UTILITIES (RESTORED DEFINITION)
-// -----------------------------------------------------------------------------
+// --------------------------------------------------------------------------------
+// --- SSXL Configuration Management ---
+// --------------------------------------------------------------------------------
 
-/// 🔧 Stores all global, static configuration settings for the SSXL Engine.
-// E0412 & E0433 Fix: SSXLConfig struct definition is now present.
+/// Configuration structure holding key engine settings, primarily for generation defaults.
 pub struct SSXLConfig {
+    /// The ID of the world generator to use when no specific one is requested.
     default_generator_id: String,
+    /// The default ruleset ID for the Cellular Automata generator.
     ca_default_ruleset: u8,
 }
 
 impl SSXLConfig {
-    /// Private constructor to initialize config with defaults.
+    /// Creates a new `SSXLConfig` instance populated with hardcoded default values.
     fn new_with_defaults() -> Self {
         SSXLConfig {
             default_generator_id: DEFAULT_GENERATOR.to_string(),
@@ -37,42 +45,47 @@ impl SSXLConfig {
         }
     }
 
-    /// Attempts to load configuration from the specified path.
+    /// Attempts to read and simulate loading engine configuration from a file path.
+    ///
+    /// The actual configuration parsing logic is currently simulated:
+    /// it reads the file and then unconditionally returns hardcoded override values.
     fn load_from_path(path: &str) -> Result<Self, io::Error> {
         info!("SSXLConfig: Attempting to load configuration from: {}", path);
 
         match File::open(path) {
             Ok(mut file) => {
                 let mut contents = String::new();
+                // Read the entire file content into a string.
                 file.read_to_string(&mut contents)?;
 
-                // --- SIMULATED PARSING ---
                 info!("SSXLConfig: File read successfully. Simulating config override.");
-                // Return a simulated config that is NOT the default
+                // Placeholder: In a real implementation, 'contents' would be parsed (e.g., via TOML).
                 Ok(SSXLConfig {
-                    default_generator_id: "perlin_basic_2d".to_string(), 
-                    ca_default_ruleset: 1, 
+                    default_generator_id: "perlin_basic_2d".to_string(), // Simulated override
+                    ca_default_ruleset: 1,                               // Simulated override
                 })
             },
-            Err(e) => {
-                // Return the I/O error
-                Err(e)
-            }
+            // If file opening fails, propagate the standard I/O error.
+            Err(e) => Err(e),
         }
     }
 
-    /// Accessor for the default generator ID.
+    /// Returns the configured default generator ID string.
     pub fn get_default_generator_id(&self) -> &str {
         &self.default_generator_id
     }
 
-    /// Accessor for the Cellular Automata default ruleset ID.
+    /// Returns the configured default Cellular Automata ruleset ID.
     pub fn get_ca_default_ruleset(&self) -> u8 {
         self.ca_default_ruleset
     }
 }
 
-/// Public function to load config, allowing the caller (Conductor) to specify the path.
+/// Attempts to load the configuration from the specified path.
+///
+/// If `path` is `None`, it defaults to `DEFAULT_CONFIG_PATH`.
+/// If the file loading fails for any reason, it logs a warning and **returns
+/// a new `SSXLConfig` instance populated with hardcoded defaults** (safe fallback).
 pub fn get_config_from_path(path: Option<&str>) -> Result<SSXLConfig, io::Error> {
     let path_to_load = path.unwrap_or(DEFAULT_CONFIG_PATH);
 
@@ -82,47 +95,55 @@ pub fn get_config_from_path(path: Option<&str>) -> Result<SSXLConfig, io::Error>
             Ok(config)
         },
         Err(e) => {
-            // Log error and return defaults (Crucial for FFI stability)
+            // Log the failure but ensure the engine has a runnable configuration.
             warn!("Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.", path_to_load, e);
+            // Return the defaults wrapped in an Ok() to ensure initialization succeeds.
             Ok(SSXLConfig::new_with_defaults())
         }
     }
 }
 
-/// Provides thread-safe, static access to a configuration instance *initialized only with defaults*.
+// --------------------------------------------------------------------------------
+// --- Static Configuration (DEPRECATED) ---
+// --------------------------------------------------------------------------------
+
+/// Lazy-initialized static instance of the default configuration.
+///
+/// Used by the deprecated `get_config()` function.
 static CONFIG: Lazy<SSXLConfig> = Lazy::new(SSXLConfig::new_with_defaults);
 
-/// DEPRECATED: Public function to retrieve a reference to the global configuration.
+/// Retrieves the global static configuration instance.
+///
+/// **WARNING:** This function is **DEPRECATED**. It does not allow for specifying
+/// a configuration path and relies on a hardcoded static default.
+/// Use [`get_config_from_path`] instead.
 pub fn get_config() -> &'static SSXLConfig {
-    warn!("DEPRECATED: Called `get_config()`. Use `get_config_from_path()` for correct FFI CWD handling.");
+    warn!("DEPRECATED: Called `get_config()`. Use `get_config_from_path()` for correct FFI CWD handling and dynamic loading.");
     &CONFIG
 }
 
-// -----------------------------------------------------------------------------
-// DATA VALIDATION UTILITIES (RESTORED DEFINITION)
-// -----------------------------------------------------------------------------
+// --------------------------------------------------------------------------------
+// --- Utility Functions ---
+// --------------------------------------------------------------------------------
 
-/// Provides a thread-safe, lazily initialized Regex instance for data ID validation.
-// E0425 Fix: ID_REGEX static definition is now present.
+/// Lazy-initialized regular expression for validating SSXL data IDs (must be composed only of digits).
 static ID_REGEX: Lazy<Regex> = Lazy::new(|| {
-    // Requires IDs to be numeric strings.
+    // Pattern matches one or more digits from start to end of the string.
     Regex::new(r"^\d+$").expect("Failed to compile ID validation regex")
 });
 
-/// Validates the ID field of an AetherionData primitive against a standard regex pattern.
+/// Validates that an `SSXLData` ID is composed solely of digits.
 pub fn validate_data_id(data: &SSXLData) -> bool {
-    // Assumes AetherionData::id is accessible and implements ToString (e.g., u64).
+    // Checks if the string representation of the data ID matches the digit-only regex.
     ID_REGEX.is_match(&data.id.to_string())
 }
 
-
-// -----------------------------------------------------------------------------
-// CRATE ENTRY
-// -----------------------------------------------------------------------------
-
-/// Initializes the `aetherion_tools` crate.
+/// Initializes engine tool utilities.
+///
+/// This function triggers the lazy initialization of necessary static resources,
+/// such as the ID validation regex, ensuring they are ready before first use.
 pub fn initialize() {
     // Force initialization of the static regex.
-    let _ = &*ID_REGEX; 
+    let _ = &*ID_REGEX;
     info!("SSXL Tools: Configuration and data validation utilities initialized.");
 }
