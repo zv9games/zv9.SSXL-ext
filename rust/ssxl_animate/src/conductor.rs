@@ -1,9 +1,8 @@
-// rust/ssxl_animate/src/conductor.rs
+// rust/ssxl_animate/src/conductor.rs (Updated)
 use crate::{ConductorBehavior, AnimationCommand, CommandResult, AnimationState, UpdateSender};
 use crate::worker::process_command_parallel; // CRITICAL: Import the delegation function
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::warn;
 
 /// The core, single-threaded struct responsible for managing all animation workers.
 /// It holds the Receiver for commands and the Sender for updates to the Godot main thread.
@@ -70,11 +69,7 @@ impl ConductorBehavior for AnimationConductor {
                 self.command_rx.close();
                 Ok(())
             }
-            // Catch-all is mandatory for robust systems
-            _ => {
-                warn!("Received unhandled command: {:?}", command);
-                Ok(())
-            }
+            // The catch-all is now removed because the match is exhaustive.
         }
     }
 

@@ -14,7 +14,7 @@ pub mod ssxl_engine;
 pub mod ssxl_signals;
 /// A potential future module for querying engine state or procedural data (the "Oracle").
 pub mod ssxl_oracle;
-
+pub mod ssxl_tilemap;
 // -----------------------------------------------------------------------------
 // Private Modules (Internal Implementation Details)
 // -----------------------------------------------------------------------------

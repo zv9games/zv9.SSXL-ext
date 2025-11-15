@@ -31,8 +31,9 @@ use ssxl_shared::{
     messages::AnimationUpdate as CoreAnimationUpdate,
 };
 
+// FIX: Removed unused import `crate::async_poll::AnimationReceiver;`
 // This is an internal type alias within the current crate's async polling module.
-use crate::async_poll::AnimationReceiver;
+// use crate::async_poll::AnimationReceiver; 
 
 
 /// Responsible for initializing and managing the lifecycle of the entire SSXL Engine runtime.
@@ -99,12 +100,9 @@ impl EngineInitializer {
         let anim_state = AnimationState::default();
 
         // REFINEMENT: Clone the AnimationState before passing it into the conductor.
-        // This prevents a "use of moved value" error since `anim_state` must be returned later.
-        // This assumes AnimationState implements the Clone trait.
         let state_to_pass = anim_state.clone(); 
 
         // Pass the channels and initial state to the Conductor constructor.
-        // FIX: AnimationConductor::new no longer returns a Result, resolving E0308.
         let _conductor = AnimationConductor::new(anim_rx, update_tx, state_to_pass);
         
         info!("AnimationConductor initialized and thread started successfully.");

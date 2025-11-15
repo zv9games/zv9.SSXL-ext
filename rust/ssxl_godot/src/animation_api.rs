@@ -29,6 +29,8 @@ use ssxl_shared::messages::AnimationCommand;
 ///
 /// It holds non-owning, bounded references (`'a`) to the essential Conductor handles.
 #[derive(Default)]
+// FIX 1: Allow dead code, as this struct is constructed externally via FFI.
+#[allow(dead_code)]
 pub struct AnimationAPI<'a> {
     /// Handle used to send commands to the Animation Conductor (responsible for frame updates).
     animation_conductor: Option<&'a AnimationConductorHandle>,
@@ -36,6 +38,8 @@ pub struct AnimationAPI<'a> {
     _conductor: Option<&'a Arc<Mutex<Conductor>>>,
 }
 
+// FIX 2: Allow dead code for all associated items, as they are called externally via FFI.
+#[allow(dead_code)]
 impl<'a> AnimationAPI<'a> {
     /// Constructs a new AnimationAPI, setting the internal references upon initialization.
     pub fn new(
@@ -178,7 +182,6 @@ impl<'a> AnimationAPI<'a> {
                 // Lock the Conductor Mutex to call the synchronous data retrieval method.
                 let result = conductor_arc.lock().map(|conductor| {
                     // Synchronously get the data (this will perform generation if not cached).
-                    // The actual chunk data retrieval is fine.
                     let _chunk_data = conductor.get_chunk_data(&coords);
                     
                     // FIX: The AnimationCommand enum no longer has a 'RegisterChunk' or 'LoadChunk'
@@ -186,9 +189,6 @@ impl<'a> AnimationAPI<'a> {
                     // from the communication contract (ssxl_shared::messages::AnimationCommand).
                     warn!("AnimationAPI: Cannot register chunk ({}, {}). The command for data registration (e.g., RegisterChunk) is not available in the current AnimationCommand definition. Skipping command send.", chunk_x, chunk_y);
                     
-                    // Old, now incompatible command: 
-                    // handle.send(AnimationCommand::RegisterChunk(Arc::new(chunk_data))) 
-
                 });
 
                 if let Err(e) = result {

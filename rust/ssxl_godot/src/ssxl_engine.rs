@@ -10,6 +10,7 @@ use godot::prelude::*;
 use godot::classes::{Node, TileMap};
 use godot::obj::Base;
 use godot::builtin::GString;
+// use godot::log::godot_print; // <-- REMOVED: godot_print is a macro and is available via prelude
 
 // --- Standard Library Imports (Synchronization) ---
 use std::sync::{Arc, Mutex};
@@ -27,7 +28,7 @@ use crate::channel_handler::ChannelHandler;
 use crate::api_initializers::EngineInitializer;
 use crate::status_reporter::StatusReporter;
 use crate::engine_api_extension::EngineApiExtension; // Trait providing delegated API methods
-
+use crate::ssxl_tilemap::SSXLTileMap; // <-- NEW: Import custom TileMap struct
 
 // -----------------------------------------------------------------------------
 // SSXLEngine Struct Definition
@@ -185,7 +186,13 @@ impl SSXLEngine {
     #[func]
     pub fn set_tilemap(&mut self, tilemap_node: Gd<TileMap>) {
         self.tilemap_node = Some(tilemap_node.clone());
-        self.presenter.set_tilemap_node(tilemap_node.clone());
+        
+        // FIX E0308 (Final): Use .ok() to convert the Result returned by try_cast into an Option.
+        if let Some(ssxl_tilemap_node) = tilemap_node.try_cast::<SSXLTileMap>().ok() {
+            self.presenter.set_tilemap_node(ssxl_tilemap_node);
+        } else {
+            godot_print!("Warning: set_tilemap called with a TileMap node that is not an SSXLTileMap instance. Presenter will not be configured.");
+        }
     }
 
     /// Safely shuts down the multi-threaded conductors and clears resources.

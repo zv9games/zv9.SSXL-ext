@@ -4,16 +4,16 @@ use rayon::prelude::*;
 use tracing::info;
 
 // --- Imports from ssxl_shared ---
-use ssxl_shared::{AnimationCommand, UpdateSender, ChunkId, AnimationType};
+use ssxl_shared::{AnimationCommand, UpdateSender, ChunkId};
 
 // FIX: Explicitly import the correct message type. The function 'animation_logic::execute_for_chunk' 
 // now correctly returns this type, making the old aliases unnecessary.
-use ssxl_shared::messages::AnimationUpdate; 
 
 use crate::animation_logic;
 
 /// Initializes the global Rayon thread pool for maximal data parallelism.
 /// This should be called once during engine initialization.
+#[allow(dead_code)]
 pub fn initialize_worker_pool(count: usize) {
     // Only attempt to configure if not already configured.
     if rayon::ThreadPoolBuilder::new()

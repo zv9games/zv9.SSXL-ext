@@ -1,3 +1,4 @@
+// rust/ssxl_godot/src/channel_handler.rs (Cleaned)
 //! # ChannelHandler
 //!
 //! This module implements the `ChannelHandler`. It acts as the central **dispatcher**
@@ -16,7 +17,7 @@ use ssxl_generate::Conductor;
 // Added AnimationPayload import for the match statement
 use ssxl_shared::messages::{AnimationUpdate, AnimationPayload};
 use ssxl_shared::messages::ChunkMessage; 
-use ssxl_generate::task_queue::GenerationMessage; 
+// FIX: Removed unused import `ssxl_generate::task_queue::GenerationMessage;`
 
 // --- Local Crate Imports ---
 use crate::chunk_presenter::ChunkPresenter;
