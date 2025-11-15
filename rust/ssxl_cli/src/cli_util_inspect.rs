@@ -1,5 +1,3 @@
-// ssxl_cli/src/cli_util_inspect.rs
-
 //! # CLI Utilities: Inspection and Codebase Analysis (`ssxl_cli::cli_util_inspect`)
 //!
 //! This module provides utility functions for inspecting the structure of the SSXL-ext
@@ -12,7 +10,8 @@ use std::fs;
 use regex::Regex; // Crate for regular expressions
 use tracing::{info, warn, error};
 use std::thread;
-use std::time::Duration; 
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH}; // For dynamic filename generation
 
 
 /// Scans the SSXL-ext workspace and prints a structured, visual tree of all `.rs` files.
@@ -20,10 +19,11 @@ use std::time::Duration;
 /// This provides a quick overview of the codebase structure, highlighting core files (`lib.rs`, `main.rs`).
 pub fn print_module_tree() {
 	println!("\n=========================================================================");
-	println!("| 🌲 RUST WORKSPACE MODULE TREE (Scanning...)                           |");
+	println!("| 🌲 RUST WORKSPACE MODULE TREE (Scanning...)                           |");
 	println!("=========================================================================");
 	
 	// List of all crate source directories in the workspace.
+	// NOTE: These are relative paths assuming execution from ssxl-ext/rust/ or a subdirectory.
 	let crate_dirs = [
 		"ssxl_cache/src",
 		"ssxl_engine_ffi/src",
@@ -55,7 +55,7 @@ pub fn print_module_tree() {
                             let prefix = if file_name == "lib.rs" || file_name == "main.rs" {
                                 "├── [CORE] "
                             } else {
-                                "│   └── "
+                                "│   └── "
                             };
                             
                             // Print the path relative to the crate's `src/` directory.
@@ -166,4 +166,130 @@ pub fn print_godot_api_surface() {
     info!("API scan complete: {} methods detected.", api_methods.len());
     // Pause briefly for dramatic effect and to ensure logging is flushed.
     thread::sleep(Duration::from_secs(2));
+}
+
+
+// --------------------------------------------------------------------------
+// 🔥 SSXL-ext LOC Reporting Logic (FINAL PATH FIX)
+// --------------------------------------------------------------------------
+
+const OUTPUT_FINAL_LOC_FILE: &str = "RUST_LOC_TOTAL.txt";
+
+/// Helper to count lines of code in a file, ignoring empty lines and comments (simplified).
+fn count_file_lines(path: &Path) -> u64 {
+    let mut count = 0;
+    if let Ok(content) = fs::read_to_string(path) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            // Simple check: ignore empty lines and lines starting with comment markers.
+            if !trimmed.is_empty() && !trimmed.starts_with("//") && !trimmed.starts_with("#") {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Helper function to write the final Rust LOC total to a fixed-name file 
+/// for fast parsing by Godot at bootup.
+fn write_final_loc_total(loc_count: u64) {
+    // 🚨 FIX: Force traversal up one level to the project root (ssxl-ext/)
+    let root_dir = PathBuf::from("../"); 
+    let output_path = root_dir.join(OUTPUT_FINAL_LOC_FILE); // Final Path: ../RUST_LOC_TOTAL.txt
+
+    let content = format!("{}\n", loc_count);
+
+    match fs::write(&output_path, content.as_bytes()) {
+        Ok(_) => {
+            eprintln!("🔥 SSXL-ext CLI: Wrote total Rust LOC **{}** to {}.", 
+                      loc_count, output_path.display());
+        }
+        Err(e) => {
+            error!("❌ CRITICAL FAIL: Could not write LOC file {:?}. Error: {}", 
+                      output_path, e);
+        }
+    }
+}
+
+/// Scans the Rust workspace, calculates lines of code (LOC), and generates 
+/// the full report and the final single-number LOC file.
+pub fn scan_and_report_loc() {
+    let mut total_rs_loc: u64 = 0;
+    let mut total_gd_loc: u64 = 0;
+    let mut report_lines: Vec<String> = Vec::new();
+
+    // 1. Scan Rust Code
+    // These paths are correct relative to the ssxl-ext/rust/ directory.
+    let rust_dirs = ["ssxl_cache/src", "ssxl_engine_ffi/src", "ssxl_generate/src", 
+                     "ssxl_godot/src", "ssxl_math/src", "ssxl_shared/src", 
+                     "ssxl_sync/src", "ssxl_tools/src", "ssxl_cli/src"]; 
+    
+    for dir in &rust_dirs {
+        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "rs") {
+                let loc = count_file_lines(path);
+                total_rs_loc += loc;
+                if loc > 0 {
+                    // Report path relative to the whole workspace (ssxl-ext/)
+                    report_lines.push(format!("{:>10} LOC | rust/{}", loc, path.display()));
+                }
+            }
+        }
+    }
+
+    // 2. Scan GDScript Code
+    // Path traversal is correct: `ssxl-ext/rust/` -> `../ssxl_engine_tester`
+    let gd_dirs = ["../ssxl_engine_tester"]; 
+    for dir in &gd_dirs {
+        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "gd") {
+                let loc = count_file_lines(path);
+                total_gd_loc += loc;
+                if loc > 0 {
+                    // Report path relative to the whole workspace (ssxl-ext/)
+                    report_lines.push(format!("{:>10} LOC | {}", loc, path.display()));
+                }
+            }
+        }
+    }
+    
+    // 3. Generate the full, dynamically-named report
+    // 🚨 FINAL FIX: Navigate up one level to the project root (ssxl-ext/) and use the filename directly.
+    let root_dir = PathBuf::from("../"); 
+
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_secs();
+
+    let filename = format!("ssxl_loc_report_live_{}.txt", timestamp);
+    let final_report_path = root_dir.join(filename); 
+
+    let mut full_report_content = format!(
+        "SSXL-ext Live LOC Report\nGenerated (Epoch Seconds): {}\nRoot Directories: rust, ssxl_engine_tester\n\n------------------------------------------------------\n FILE LOC | Relative File Path\n------------------------------------------------------\n", 
+        timestamp
+    );
+    full_report_content.push_str(&report_lines.join("\n"));
+    full_report_content.push_str("\n------------------------------------------------------\n");
+    full_report_content.push_str(&format!("       {} LOC | *.rs (Rust Total)\n", total_rs_loc));
+    full_report_content.push_str(&format!("       {} LOC | *.gd (GDScript Total)\n", total_gd_loc));
+    full_report_content.push_str(&format!("       {} LOC | TOTALS\n", total_rs_loc + total_gd_loc));
+
+    
+    // Write the full report to the corrected dynamic path.
+    match fs::write(&final_report_path, full_report_content) {
+        Ok(_) => {
+            info!("✅ Full LOC report written to: {}", final_report_path.display());
+        }
+        Err(e) => {
+            error!("❌ Failed to write full LOC report to {:?}. Error: {}", final_report_path, e);
+        }
+    }
+
+    // 4. Write the single line count to the fixed-name file (RUST_LOC_TOTAL.txt)
+    write_final_loc_total(total_rs_loc);
+    
+    // Pause briefly for dramatic effect and to ensure logging is flushed.
+    thread::sleep(Duration::from_millis(100));
 }

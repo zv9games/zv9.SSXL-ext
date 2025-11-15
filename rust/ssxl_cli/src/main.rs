@@ -4,15 +4,15 @@
 //! initialization, logging, the main menu loop, and delegates tasks to action modules
 //! for testing, benchmarking, and external tool execution.
 
-mod actions;             // Core functions for tests, benchmarks, and Godot interaction.
-mod cli_util_inspect;    // Utilities for scanning the codebase and API surface.
+mod actions;               // Core functions for tests, benchmarks, and Godot interaction.
+mod cli_util_inspect;      // Utilities for scanning the codebase and API surface.
 
 // FIX: Change to `pub mod` so its types (CliAction, CliMenu) are accessible
 // by other modules in the crate (like actions/testing.rs).
-pub mod cli_util_menu;   // Menu structure and display logic.
+pub mod cli_util_menu;     // Menu structure and display logic.
 
-mod cli_util_bench;      // Functions for running generation tests and benchmarks.
-mod scan;                // Codebase scanning (e.g., Lines of Code - LOC).
+mod cli_util_bench;        // Functions for running generation tests and benchmarks.
+mod cli_util_loc;          // <--- CHANGE 1: Declare the new LOC utility module.
 
 use std::collections::HashSet;
 use std::thread;
@@ -25,7 +25,7 @@ use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 
 use crate::cli_util_menu::{build_menu, print_menu};
 use ssxl_engine_ffi::ssxl_initialize_engine; // External FFI function to bootstrap the engine core.
-use crate::scan::execute_loc_scan; // Function to run the Lines of Code scanner.
+use crate::cli_util_loc::scan_and_report_loc; // <--- CHANGE 2: Update the import path and function name.
 use crate::actions::copy_dll_to_tester_project_at_boot; // Action to ensure the latest DLL is in the Godot project.
 
 
@@ -72,20 +72,18 @@ fn main() {
     init_logging_and_engine();
     
     // Run a Lines of Code (LOC) scan on the codebase at startup.
-    // FIX: Pass "." (the current directory) as the root path argument.
-    if let Err(e) = execute_loc_scan(".") {
-        error!("LOC Scan failed at startup: {}", e);
-    }
+    // Note: The scan function no longer takes an argument.
+    scan_and_report_loc(); // <--- CHANGE 3: Update function call and remove unnecessary argument.
     
     // Print welcome ASCII art.
     println!(
         r#"
-                 (__)                    
+                 (__)                      
                  (oo)
            /------\/
           / |    ||
-         * ||----||
-           ~~    ~~
+          * ||----||
+            ~~    ~~
 SSXL-ext Engine Console Initialized
 "#
     );
