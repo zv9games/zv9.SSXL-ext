@@ -67,7 +67,7 @@ impl SSXLTileMap {
 
             // Boom! Chain it up for that single, efficient FFI dispatch.
             // This is the "ex" way—optimized, no extra traits needed.
-            base_tilemap
+            let _ = base_tilemap
                 .set_cell_ex(layer, pos)
                 .source_id(source_id)
                 .atlas_coords(atlas_coords_val)

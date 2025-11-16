@@ -6,8 +6,7 @@
 //! messages without stalling the game engine loop.
 
 // --- Godot GDExtension Imports ---
-use godot::classes::Node;
-use godot::obj::Gd;
+// NOTE: Removed unused godot imports (Node, Gd)
 // --- Standard Library Imports ---
 use std::sync::Arc;
 // --- External Asynchronous Runtime Imports (Tokio) ---
@@ -20,10 +19,7 @@ use tokio::sync::mpsc::{
 use ssxl_generate::task_queue::GenerationMessage;
 use ssxl_shared::chunk_data::ChunkData;
 use ssxl_shared::grid_bounds::GridBounds;
-use ssxl_shared::messages::ChunkMessage;
-// FIX: Corrected import path for AnimationUpdate to resolve type mismatch errors.
-use ssxl_shared::messages::AnimationUpdate;
-
+use ssxl_shared::messages::{ChunkMessage, AnimationUpdate};
 
 // -----------------------------------------------------------------------------
 // Constants and Type Aliases
@@ -31,12 +27,10 @@ use ssxl_shared::messages::AnimationUpdate;
 
 /// **CRITICAL THROTTLE:** Max number of chunk messages to process in a single Godot frame.
 /// This prevents the main thread from stalling when the Rust core finishes generating too quickly.
-/// (64 chunks * 32x32 tiles/chunk = ~65,000 tile updates per frame at 60 FPS)
-const MAX_GENERATION_MESSAGES_PER_POLL: usize = 64; 
+const MAX_GENERATION_MESSAGES_PER_POLL: usize = 64;
 
-/// **NEW THROTTLE:** Max number of animation updates to process in a single Godot frame.
-/// Setting a fixed, low limit (2048) ensures the main thread doesn't stutter, 
-/// even if the animation worker produces a large backlog.
+/// **REAL-TIME THROTTLE:** Max number of animation updates to process in a single Godot frame.
+/// This ensures the main thread doesn't stutter under high animation load.
 const MAX_ANIMATION_MESSAGES_PER_POLL: usize = 2048;
 
 /// Type alias for the bounded channel receiver used by the **Generation** conductor.
@@ -91,53 +85,49 @@ impl AsyncPoller {
     /// Polls the generation channel for available messages, **throttling** the
     /// maximum number of messages processed per Godot frame.
     pub fn poll_generation_messages(&mut self) -> Vec<ChunkMessage> {
+        // Use `Option::take` to temporarily own the receiver.
+        let mut receiver = match self.generation_receiver.take() {
+            Some(r) => r,
+            None => return Vec::new(),
+        };
+
         // Pre-allocate vector capacity to the throttle limit.
         let mut messages = Vec::with_capacity(MAX_GENERATION_MESSAGES_PER_POLL);
-        let mut messages_processed = 0;
 
-        if let Some(mut receiver) = self.generation_receiver.take() {
-            loop {
-                // 1. Throttle Check: Stop processing if the limit is reached this frame.
-                if messages_processed >= MAX_GENERATION_MESSAGES_PER_POLL {
-                    break; 
+        for _ in 0..MAX_GENERATION_MESSAGES_PER_POLL {
+            match receiver.try_recv() {
+                Ok(message) => {
+                    let chunk_message = match message {
+                        // Performance Optimization (Zero-Copy) using Arc::try_unwrap
+                        GenerationMessage::ChunkGenerated(_coords, chunk_data_arc) => {
+                            let chunk_data = Arc::try_unwrap(chunk_data_arc)
+                                .unwrap_or_else(|arc| (*arc).clone());
+                            ChunkMessage::Generated(chunk_data)
+                        }
+                        // Sentinel message for overall batch completion.
+                        GenerationMessage::GenerationComplete => {
+                            ChunkMessage::Generated(ChunkData::new(
+                                0,
+                                GridBounds::default(),
+                                "complete".to_string(), // Sentinel string
+                            ))
+                        }
+                    };
+                    messages.push(chunk_message);
                 }
-
-                match receiver.try_recv() {
-                    Ok(message) => {
-                        let chunk_message = match message {
-                            // A chunk has been successfully generated.
-                            GenerationMessage::ChunkGenerated(_coords, chunk_data_arc) => {
-                                // Performance Optimization (Zero-Copy) using Arc::try_unwrap
-                                let chunk_data = Arc::try_unwrap(chunk_data_arc)
-                                    .unwrap_or_else(|arc| (*arc).clone());
-                                ChunkMessage::Generated(chunk_data)
-                            }
-                            // The entire generation batch is complete (sentinel message).
-                            GenerationMessage::GenerationComplete => {
-                                ChunkMessage::Generated(ChunkData::new(
-                                    0,
-                                    GridBounds::default(),
-                                    "complete".to_string(), // Sentinel string
-                                ))
-                            }
-                        };
-                        messages.push(chunk_message);
-                        messages_processed += 1; // Increment throttle counter
-                    }
-                    // Non-blocking exit: Channel is currently empty.
-                    Err(TokioTryRecvError::Empty) => break,
-                    // Critical Error: Generation channel disconnected.
-                    Err(TokioTryRecvError::Disconnected) => {
-                        eprintln!("[SSXL-SYNC ERROR] Generation channel disconnected.");
-                        // Restore the receiver (even if disconnected) to prevent a panic on 'take()' next frame.
-                        self.generation_receiver = Some(receiver);
-                        return messages;
-                    }
+                // Non-blocking exit: Channel is currently empty.
+                Err(TokioTryRecvError::Empty) => break,
+                // Critical Error: Generation channel disconnected.
+                Err(TokioTryRecvError::Disconnected) => {
+                    eprintln!("[SSXL-SYNC CRITICAL] Generation channel disconnected.");
+                    // Do not restore the receiver; it's permanently dead.
+                    return messages;
                 }
             }
-            // 3. Restore the receiver to the poller for the next Godot frame's poll.
-            self.generation_receiver = Some(receiver);
         }
+
+        // Restore the receiver to the poller for the next Godot frame's poll.
+        self.generation_receiver = Some(receiver);
 
         messages
     }
@@ -148,36 +138,34 @@ impl AsyncPoller {
 
     /// Polls the animation channel for available updates, **throttling** the
     /// maximum number of messages processed per Godot frame.
-    pub fn poll_animations(&mut self, _emitter: &mut Gd<Node>) -> Vec<AnimationUpdate> {
+    pub fn poll_animations(&mut self) -> Vec<AnimationUpdate> {
+        // Use `Option::take` to temporarily own the receiver.
+        let mut receiver = match self.animation_receiver.take() {
+            Some(r) => r,
+            None => return Vec::new(),
+        };
+
         // Pre-allocate vector capacity to the throttle limit.
         let mut updates = Vec::with_capacity(MAX_ANIMATION_MESSAGES_PER_POLL);
-        let mut updates_processed = 0; // Initialize throttle counter
-        
-        if let Some(mut receiver) = self.animation_receiver.take() {
-            loop {
-                // 1. Throttle Check: Stop processing if the limit is reached this frame.
-                if updates_processed >= MAX_ANIMATION_MESSAGES_PER_POLL {
-                    break;
+
+        for _ in 0..MAX_ANIMATION_MESSAGES_PER_POLL {
+            match receiver.try_recv() {
+                Ok(update) => {
+                    updates.push(update);
                 }
-                
-                match receiver.try_recv() {
-                    Ok(update) => {
-                        updates.push(update);
-                        updates_processed += 1; // Increment throttle counter
-                    }
-                    // Non-blocking exit: Channel is currently empty.
-                    Err(TokioTryRecvError::Empty) => break,
-                    // Critical Error: Animation channel disconnected.
-                    Err(TokioTryRecvError::Disconnected) => {
-                        eprintln!("[SSXL-SYNC ERROR] Animation channel disconnected.");
-                        // The channel is permanently closed, so we do not restore the receiver.
-                        return updates;
-                    }
+                // Non-blocking exit: Channel is currently empty.
+                Err(TokioTryRecvError::Empty) => break,
+                // Critical Error: Animation channel disconnected.
+                Err(TokioTryRecvError::Disconnected) => {
+                    eprintln!("[SSXL-SYNC CRITICAL] Animation channel disconnected.");
+                    // Do not restore the receiver; it's permanently dead.
+                    return updates;
                 }
             }
-            // 2. Restore the receiver to the poller for the next frame's poll.
-            self.animation_receiver = Some(receiver);
         }
+
+        // Restore the receiver to the poller for the next frame's poll.
+        self.animation_receiver = Some(receiver);
 
         updates
     }

@@ -44,7 +44,8 @@ pub fn test_generation_and_placement_cli() {
     let mut chunks_generated = 0;
 
     // Test Case 1: Perlin Noise Generator
-    let perlin_id = "perlin_mvg";
+    // 🎯 FIX: Changed "perlin_mvg" to the correct, registered ID "perlin_basic_2d"
+    let perlin_id = "perlin_basic_2d";
     if conductor.set_active_generator(perlin_id).is_ok() {
         info!("-> Active Generator set to: {}", perlin_id);
         for &coords in &test_coords {
@@ -103,7 +104,7 @@ pub fn run_max_grid_benchmark() {
     warn!("🧪 Starting Max Grid Benchmark (Real Workload)...");
     
     // Define the total number of tiles the benchmark should process.
-    const WORKLOAD_TILES: u64 = 100_000_000; 
+    const WORKLOAD_TILES: u64 = 100_000_000;
 
     // An Atomic counter shared between the workload thread and the reporting thread.
     let processed_tiles = Arc::new(AtomicU64::new(0));

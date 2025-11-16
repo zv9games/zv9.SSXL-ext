@@ -12,11 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::io;
 
 use ssxl_math::Vec2i;
-// FIX 1: Import ChunkCache from its dedicated crate. This assumes 'ssxl_generate' 
-// has 'ssxl_cache' listed as a dependency in Cargo.toml.
-use ssxl_cache::ChunkCache; 
-// FIX 2: Import ChunkData from the correct submodule within ssxl_shared.
-use ssxl_shared::chunk_data::ChunkData; 
+use ssxl_cache::ChunkCache;
+use ssxl_shared::chunk_data::ChunkData;
 use ssxl_tools::get_config_from_path;
 
 use crate::runtime_manager::RuntimeManager;
@@ -48,6 +45,8 @@ pub struct Conductor {
     chunk_cache: Arc<Mutex<ChunkCache>>,
     /// Sender for progress updates (e.g., ChunkGenerated, GenerationComplete).
     progress_sender: Sender<GenerationMessage>,
+    /// Sender for new chunk requests. Stored internally for potential control signals (e.g., clearing the queue).
+    request_sender: mpsc::UnboundedSender<ChunkRequest>, // 💡 ADDED: Internal handle for the request channel.
 }
 
 impl Conductor {
@@ -83,7 +82,11 @@ impl Conductor {
 
         // Set up communication channels
         let (progress_sender, progress_receiver) = mpsc::channel(PROGRESS_CHANNEL_BOUND);
-        let (request_sender, request_receiver) = mpsc::unbounded_channel(); // Unbounded for flexibility
+        // Unbounded for flexibility. This sender is what the external API uses.
+        let (request_sender_api, request_receiver) = mpsc::unbounded_channel(); 
+        
+        // Clone the sender to store inside the Conductor struct for internal control/signals.
+        let request_sender_internal = request_sender_api.clone();
 
         // Initialize state tracker
         let initial_id = generator_manager.get_initial_id(config.get_default_generator_id());
@@ -109,11 +112,12 @@ impl Conductor {
             internal_state: state.clone(),
             chunk_cache,
             progress_sender: progress_sender.clone(),
+            request_sender: request_sender_internal, // Stored internally
         };
 
         // Return the conductor and the external interface components (state, receivers, senders)
-        // The 'request_sender' is returned here for use by the external caller.
-        Ok((conductor, state, progress_receiver, request_sender))
+        // The 'request_sender_api' is returned here for use by the external caller.
+        Ok((conductor, state, progress_receiver, request_sender_api))
     }
     
     /// Returns the ID of the generator currently selected for use.
@@ -143,6 +147,20 @@ impl Conductor {
             config,
         );
 
+        Ok(())
+    }
+
+    /// FFI Command: Immediately stops all pending and active generation tasks.
+    ///
+    /// This method sets the Conductor state to `Stopping`. The request processing loop
+    /// (`start_request_loop`) is responsible for observing this state and refusing
+    /// to process further `ChunkRequest` tasks, allowing the queue to drain harmlessly.
+    pub fn stop_generation(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.internal_state.set_status(ConductorStatus::Stopping);
+        info!("Conductor: Global STOP command received. Status set to Stopping.");
+        
+        // No need to explicitly drop the internal sender here, as relying on the status 
+        // check in the worker loop is the most robust way to stop tasks already in the queue.
         Ok(())
     }
 

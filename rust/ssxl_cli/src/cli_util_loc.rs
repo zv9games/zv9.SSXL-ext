@@ -5,7 +5,7 @@
 //! generating the LOC reports required by the Godot engine.
 
 use walkdir::WalkDir;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::fs;
 use tracing::{info, error};
 use std::thread;

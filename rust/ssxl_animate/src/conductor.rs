@@ -1,8 +1,10 @@
-// rust/ssxl_animate/src/conductor.rs (Updated)
+// rust/ssxl_animate/src/conductor.rs
+
 use crate::{ConductorBehavior, AnimationCommand, CommandResult, AnimationState, UpdateSender};
 use crate::worker::process_command_parallel; // CRITICAL: Import the delegation function
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedReceiver;
+use godot::prelude::godot_print; // Assuming godot_print is available for logging
 
 /// The core, single-threaded struct responsible for managing all animation workers.
 /// It holds the Receiver for commands and the Sender for updates to the Godot main thread.
@@ -26,6 +28,17 @@ impl AnimationConductor {
             state: initial_state,
         }
     }
+
+    /// Synchronously stops the animation by immediately updating the internal state.
+    ///
+    /// This method is designed to be called when the Conductor is locked via a Mutex.
+    /// It functions as the **animation equivalent** of the `stop_generation` command.
+    /// It relies on the external `AnimationState` struct having a `set_enabled(bool)` method.
+    pub fn stop_animation(&mut self) -> CommandResult {
+        self.state.set_enabled(false);
+        godot_print!("Animation Conductor: Synchronous stop command received. State set to disabled.");
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -45,20 +58,25 @@ impl ConductorBehavior for AnimationConductor {
             // ----------------------------------------------------
             // 1. Delegate High-Performance Work (Tile Updates)
             // ----------------------------------------------------
-            // FIX: Renamed the command variant from AnimateChunks to AnimateChunkSet.
             AnimationCommand::AnimateChunkSet { .. } | AnimationCommand::StartTestAnimation => {
                 // CRITICAL OPTIMIZATION: Delegate work and clone the sender for the worker
-                // This call SUBMITS the job to a parallel thread/task and returns immediately.
                 process_command_parallel(command, self.update_tx.clone());
                 Ok(())
             }
             // ----------------------------------------------------
-            // 2. Local State Management
+            // 2. Local State Management (FIX E0004)
             // ----------------------------------------------------
             AnimationCommand::SetTimeScale(scale) => {
                 // NOTE: This state update is safe because it only runs on the async Conductor thread.
-                // The `set_time_scale` method is now defined on AnimationState in ssxl_shared/messages.rs.
                 self.state.set_time_scale(scale); 
+                Ok(())
+            }
+            // FIX E0004: Handle the new SetEnabled command
+            AnimationCommand::SetEnabled(enabled) => {
+                // NOTE: Requires `set_enabled(bool)` to be implemented on `AnimationState`.
+                // This updates the local state which can be queried by `get_state()`.
+                self.state.set_enabled(enabled);
+                godot_print!("Animation Conductor: is_enabled set to {}", enabled);
                 Ok(())
             }
             // ----------------------------------------------------
@@ -69,7 +87,6 @@ impl ConductorBehavior for AnimationConductor {
                 self.command_rx.close();
                 Ok(())
             }
-            // The catch-all is now removed because the match is exhaustive.
         }
     }
 

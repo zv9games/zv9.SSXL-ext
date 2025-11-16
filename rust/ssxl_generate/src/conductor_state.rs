@@ -22,6 +22,8 @@ pub enum ConductorStatus {
     Paused,
     /// A large batch generation task is actively running (**Bulldozer** mode).
     Generating,
+    /// **FIX**: A global stop signal has been issued, waiting for tasks to cease gracefully.
+    Stopping,
     /// A graceful shutdown has been initiated.
     ShuttingDown,
     /// A critical, non-recoverable error has occurred.
@@ -39,7 +41,7 @@ pub struct ConductorState {
     queue_depth: Arc<AtomicUsize>,
     /// The ID string of the currently selected generator. Protected by a Mutex.
     active_generator_id: Arc<Mutex<String>>,
-    /// ⭐ **FIX:** The total number of tiles successfully placed during the current generation run.
+    /// The total number of tiles successfully placed during the current generation run.
     tile_counter: Arc<AtomicU64>,
 }
 #[allow(dead_code)]
@@ -69,6 +71,7 @@ impl ConductorState {
     /// Returns true if the Conductor is in a state where it can actively process or accept tasks.
     pub fn is_active(&self) -> bool {
         let current_status = self.get_status();
+        // Only Running and Generating allow task processing.
         current_status == ConductorStatus::Running || current_status == ConductorStatus::Generating
     }
 
@@ -78,8 +81,7 @@ impl ConductorState {
         self.queue_depth.load(Ordering::Relaxed)
     }
 
-    /// ⭐ **FIX:** Retrieves the total number of tiles successfully placed.
-    /// This resolves the need for `tile_count` access in the consumer crate.
+    /// Retrieves the total number of tiles successfully placed.
     pub fn get_tiles_placed(&self) -> u64 {
         self.tile_counter.load(Ordering::Relaxed)
     }
@@ -101,7 +103,7 @@ impl ConductorState {
         self.queue_depth.fetch_sub(1, Ordering::Relaxed);
     }
     
-    /// ⭐ **FIX:** Atomically increases the tile count by the specified amount.
+    /// Atomically increases the tile count by the specified amount.
     /// Used by worker threads after placing a batch of tiles.
     pub(crate) fn increment_tile_count(&self, amount: u64) {
         self.tile_counter.fetch_add(amount, Ordering::Relaxed);

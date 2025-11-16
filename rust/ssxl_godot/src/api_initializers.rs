@@ -21,20 +21,31 @@ use ssxl_generate::conductor_state::ConductorState;
 // --- Imports from ssxl_sync ---
 use ssxl_sync::{
     AnimationConductor,
-    AnimationConductorHandle,
+    AnimationConductorHandle as CoreAnimationConductorHandle, // Use alias for clarity
 };
 
-// --- Corrected Imports based on Compiler Hints and Context ---
+// --- Imports from ssxl_shared ---
 use ssxl_shared::{
     messages::AnimationCommand,
     AnimationState,
     messages::AnimationUpdate as CoreAnimationUpdate,
 };
 
-// FIX: Removed unused import `crate::async_poll::AnimationReceiver;`
-// This is an internal type alias within the current crate's async polling module.
-// use crate::async_poll::AnimationReceiver; 
+// -----------------------------------------------------------------------------
+// Type Aliases
+// -----------------------------------------------------------------------------
 
+/// Type alias for the `AnimationConductor` command sender handle.
+// FIX: Removed generic argument <AnimationCommand> as the original type alias is already concrete.
+pub type AnimationConductorHandle = CoreAnimationConductorHandle; 
+
+/// Type alias for the `AnimationConductor` update receiver.
+pub type AnimationUpdateReceiver = UnboundedReceiver<CoreAnimationUpdate>;
+
+
+// -----------------------------------------------------------------------------
+// EngineInitializer Struct and Implementation
+// -----------------------------------------------------------------------------
 
 /// Responsible for initializing and managing the lifecycle of the entire SSXL Engine runtime.
 #[derive(Debug, Default)]
@@ -43,7 +54,7 @@ pub struct EngineInitializer {}
 impl EngineInitializer {
     /// Creates a new, default instance of the initializer.
     pub fn new() -> Self {
-        EngineInitializer {}
+        Self {}
     }
 
     // -------------------------------------------------------------------------
@@ -62,7 +73,7 @@ impl EngineInitializer {
         Option<ConductorState>
     ) {
         info!("EngineInitializer: Attempting to initialize Conductor...");
-        
+
         // Conductor::new starts the Tokio runtime and the main request loop.
         match Conductor::new(None) {
             Ok((conductor, state, gen_rx, _request_tx)) => {
@@ -87,30 +98,32 @@ impl EngineInitializer {
     ) -> (
         // Sender for control commands (e.g., Start, Stop, UpdateFramerate).
         Option<AnimationConductorHandle>,
-        // Explicitly use UnboundedReceiver<CoreAnimationUpdate> here to match `update_rx`.
-        Option<UnboundedReceiver<CoreAnimationUpdate>>, 
+        // Receiver for real-time animation updates.
+        Option<AnimationUpdateReceiver>,
         // The thread-safe state tracker for the animation pipeline.
         Option<AnimationState>
     ) {
         info!("EngineInitializer: Attempting to initialize AnimationConductor...");
 
-        // Create the update channel using the *correct* message type (`CoreAnimationUpdate`).
+        // Create the communication channels.
         let (anim_tx, anim_rx) = mpsc::unbounded_channel::<AnimationCommand>();
-        let (update_tx, update_rx) = mpsc::unbounded_channel::<CoreAnimationUpdate>(); 
+        let (update_tx, update_rx) = mpsc::unbounded_channel::<CoreAnimationUpdate>();
         let anim_state = AnimationState::default();
 
-        // REFINEMENT: Clone the AnimationState before passing it into the conductor.
-        let state_to_pass = anim_state.clone(); 
+        // Clone the AnimationState to pass to the background thread while retaining the original.
+        let state_to_pass = anim_state.clone();
 
-        // Pass the channels and initial state to the Conductor constructor.
+        // Start the background AnimationConductor thread.
         let _conductor = AnimationConductor::new(anim_rx, update_tx, state_to_pass);
-        
+
         info!("AnimationConductor initialized and thread started successfully.");
-        return (
-            Some(anim_tx), 
-            Some(update_rx), 
-            // Return the original state variable, which was never moved.
-            Some(anim_state) 
+        (
+            // Return the sender handle for commands
+            Some(anim_tx),
+            // Return the receiver for tile updates, using the new alias
+            Some(update_rx),
+            // Return the original state tracker
+            Some(anim_state)
         )
     }
 
@@ -128,8 +141,7 @@ impl EngineInitializer {
         Option<ConductorState>,
         // Animation Handles
         Option<AnimationConductorHandle>,
-        // The corrected receiver type for animation updates.
-        Option<UnboundedReceiver<CoreAnimationUpdate>>,
+        Option<AnimationUpdateReceiver>,
         Option<AnimationState>,
     ) {
         let (c, grx, gs) = self.ensure_conductor();
@@ -149,15 +161,22 @@ impl EngineInitializer {
         mut conductor_arc: Option<Arc<Mutex<Conductor>>>,
     ) {
         info!("EngineInitializer: Starting graceful shutdown process...");
-        
+
         // 1. Shut down Generation Conductor (requires unique ownership)
         if let Some(arc) = conductor_arc.take() {
             // Attempt to unwrap the Arc to ensure we have the *only* reference.
             match Arc::try_unwrap(arc) {
                 Ok(mutex) => {
                     info!("Shutting down Conductor...");
-                    mutex.into_inner().unwrap().graceful_teardown();
-                    info!("Conductor shutdown complete.");
+                    match mutex.into_inner() {
+                        Ok(conductor) => {
+                            conductor.graceful_teardown();
+                            info!("Conductor shutdown complete.");
+                        }
+                        Err(e) => {
+                            error!("Failed to unwrap Conductor Mutex (poisoned): {:?}", e);
+                        }
+                    }
                 }
                 Err(_) => {
                     error!("Could not unwrap Conductor Arc; other references may exist. Conductor may leak resources.");
@@ -172,9 +191,10 @@ impl EngineInitializer {
                 Ok(_) => info!("AnimationConductor shutdown command sent successfully."),
                 Err(e) => error!("Failed to send shutdown command to AnimationConductor: {}", e),
             }
-            info!("AnimationConductor shutdown command issued.");
+        } else {
+            info!("AnimationConductor handle was already consumed or not initialized.");
         }
-        
+
         info!("EngineInitializer: All background runtimes terminated.");
     }
 }

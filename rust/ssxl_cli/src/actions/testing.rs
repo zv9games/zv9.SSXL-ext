@@ -15,6 +15,7 @@ use std::sync::LazyLock;              // NEW: Used for lazy, thread-safe static 
 // FIX 1 & 2: Use LazyLock to initialize the actions at runtime (solving E0015) 
 // and store them in a Vec<CliAction>. The CliAction struct itself must have 
 // been updated in cli_util_menu.rs to include Send + Sync bounds (solving E0277).
+#[allow(dead_code)]
 static TEST_ACTIONS: LazyLock<Vec<CliAction>> = LazyLock::new(|| vec![
     CliAction::new("cargo", "Run all standard `cargo test` suites (unit/integration)."),
     CliAction::new("ffi", "Run FFI bridge and GDExtension integration validation (Headless Godot)."),
@@ -26,6 +27,7 @@ static TEST_ACTIONS: LazyLock<Vec<CliAction>> = LazyLock::new(|| vec![
 ]);
 
 /// Central entry point for all CLI testing actions.
+#[allow(dead_code)]
 pub fn execute_testing_menu() -> Result<(), String> {
     // FIX 3: Get a slice from the LazyLock Vec to satisfy CliMenu's 'a [CliAction] requirement.
     let menu = CliMenu::new("Testing and Validation Suites", TEST_ACTIONS.as_slice());

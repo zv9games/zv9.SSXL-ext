@@ -16,8 +16,7 @@ use godot::builtin::GString;
 use ssxl_generate::Conductor;
 // Added AnimationPayload import for the match statement
 use ssxl_shared::messages::{AnimationUpdate, AnimationPayload};
-use ssxl_shared::messages::ChunkMessage; 
-// FIX: Removed unused import `ssxl_generate::task_queue::GenerationMessage;`
+use ssxl_shared::messages::ChunkMessage;
 
 // --- Local Crate Imports ---
 use crate::chunk_presenter::ChunkPresenter;
@@ -25,6 +24,12 @@ use crate::chunk_presenter::ChunkPresenter;
 // --- Standard Library Imports ---
 use std::sync::{Arc, Mutex};
 use tracing::{info, error};
+
+// -----------------------------------------------------------------------------
+// Type Alias
+// -----------------------------------------------------------------------------
+// Define the shared type for ChunkPresenter to match SSXLEngine's field type.
+type PresenterHandle = Arc<Mutex<ChunkPresenter>>;
 
 
 // -----------------------------------------------------------------------------
@@ -34,16 +39,17 @@ use tracing::{info, error};
 /// Manages the context required to process messages and apply them to the Godot scene tree.
 #[derive(Debug, Default, Clone)]
 pub struct ChannelHandler {
-    presenter: Option<ChunkPresenter>,
+    // FIX (E0308): Updated type to match the Arc<Mutex<...>> in SSXLEngine
+    presenter: Option<PresenterHandle>,
     signals_node: Option<Gd<Node>>,
 }
 
 impl ChannelHandler {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    // FIX: Removed redundant `pub fn new() -> Self { Self::default() }` which was unused
+    // because the SSXLEngine constructor uses `ChannelHandler::default()`.
 
-    pub fn set_presenter_handle(&mut self, presenter: ChunkPresenter) {
+    /// Public method to set the thread-safe handle for the ChunkPresenter.
+    pub fn set_presenter_handle(&mut self, presenter: PresenterHandle) {
         self.presenter = Some(presenter);
     }
 
@@ -67,21 +73,33 @@ impl ChannelHandler {
 
         let mut is_complete = false;
 
-        if let Some(ref presenter) = self.presenter {
-            for msg in messages {
-                if let ChunkMessage::Generated(data) = &msg {
-                    if data.dimension_tag == "complete" {
-                        is_complete = true;
-                        continue;
-                    }
-                }
+        // Acquire lock on presenter for the duration of processing the batch.
+        if let Some(ref presenter_handle) = self.presenter {
+            match presenter_handle.lock() {
+                Ok(presenter_lock) => {
+                    for msg in messages {
+                        if let ChunkMessage::Generated(data) = &msg {
+                            if data.dimension_tag == "complete" {
+                                is_complete = true;
+                                continue;
+                            }
+                        }
 
-                if let Some(deferred_call) = presenter.create_deferred_present_call(msg) {
-                    deferred_call.call_deferred(&[]);
-                } else {
-                    error!("Failed to create deferred call for chunk message. Is TileMap set on Presenter?");
+                        // Use the locked presenter to create the callable.
+                        if let Some(deferred_call) = presenter_lock.create_deferred_present_call(msg) {
+                            deferred_call.call_deferred(&[]);
+                        } else {
+                            error!("Failed to create deferred call for chunk message. Is TileMap set on Presenter?");
+                        }
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to acquire ChunkPresenter lock: {}", e);
+                    return Some(GString::from("ERR_PRESENTER_MUTEX_POISONED"));
                 }
             }
+        } else {
+            error!("Cannot process generation messages: ChunkPresenter handle is missing.");
         }
 
         // --- Post-Processing: Handle Completion Status ---
@@ -134,9 +152,9 @@ impl ChannelHandler {
                     "tile_flip_updated",
                     &[
                         // 1. Tile ID (from the coord field, using x component)
-                        (update.coord.x as i32).to_variant(), 
+                        (update.coord.x as i32).to_variant(),
                         // 2. New Frame ID (the value extracted from the payload match)
-                        (new_frame_id as i32).to_variant(), 
+                        (new_frame_id as i32).to_variant(),
                     ],
                 );
             }

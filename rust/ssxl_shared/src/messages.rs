@@ -8,8 +8,6 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 
-// REMOVED: use godot::meta::GodotConvert;
-
 // Primitives and ChunkData are available via the crate root's public exports.
 use crate::chunk_data::ChunkData;
 use crate::{ChunkId, TileCoord};
@@ -53,6 +51,9 @@ pub enum AnimationCommand {
     
     /// Command 3: State command to adjust the overall simulation speed.
     SetTimeScale(f32),
+
+    /// State command to enable or disable the animation conductor thread.
+    SetEnabled(bool),
     
     /// Command 4: System command to trigger a graceful shutdown of the Conductor.
     Shutdown,
@@ -76,12 +77,19 @@ pub type CommandResult = Result<(), String>;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AnimationState {
     pub time_scale: f32, // The state field required by the SetTimeScale command
+    // FIX: Added to track the enabled/disabled state, resolving E0599.
+    pub is_enabled: bool,
 }
 
 impl AnimationState {
     /// Implements the required method for the Conductor to update local state.
     pub fn set_time_scale(&mut self, scale: f32) {
         self.time_scale = scale;
+    }
+
+    /// FIX: Implements the required setter for the `AnimationCommand::SetEnabled` command.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.is_enabled = enabled;
     }
 }
 

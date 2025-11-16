@@ -9,7 +9,6 @@ use std::process::{Command, Stdio};
 use tracing::{info, error, warn};
 use std::thread;
 use std::io;
-use std::time::Instant;
 
 // Import utilities from the actions module.
 use super::{

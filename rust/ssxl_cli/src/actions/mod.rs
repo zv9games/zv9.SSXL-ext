@@ -23,14 +23,13 @@ mod test_suites;
 mod test_core_suites;
 
 // --- Public Re-exports from Sibling Crates ---
-// ... (omitted for brevity)
 
 // --- Configuration Constants ---
 
 /// The absolute path to the Godot executable file.
-pub const GODOT_EXE_PATH: &str = "C:/Program Files/Godot_v4.2.1/Godot_v4.2.1-stable_win64.exe"; 
+pub const GODOT_EXE_PATH: &str = "C:/ZV9/zv9.SSXL-ext/SSXL_engine_tester/godot.windows.editor.x86_64.exe"; 
 /// The project-relative path fragment pointing to the GDExtension folder (e.g., `godot_tester_project/gde/`).
-pub const RELATIVE_PROJECT_PATH_FRAGMENT: &str = "godot_tester_project/gde/";
+pub const RELATIVE_PROJECT_PATH_FRAGMENT: &str = "../SSXL_engine_tester/";
 /// The expected file name of the compiled Rust dynamic library (e.g., `ssxl_engine.dll`).
 pub const DLL_NAME: &str = "ssxl_engine.dll";
 /// The project-relative path fragment where the compiled DLL is found (e.g., `target/debug/`).
@@ -93,4 +92,5 @@ pub use test_suites::{
 
 
 /// Exports related to **testing and validation**.
+#[allow(unused_imports)]
 pub use testing::execute_testing_menu;
