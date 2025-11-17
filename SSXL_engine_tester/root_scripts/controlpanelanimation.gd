@@ -16,10 +16,10 @@ func _init(p_controller: Control) -> void:
 ## ANIMATION STATE CONTROL
 
 func on_animate_checkbox_toggled(button_pressed: bool) -> void:
-    """
+	"""
     Updates the controller's local animation state and sends the new mode 
     to the Rust engine via FFI to update its status.
-    """
+	"""
 	controller.is_animated = button_pressed
 	print("⚙️ Animation Toggled: %s" % controller.is_animated)
 	
@@ -33,10 +33,10 @@ func on_animate_checkbox_toggled(button_pressed: bool) -> void:
 
 
 func setup_animation_worker(should_animate: bool) -> void:
-    """
+	"""
     Starts the correct timer (throttled animation or fast engine poll)
     based on the user's animation choice.
-    """
+	"""
 	if should_animate:
 		if is_instance_valid(controller.animation_timer):
 			# Slower tick for visual updates
@@ -56,10 +56,10 @@ func setup_animation_worker(should_animate: bool) -> void:
 ## ⏱️ TIMER HANDLERS (Polling & Animation Loop)
 
 func _on_engine_timer_timeout() -> void:
-    """
+	"""
     Called by the fast (e.g., 0.01s) engine_timer when NOT animating.
     Its primary job is to poll the Rust engine for updates.
-    """
+	"""
 	if not controller.is_generating or not is_instance_valid(controller.ssxl_engine):
 		return
 	
@@ -69,10 +69,10 @@ func _on_engine_timer_timeout() -> void:
 
 
 func _on_animation_timer_timeout() -> void:
-    """
+	"""
     Called by the throttled animation_timer when ANIMATING.
     Processes a batch of tile flips and updates the screen once.
-    """
+	"""
 	if not controller.is_generating:
 		return
 	
@@ -106,7 +106,7 @@ func _on_animation_timer_timeout() -> void:
 ## 💡 TILE FLIP PROCESSING
 
 func process_tile_flip(tile_id: int, flip_frame: int) -> void:
-    """Converts linear tile ID to grid coords and applies the visual flip/frame."""
+	"""Converts linear tile ID to grid coords and applies the visual flip/frame."""
 	if not is_instance_valid(controller.expansive_tilemap) or not is_instance_valid(controller.grid_width):
 		return
 
@@ -125,10 +125,10 @@ func process_tile_flip(tile_id: int, flip_frame: int) -> void:
 
 
 func _on_tile_flip_updated(tile_id: int, flip_frame: int) -> void:
-    """
+	"""
     Signal handler connected to SSXLSignals.
     Queues the incoming tile flip data for processing on the next animation tick.
-    """
+	"""
 	# Only queue updates if the system is running and animation is enabled
 	if not controller.is_animated or not controller.is_generating:
 		return

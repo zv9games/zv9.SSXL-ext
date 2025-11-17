@@ -1,4 +1,5 @@
-//ssxl_generate/src/cellular_automata_generator.rs
+// ssxl_generate/src/cellular_automata_generator.rs
+
 //! Implements a procedural generator based on Cellular Automata (CA) rules.
 //!
 //! This generator is responsible for creating cave systems, mazes, and other
@@ -45,8 +46,7 @@ impl CellularAutomataGenerator {
 // --- 3. Internal Generation Helper Functions ---
 
 /// Generates static, non-simulated patterns (Solid or Checkerboard).
-///
-/// This bypasses the iterative CA steps entirely for simple, fixed designs.
+/// (Static pattern generation is unchanged and remains efficient)
 fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
     let chunk_tile_size = CHUNK_SIZE as i64;
     
@@ -71,7 +71,9 @@ fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
     };
     
     let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
-    let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+    // Since chunk_data.tiles is a fixed-size array, we must fill a temporary Vec
+    // and let ChunkData::insert_tiles handle the conversion/copy.
+    let mut tiles_vec = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
 
     for y in 0..CHUNK_SIZE {
         for x in 0..CHUNK_SIZE {
@@ -87,44 +89,61 @@ fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
                 }
                 _ => TileType::Void, // Should not be reached, but defaults to Void
             };
-            tiles.push(TileData::new(tile_type, 0.0));
+            tiles_vec.push(TileData::new(tile_type, 0.0));
         }
     }
 
-    chunk_data.insert_tiles(tiles);
+    chunk_data.insert_tiles(tiles_vec);
     info!("CA Generator: Finished static chunk at {:?}.", chunk_coords);
     chunk_data
 }
 
-/// Applies one iteration (step) of the Cellular Automata simulation.
+/// **OPTIMIZED:** Runs the full Cellular Automata simulation using double-buffering.
 ///
-/// This involves creating a copy of the tile array to prevent changes in the current
-/// iteration from affecting neighbor counts for subsequent tiles in the same iteration.
-fn apply_ca_step(chunk_data: &mut ChunkData, ruleset: u8) {
-    // Clone the current state to calculate the *next* state without self-interference.
-    let mut new_tiles: Vec<TileData> = chunk_data.tiles.iter().cloned().collect();
+/// This function allocates the `target_tiles` array only once by cloning the initial state.
+/// **FIXED:** Corrected array handling using `[TileData; N]` for zero-cost `std::mem::swap` in the loop.
+fn run_ca_simulation(mut chunk_data: ChunkData, ruleset: u8) -> ChunkData {
+    // 1. The initial state is in `chunk_data.tiles` (Source buffer). 
+    // Create the second buffer (Target) by cloning the array once.
+    let mut target_tiles = chunk_data.tiles.clone();
+    
+    // `chunk_data.tiles` is the Source (Read), `target_tiles` is the Target (Write).
 
-    for x in 0..CHUNK_SIZE {
+    for i in 0..CA_ITERATIONS {
+        // Core loop: Read from `chunk_data.tiles` (Source), write to `target_tiles` (Target).
         for y in 0..CHUNK_SIZE {
-            let index = (y * CHUNK_SIZE + x) as usize;
-            let current_tile = &chunk_data.tiles[index];
-            
-            // 1. Check Neighbors (Delegated to specialized module)
-            let live_neighbors = count_live_neighbors(chunk_data, x as u32, y as u32);
+            for x in 0..CHUNK_SIZE {
+                let index = (y * CHUNK_SIZE + x) as usize;
+                
+                // Read current tile properties from the source array
+                let current_tile = &chunk_data.tiles[index];
+                
+                // 1. Check Neighbors: reads from the current state within `&chunk_data`.
+                let live_neighbors = count_live_neighbors(&chunk_data, x, y);
 
-            // 2. Apply Rule Set (Delegated to specialized module)
-            let new_type = get_next_tile_type(
-                current_tile.tile_type,
-                live_neighbors,
-                ruleset
-            );
+                // 2. Apply Rule Set
+                let new_type = get_next_tile_type(
+                    current_tile.tile_type,
+                    live_neighbors,
+                    ruleset
+                );
 
-            // 3. Update the new tile state, preserving the original noise value (if any).
-            new_tiles[index] = TileData::new(new_type, current_tile.noise_value);
+                // 3. Update the new tile state in the TARGET buffer.
+                // We preserve the noise value from the previous step.
+                target_tiles[index] = TileData::new(new_type, current_tile.noise_value);
+            }
         }
+        
+        // EFFICIENT SWAP: Exchange the contents of the two arrays. O(1) pointer swap.
+        // `chunk_data.tiles` now holds the new state (Source for next iteration).
+        // `target_tiles` now holds the stale state (Target for next iteration).
+        std::mem::swap(&mut chunk_data.tiles, &mut target_tiles);
+        
+        info!("CA Generator: Iteration {} complete.", i + 1);
     }
-    // Swap the updated tile array back into the ChunkData.
-    chunk_data.insert_tiles(new_tiles);
+    
+    // The final result is in `chunk_data.tiles`.
+    chunk_data
 }
 
 // --- 4. Trait Implementation (Generator API) ---
@@ -151,10 +170,8 @@ impl Generator for CellularAutomataGenerator {
         }
 
         // --- Seeding for Determinism (Crypto Coded Memory) ---
-        // Creates a unique, deterministic seed based on the chunk coordinates.
         let seed_x = chunk_coords.x as u64;
         let seed_y = chunk_coords.y as u64;
-        // Use a large prime number for mixing (0x9e3779b97f4a7c15 is the golden ratio approximation)
         let seed = seed_x.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(seed_y);
         fastrand::seed(seed);
         info!("CA Generator: Seeded PRNG with deterministic value: {}.", seed);
@@ -175,7 +192,8 @@ impl Generator for CellularAutomataGenerator {
         let dimension_name = self.id().to_string();
 
         let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
-        let mut tiles = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+        // Use a temporary Vec to build the initial randomized state
+        let mut tiles_vec = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
 
         // Initial randomization based on INITIAL_FILL_PERCENT
         for _ in 0..(CHUNK_SIZE * CHUNK_SIZE) {
@@ -187,17 +205,16 @@ impl Generator for CellularAutomataGenerator {
             } else {
                 TileType::Void
             };
-            tiles.push(TileData::new(tile_type, 0.0));
+            // Noise value is typically unused in base CA but kept for data integrity
+            tiles_vec.push(TileData::new(tile_type, 0.0));
         }
-        chunk_data.insert_tiles(tiles);
+        // Insert the initial state, which copies the data into the internal fixed-size array.
+        chunk_data.insert_tiles(tiles_vec); 
 
-        // --- Simulation Iterations ---
-        for i in 0..CA_ITERATIONS {
-            apply_ca_step(&mut chunk_data, self.ruleset);
-            info!("CA Generator: Iteration {} complete.", i + 1);
-        }
+        // --- Simulation Iterations (Refactored to single, optimized call) ---
+        let final_chunk_data = run_ca_simulation(chunk_data, self.ruleset);
 
         warn!("CA Generator: Finished chunk at {:?}. Result is ready.", chunk_coords);
-        chunk_data
+        final_chunk_data
     }
 }

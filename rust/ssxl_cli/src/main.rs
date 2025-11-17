@@ -82,7 +82,7 @@ fn main() {
                  (oo)
            /------\/
           / |    ||
-          * ||----||
+         * ||----||
             ~~    ~~
 SSXL-ext Engine Console Initialized
 "#

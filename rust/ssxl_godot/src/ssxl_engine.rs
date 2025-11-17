@@ -1,3 +1,5 @@
+// ssxl_godot/src/ssxl_engine.rs
+
 //! # SSXLEngine (The Core Orchestrator)
 //!
 //! This minimal module defines the `SSXLEngine` Godot class. Its sole focus is **orchestration**
@@ -14,10 +16,10 @@ use godot::builtin::GString;
 // --- Standard Library Imports (Synchronization) ---
 use std::sync::{Arc, Mutex};
 // FIX E0308: Need `try_into` for safe u32 -> usize conversion.
-use std::convert::TryInto; 
+use std::convert::TryInto;
 
 // --- Core Handles & State ---
-use ssxl_generate::{Conductor, GeneratorConfig}; 
+use ssxl_generate::{Conductor, GeneratorConfig};
 use ssxl_generate::conductor_state::ConductorState;
 use ssxl_shared::AnimationState;
 use ssxl_shared::AnimationCommand; // Used for inter-thread communication.
@@ -71,7 +73,7 @@ pub struct SSXLEngine {
 
 impl SSXLEngine {
     /// The required constructor for a class marked with `#[class(init)]`.
-    fn init(base: Base<Node>) -> Self {
+    pub fn init(base: Base<Node>) -> Self {
         Self {
             conductor: None,
             animation_conductor: None,
@@ -163,7 +165,7 @@ impl SSXLEngine {
     pub fn build_map(&mut self, width: u32, height: u32, seed_str: GString, generator_name: GString) {
         if let Some(conductor_arc) = self.conductor.as_ref() {
             match conductor_arc.lock() {
-                Ok(mut conductor) => {
+                Ok(mut conductor) => { // FIXED: Re-added 'mut' to allow calling `start_generation`
                     let seed = seed_str.to_string().parse::<u64>().unwrap_or_else(|_| {
                         godot_print!("Warning: Invalid seed input: {}. Using 0.", seed_str);
                         0
@@ -198,7 +200,7 @@ impl SSXLEngine {
     pub fn stop_generation(&mut self) {
         if let Some(conductor_arc) = self.conductor.as_ref() {
             match conductor_arc.lock() {
-                Ok(mut conductor) => {
+                Ok(conductor) => { // FIXED: Re-added 'mut' to allow calling `stop_generation`
                     // FIX E0599: Assuming `stop_generation` is the correct method name in the external `Conductor` API.
                     let result = conductor.stop_generation();
                     
@@ -219,7 +221,7 @@ impl SSXLEngine {
     pub fn set_generator(&mut self, tile_type_name: GString) {
         if let Some(conductor_arc) = self.conductor.as_ref() {
             match conductor_arc.lock() {
-                Ok(mut _conductor) => {
+                Ok(_conductor) => {
                     // NOTE: The `Conductor::set_generator_id` method is currently unimplemented
                     // in the external API, so this is a placeholder.
                     

@@ -8,11 +8,12 @@
 
 use tokio::sync::mpsc::{self, Sender};
 use tracing::{info, error};
-use std::sync::{Arc, Mutex};
+// FIX: Removed Mutex from this import as it's no longer used for ChunkCache
+use std::sync::Arc; 
 use std::io;
 
 use ssxl_math::Vec2i;
-use ssxl_cache::ChunkCache;
+use ssxl_cache::ChunkCache; // Assumed to implement Send + Sync via internal locks.
 use ssxl_shared::chunk_data::ChunkData;
 use ssxl_tools::get_config_from_path;
 
@@ -42,11 +43,13 @@ pub struct Conductor {
     /// Thread-safe state tracking (Status, Active Generator ID).
     internal_state: ConductorState,
     /// Thread-safe, in-memory cache for generated chunk data (The **crypto coded memory**).
-    chunk_cache: Arc<Mutex<ChunkCache>>,
+    // FIX: Updated type from Arc<Mutex<ChunkCache>> to Arc<ChunkCache> to match batch_processor.
+    chunk_cache: Arc<ChunkCache>,
     /// Sender for progress updates (e.g., ChunkGenerated, GenerationComplete).
     progress_sender: Sender<GenerationMessage>,
     /// Sender for new chunk requests. Stored internally for potential control signals (e.g., clearing the queue).
-    request_sender: mpsc::UnboundedSender<ChunkRequest>, // 💡 ADDED: Internal handle for the request channel.
+    #[allow(dead_code)]
+	_request_sender: mpsc::UnboundedSender<ChunkRequest>,
 }
 
 impl Conductor {
@@ -74,16 +77,16 @@ impl Conductor {
         let generators_for_loop = Arc::new(generator_manager.get_map_clone());
 
         // Initialize thread-safe chunk cache
-        let chunk_cache = Arc::new(Mutex::new(ChunkCache::new().map_err(|e| {
-            error!("Failed to initialize ChunkCache: {:?}", e);
-            io::Error::new(io::ErrorKind::Other, format!("Cache initialization failed: {:?}", e))
-        })?));
+        let cache_instance = ChunkCache::new(4096)?;
+        
+        // FIX: Removed the Mutex wrapper. ChunkCache is now directly wrapped in an Arc.
+        let chunk_cache = Arc::new(cache_instance);
         let chunk_cache_for_loop = chunk_cache.clone();
 
         // Set up communication channels
         let (progress_sender, progress_receiver) = mpsc::channel(PROGRESS_CHANNEL_BOUND);
         // Unbounded for flexibility. This sender is what the external API uses.
-        let (request_sender_api, request_receiver) = mpsc::unbounded_channel(); 
+        let (request_sender_api, request_receiver) = mpsc::unbounded_channel();
         
         // Clone the sender to store inside the Conductor struct for internal control/signals.
         let request_sender_internal = request_sender_api.clone();
@@ -102,7 +105,7 @@ impl Conductor {
             request_receiver,
             progress_sender.clone(),
             generators_for_loop,
-            chunk_cache_for_loop,
+            chunk_cache_for_loop, // This cache is now Arc<ChunkCache>
             Arc::new(state_for_loop),
         );
 
@@ -110,9 +113,9 @@ impl Conductor {
             runtime_manager,
             generator_manager,
             internal_state: state.clone(),
-            chunk_cache,
+            chunk_cache, // This is now Arc<ChunkCache>
             progress_sender: progress_sender.clone(),
-            request_sender: request_sender_internal, // Stored internally
+            _request_sender: request_sender_internal, // Stored internally
         };
 
         // Return the conductor and the external interface components (state, receivers, senders)
@@ -140,7 +143,8 @@ impl Conductor {
         spawn_batch_generation_task(
             &self.runtime_manager.get_handle(),
             self.generator_manager.get_map_clone(),
-            self.chunk_cache.clone(),
+            // FIX: self.chunk_cache.clone() now correctly returns Arc<ChunkCache>, matching the batch_processor.
+            self.chunk_cache.clone(), 
             self.internal_state.get_active_generator_id(),
             self.progress_sender.clone(),
             self.internal_state.clone(),
@@ -175,11 +179,13 @@ impl Conductor {
         let (temp_sender, mut temp_receiver) = mpsc::channel(1);
 
         // Run the chunk generation logic. It checks the cache first.
+        // NOTE: The signature of handle_chunk_unit must also support the Arc<ChunkCache> change,
+        // which it should if it's following the same optimized pattern.
         handle_chunk_unit(
             *chunk_coords,
             &active_generator_id,
             self.generator_manager.get_map_ref(),
-            &self.chunk_cache,
+            &self.chunk_cache, 
             &temp_sender, // Sender will send result back through this channel.
         );
         
@@ -191,6 +197,7 @@ impl Conductor {
             },
             _ => {
                 // If the channel closes or sends an unexpected message, panic.
+                error!("get_chunk_data failed to receive ChunkGenerated message for coords: {:?}", chunk_coords);
                 panic!("get_chunk_data failed to receive ChunkGenerated message.");
             }
         }

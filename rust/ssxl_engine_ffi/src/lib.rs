@@ -6,9 +6,10 @@
 //! GDExtension), allowing them to start, stop, and query the SSXL procedural generation
 //! runtime, which is managed by the thread-safe `Conductor` singleton.
 
-use std::ffi::CString;
+// REMOVED: use std::ffi::CString; // FIX: Unused import removed (no longer needed for ssxl_get_status pattern)
+use std::os::raw::c_char; // FIX: c_void removed as it is not used in public FFI signatures.
 use std::sync::OnceLock;
-use std::os::raw::c_char; // Explicitly import c_char for FFI clarity
+// FIX: Removed the redundant import 'use std::os::raw::c_char;' (and the non-breaking space).
 
 use ssxl_generate::{Conductor, start_runtime_placeholder};
 use ssxl_shared::initialize_shared_data;
@@ -101,46 +102,53 @@ pub extern "C" fn ssxl_trigger_runtime_test() {
     info!("FFI Bridge: Conductor test sequence complete.");
 }
 
-/// Retrieves a formatted status string from the engine.
+/// **[NEW SAFE FUNCTION]** Writes a formatted status string directly into a C-owned buffer.
+///
+/// This eliminates the memory leak risk by having the calling environment (Godot)
+/// allocate and own the memory, removing the need for an explicit Rust deallocation FFI call.
 ///
 /// # Safety/FFI Contract
-/// The calling environment is responsible for calling `ssxl_free_string` on the
-/// returned raw pointer to prevent a memory leak, as the string is allocated
-/// on the Rust heap.
+/// 1. The caller must ensure `buffer` is a valid, non-null pointer.
+/// 2. The caller must ensure `buffer_len` accurately reflects the allocated size.
+///
+/// # Arguments
+/// * `buffer`: A pointer to the C-allocated buffer where the string will be written.
+/// * `buffer_len`: The maximum size (in bytes) of the buffer.
+/// * `id`: A simple identifier for the status query.
 ///
 /// # Returns
-/// A raw C-style string pointer (`*mut c_char`).
+/// The number of bytes written to the buffer (excluding the null terminator),
+/// or a negative value (`-1`) on failure (e.g., null buffer).
 #[no_mangle]
-pub extern "C" fn ssxl_get_status(id: u32) -> *mut c_char {
+pub extern "C" fn ssxl_write_status(
+    buffer: *mut c_char,
+    buffer_len: usize,
+    id: u32,
+) -> isize {
     let status = format!(
         "Engine status for id {}: Runtime Running: {}",
         id,
         CONDUCTOR.get().is_some()
     );
-    match CString::new(status) {
-        // Consume the CString, transferring ownership of the raw pointer to C.
-        Ok(c_string) => c_string.into_raw(),
-        // Return a safe error string on failure (e.g., status contained a null byte).
-        Err(_) => CString::new("Error: Invalid Status String").unwrap().into_raw(),
+
+    // Critical safety checks before touching the raw pointer
+    if buffer.is_null() || buffer_len == 0 {
+        return -1;
     }
+
+    let bytes = status.as_bytes();
+    // Calculate the maximum number of bytes we can copy, leaving 1 for the null terminator.
+    let write_len = bytes.len().min(buffer_len.saturating_sub(1));
+
+    unsafe {
+        // 1. Copy the status bytes into the C-owned memory.
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, write_len);
+        // 2. CRITICAL: Null-terminate the string for C/GDScript compatibility.
+        *buffer.add(write_len) = 0;
+    }
+
+    write_len as isize
 }
 
-/// Frees a string pointer that was allocated by Rust and passed to C.
-///
-/// This function fulfills the FFI memory contract. It takes ownership of the
-/// raw pointer and reconstructs the CString, which then frees the memory
-/// when it goes out of scope.
-///
-/// # Safety
-/// The caller must ensure that `s` is a valid pointer that was originally
-/// returned by a Rust FFI function (like `ssxl_get_status`).
-#[no_mangle]
-pub extern "C" fn ssxl_free_string(s: *mut c_char) {
-    unsafe {
-        // Check for null pointer defensively.
-        if s.is_null() { return }
-        // Reconstruct CString from the raw pointer, taking ownership.
-        // When `_` drops, the memory is safely deallocated.
-        let _ = CString::from_raw(s);
-    }
-}
+// **[REMOVED]** ssxl_get_status (Used CString::into_raw(), requiring external free)
+// **[REMOVED]** ssxl_free_string (The required cleanup function for ssxl_get_status)

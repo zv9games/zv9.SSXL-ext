@@ -7,7 +7,8 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, error, warn};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+// FIX: Removed Mutex import. Arc is sufficient, as ChunkCache handles its own locking.
+use std::sync::Arc; 
 
 use glam::I64Vec3;
 use ssxl_math::{Vec2i, prelude::ChunkKey};
@@ -42,51 +43,45 @@ pub fn handle_chunk_unit(
     chunk_coords: Vec2i,
     generator_name: &str,
     generators: &HashMap<String, Arc<DynGenerator>>,
-    chunk_cache: &Arc<Mutex<ChunkCache>>,
+    // CRITICAL FIX: Changed from &Arc<Mutex<ChunkCache>> to &Arc<ChunkCache>.
+    // We rely on ChunkCache's internal AtomicResource for thread-safe concurrent access.
+    chunk_cache: &Arc<ChunkCache>,
     progress_sender: &mpsc::Sender<GenerationMessage>,
 ) {
     let key_vec3 = I64Vec3::new(chunk_coords.x, chunk_coords.y, 0);
     let chunk_key = ChunkKey(key_vec3);
     let chunk_data: ChunkData;
+    
+    // We now interact directly with the ChunkCache which manages its internal lock (RwLock/AtomicResource).
+    // This removes the redundant and bottlenecking Mutex::lock() call.
 
-    // Attempt to acquire the lock for the chunk cache
-    match chunk_cache.lock() {
-        Ok(cache_lock) => { // <-- REMOVED `mut` HERE
-            // 1. Check Cache (Crypto-coded memory)
-            match cache_lock.load_chunk(&chunk_key) {
-                Ok(Some(data)) => {
-                    info!("Chunk Unit: Retrieved chunk {:?} from cache (Gen: {}).", chunk_coords, generator_name);
-                    chunk_data = data;
-                },
-                Ok(None) => {
-                    // 2. Generate if Cache Miss
-                    info!("Chunk Unit: Chunk {:?} not found in cache. Generating with {}.", chunk_coords, generator_name);
-                    let generator_arc = generators
-                        .get(generator_name)
-                        .expect("Generator ID must be registered in Conductor.");
-                    
-                    chunk_data = generator_arc.generate_chunk(chunk_coords);
-                    
-                    // 3. Save to Cache
-                    if let Err(e) = cache_lock.save_chunk(&chunk_key, &chunk_data) {
-                        error!("Chunk Unit: Failed to save chunk {:?} to cache: {:?}", chunk_coords, e);
-                    } else {
-                        info!("Chunk Unit: Saved chunk {:?} to cache.", chunk_coords);
-                    }
-                },
-                Err(e) => {
-                    // Cache system error, generate without caching
-                    warn!("Chunk Unit: Cache load failed for {:?}: {:?}. Falling back to generation without caching.", chunk_coords, e);
-                    let generator_arc = generators
-                        .get(generator_name)
-                        .expect("Generator ID must be registered in Conductor.");
-                    chunk_data = generator_arc.generate_chunk(chunk_coords);
-                }
+    // 1. Check Cache (Crypto-coded memory)
+    match chunk_cache.load_chunk(&chunk_key) {
+        Ok(Some(data)) => {
+            info!("Chunk Unit: Retrieved chunk {:?} from cache (Gen: {}).", chunk_coords, generator_name);
+            // 'data' is Arc<ChunkData>, 'chunk_data' is ChunkData.
+            chunk_data = (*data).clone();
+        },
+        Ok(None) => {
+            // 2. Generate if Cache Miss
+            info!("Chunk Unit: Chunk {:?} not found in cache. Generating with {}.", chunk_coords, generator_name);
+            let generator_arc = generators
+                .get(generator_name)
+                .expect("Generator ID must be registered in Conductor.");
+            
+            chunk_data = generator_arc.generate_chunk(chunk_coords);
+            
+            // 3. Save to Cache
+            // ChunkCache::save_chunk expects Arc<ChunkData>.
+            if let Err(e) = chunk_cache.save_chunk(&chunk_key, Arc::new(chunk_data.clone())) {
+                error!("Chunk Unit: Failed to save chunk {:?} to cache: {:?}", chunk_coords, e);
+            } else {
+                info!("Chunk Unit: Saved chunk {:?} to cache.", chunk_coords);
             }
         },
         Err(e) => {
-            // Cache Mutex Poisoned: Indicates a critical, unrecoverable state. Generate without caching.
-            error!("Chunk Unit: Cache Mutex poisoned: {}. Falling back to generation without caching.", e);
+            // Cache system error (e.g., I/O or internal AtomicResource error), generate without caching.
+            warn!("Chunk Unit: Cache access failed for {:?}: {:?}. Falling back to generation without caching.", chunk_coords, e);
             let generator_arc = generators
                 .get(generator_name)
                 .expect("Generator ID must be registered in Conductor.");
@@ -118,7 +113,8 @@ pub fn start_request_loop(
     mut request_rx: mpsc::UnboundedReceiver<GenerationTask>,
     progress_tx: mpsc::Sender<GenerationMessage>,
     generators: Arc<HashMap<String, Arc<DynGenerator>>>,
-    chunk_cache: Arc<Mutex<ChunkCache>>,
+    // FIX: Changed from Arc<Mutex<ChunkCache>> to Arc<ChunkCache> to align with Conductor/batch_processor.
+    chunk_cache: Arc<ChunkCache>,
     conductor_state: Arc<ConductorState>,
 ) {
     rt_handle.spawn(async move {
@@ -129,7 +125,7 @@ pub fn start_request_loop(
             // Check Conductor State (Pause/Shutdown)
             if !conductor_state.as_ref().is_active() { 
                 warn!("Request received while Conductor is paused or shutting down. Dropping task: {:?}", task.chunk_coords);
-                // Decrement queue depth is omitted here as it's assumed to be handled by the caller/request loop logic elsewhere.
+                // Note: Task queue depth management (if any) is assumed to happen externally or based on the drop.
                 continue;
             }
 
@@ -144,7 +140,7 @@ pub fn start_request_loop(
                     task.chunk_coords,
                     &task.generator_id,
                     &generators_clone,
-                    &chunk_cache_clone,
+                    &chunk_cache_clone, // Now the correct Arc<ChunkCache> type
                     &progress_tx_clone,
                 );
             });
@@ -152,7 +148,7 @@ pub fn start_request_loop(
         
         // Loop exited (sender was dropped), signifying engine shutdown.
         info!("Generation Task Queue shutting down.");
-        // FIX: Replaced illegal blocking call with the correct asynchronous send.
+        // FIX: Ensure the final message is sent asynchronously.
         if progress_tx.send(GenerationMessage::GenerationComplete).await.is_err() { 
             error!("Failed to send final GenerationComplete message.");
         }

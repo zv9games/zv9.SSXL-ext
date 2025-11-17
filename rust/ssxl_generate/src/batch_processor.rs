@@ -1,22 +1,22 @@
 // ssxl_generate/src/batch_processor.rs
-
 //! Logic for executing large, synchronous batches of chunk generation requests.
 //!
 //! This module coordinates the parallel generation of a defined rectangular area of the
-//! world map. It uses the Tokio runtime to manage the task execution and the Rayon
-//! crate for CPU-bound, fine-grained parallelism across available threads, ensuring
-//! high-speed completion of generation tasks.
+//! world map. It utilizes the Tokio runtime's `spawn_blocking` to safely move
+//! the CPU-intensive work off the async executor, and the Rayon crate for CPU-bound,
+//! fine-grained parallelism across available threads, ensuring high-speed completion
+//! of generation tasks.
 
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::Sender;
 use tracing::info;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc; // CRITICAL FIX: Removed Mutex import.
 
-use rayon::prelude::*; // Key library for parallel iteration
+use rayon::prelude::*;
 
 use ssxl_math::Vec2i;
-use ssxl_cache::ChunkCache;
+use ssxl_cache::ChunkCache; // Assumed to be thread-safe (Send + Sync) via internal locking.
 
 use crate::config_validator::GeneratorConfig;
 use crate::task_queue::{handle_chunk_unit, GenerationMessage, CHUNK_SIZE};
@@ -31,7 +31,8 @@ use crate::generator_manager::DynGenerator;
 /// # Arguments
 /// * `runtime_handle`: The handle to the Tokio runtime's executor.
 /// * `generators_clone`: Map of all registered generators for selection.
-/// * `chunk_cache_clone`: Thread-safe cache for reading/writing generated data.
+/// * `chunk_cache_clone`: **(FIXED)** The thread-safe cache, shared via Arc. It relies on its
+///   internal locking to allow high-speed concurrent read/write operations from Rayon workers.
 /// * `active_generator_id`: Identifier of the generator to use for this batch.
 /// * `progress_sender_clone`: Channel sender for sending completion/progress messages back to Conductor.
 /// * `internal_state_clone`: A copy of the Conductor's shared state (used for queue depth tracking).
@@ -39,7 +40,10 @@ use crate::generator_manager::DynGenerator;
 pub fn spawn_batch_generation_task(
     runtime_handle: &Handle,
     generators_clone: HashMap<String, Arc<DynGenerator>>,
-    chunk_cache_clone: Arc<Mutex<ChunkCache>>,
+    // CRITICAL FIX: We changed the type from Arc<Mutex<ChunkCache>> to Arc<ChunkCache>.
+    // This allows Rayon's parallel workers to use the cache's concurrent access 
+    // mechanism (like RwLock or AtomicResource) instead of fighting over a single Mutex.
+    chunk_cache_clone: Arc<ChunkCache>,
     active_generator_id: String,
     progress_sender_clone: Sender<GenerationMessage>,
     internal_state_clone: ConductorState,
@@ -72,7 +76,7 @@ pub fn spawn_batch_generation_task(
         
         // Added check for 0x0 map request, although likely prevented by ConfigValidator.
         if all_chunk_coords.is_empty() {
-             info!("Batch generation task received a map size of 0x0 chunks. Task finished immediately.");
+             info!("Batch generation task received a map size of 0x0 chunks. Task finished immediately. Config: {}", config_clone);
         }
 
 
@@ -86,7 +90,8 @@ pub fn spawn_batch_generation_task(
                     chunk_coords,
                     &active_generator_id,
                     &generators_clone,
-                    &chunk_cache_clone,
+                    // The Arc reference is passed directly to the worker function.
+                    &chunk_cache_clone, 
                     &progress_sender_clone,
                 );
             });

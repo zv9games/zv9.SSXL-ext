@@ -9,10 +9,10 @@ use godot::prelude::*;
 use godot::classes::Node;
 // Use our custom class for typed batch call
 use crate::ssxl_tilemap::SSXLTileMap;
-use godot::builtin::{Variant, GString, Vector2i, Callable, Array, Dictionary};
+use godot::builtin::{Variant, Vector2i, Callable, Array, Dictionary};
 use godot::obj::{Gd, Base};
 use godot::meta::{
-    GodotConvert, ToGodot, FromGodot, ArgPassing
+    GodotConvert, ToGodot, FromGodot, ByValue // CLEANUP: Removed unused ArgPassing, AsArg
 };
 use godot::meta::error::ConvertError;
 // --- SSXL-ext Shared Crates Imports ---
@@ -28,53 +28,57 @@ use tracing::{error, info};
 // Godot Conversion Wrapper for ChunkMessage
 // -----------------------------------------------------------------------------
 
-/// Wrapper struct required to implement `GodotConvert` for `ChunkMessage`,
-/// using JSON-serialized `GString` as the intermediate type.
+/// Wrapper struct required to implement `GodotConvert` for `ChunkMessage`.
+///
+/// FIX & OPTIMIZATION: Uses fast binary serialization (`serde` bytes) into a
+/// Godot `PackedByteArray` (via `Variant`) for safe, high-performance,
+/// multi-threaded transfer across the FFI boundary.
 struct ChunkMessageWrapper(ChunkMessage);
 
-// Declares that the struct should be converted using `GString` as the intermediate type.
+// Declares that the struct should be converted using `Variant` as the intermediate type.
 impl GodotConvert for ChunkMessageWrapper {
-    type Via = GString;
+    type Via = Variant;
 }
 
-// Implements conversion from the Rust struct into a Godot GString/Variant using memory leak/transmutation for `to_godot_pass`.
+// Implements conversion from the Rust struct into a PackedByteArray Variant.
 impl ToGodot for ChunkMessageWrapper {
-    type Pass = <GString as ToGodot>::Pass;
+    // DEFINITIVE FIX (E0107): ByValue does not take a generic argument.
+    // This allows the owned Variant to be transferred across the FFI boundary safely.
+    type Pass = ByValue; 
 
-    #[allow(unsafe_code)] // Allowing unsafe for the FFI bridge memory management
-    fn to_godot(&self) -> <Self::Pass as ArgPassing>::Output<'_, Self::Via> {
-        let json_string = match serde_json::to_string(&self.0) {
-            Ok(s) => s,
+    fn to_godot(&self) -> Variant { // The return type must match Self::Via (Variant)
+        // OPTIMIZATION: Serialize ChunkMessage to a binary Vec<u8>.
+        let bytes = match serde_json::to_vec(&self.0) {
+            Ok(b) => b,
             Err(e) => {
-                error!("Failed to serialize ChunkMessage to JSON: {:?}", e);
-                String::new()
+                error!("Failed to serialize ChunkMessage to binary: {:?}", e);
+                // Return the owned nil Variant directly.
+                return godot::prelude::Variant::nil();
             }
         };
 
-        let gstring = GString::from(json_string.as_str());
-
-        // FIX (E0515): Use a controlled `unsafe` block to manually perform the memory leak
-        // and safely transmute the lifetime of the resulting FFI pointer.
-        let output_leaked = unsafe {
-            let output = gstring.to_godot();
-            // Transmute the output's lifetime to the required return type.
-            let output_leaked: <Self::Pass as ArgPassing>::Output<'_, Self::Via> = std::mem::transmute(output);
-            // Leak the GString memory, guaranteeing the memory is valid for the pointer/reference returned.
-            std::mem::forget(gstring);
-
-            output_leaked
-        };
-        output_leaked
+        // LIFETIME FIX (E0515): Wrap the binary data in a native Godot PackedByteArray
+        // and return the owned Variant derived from it.
+        let packed_array = godot::builtin::PackedByteArray::from(bytes.as_slice());
+        
+        packed_array.to_variant() // Returns the owned Variant, safely transferring ownership.
     }
 }
 
-// Implements conversion from a Godot GString/Variant back into the Rust struct.
+// Implements conversion from a Godot Variant (containing PackedByteArray) back into the Rust struct.
 impl FromGodot for ChunkMessageWrapper {
     fn try_from_godot(value: Self::Via) -> Result<Self, ConvertError> {
-        let json_string = value.to_string();
-        let msg: ChunkMessage = serde_json::from_str(&json_string)
-            // FIX: ConvertError::new() for custom errors
-            .map_err(|e| ConvertError::new(format!("Failed to deserialize ChunkMessage from JSON: {}", e)))?;
+        // 1. Extract the PackedByteArray from the Variant.
+        let packed_array = value.try_to::<godot::builtin::PackedByteArray>()
+             .map_err(|e| ConvertError::new(format!("Variant conversion failed while extracting PackedByteArray: {}", e)))?;
+        
+        // 2. Convert the PackedByteArray to a Rust Vec<u8> slice.
+        let bytes = packed_array.to_vec();
+        
+        // 3. Deserialize the binary data back into the ChunkMessage struct.
+        let msg: ChunkMessage = serde_json::from_slice(&bytes)
+             .map_err(|e| ConvertError::new(format!("Failed to deserialize ChunkMessage from binary: {}", e)))?;
+             
         Ok(ChunkMessageWrapper(msg))
     }
 }
@@ -254,9 +258,6 @@ impl ChunkPresenter {
         );
 
         // 2. Call the C++-backed function on the SSXLTileMap using a typed method call.
-        // NOTE: This call relies on the custom `batch_set_tiles_v4` method being defined
-        // in the implementation of `SSXLTileMap` (likely in an implementation block
-        // not included here, or directly in the GDExtension C++ code).
         tile_map.bind_mut().batch_set_tiles_v4(batch_data);
 
         Ok(())
