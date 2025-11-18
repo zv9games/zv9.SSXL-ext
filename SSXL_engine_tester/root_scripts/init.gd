@@ -18,11 +18,11 @@ func initialize():
 		push_error("❌ Init: AetherionTester node not found. No one to receive the scroll.")
 		return
 
-	print("\n📜 Init: Scroll prepared. Delivering to AetherionTester...")
+	print("\n📜 Init: Scroll prepared. Delivering to SSXLTester...")
 	tester.call("report_initialized", initialized_nodes)
 
 func _recursive_initialize(node: Node) -> void:
-	print("✨ Init: Blessing node → %s" % node.name)
+	#print("✨ Init: Blessing node → %s" % node.name)
 	initialized_nodes.append(node)
 
 	for child in node.get_children():

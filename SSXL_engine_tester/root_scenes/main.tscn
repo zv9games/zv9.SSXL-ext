@@ -1,12 +1,9 @@
-[gd_scene load_steps=23 format=3 uid="uid://d330x0xxio1qa"]
+[gd_scene load_steps=20 format=3 uid="uid://d330x0xxio1qa"]
 
 [ext_resource type="Script" uid="uid://dkplcbu18pnn0" path="res://root_scripts/root.gd" id="1_3lhfi"]
-[ext_resource type="Script" uid="uid://bcht0rdvkoh5t" path="res://root_scripts/main.gd" id="2_kvte3"]
+[ext_resource type="Script" uid="uid://bcht0rdvkoh5t" path="res://root_scripts/main.gd" id="2_al6xd"]
 [ext_resource type="Texture2D" uid="uid://br3p6qgx6sdpw" path="res://Tileset_atlas_final.png" id="2_y374o"]
-[ext_resource type="Script" uid="uid://6nvbnwjrmqf1" path="res://root_scripts/engine_monitor.gd" id="3_6byaw"]
-[ext_resource type="Script" uid="uid://h0raajy2xukh" path="res://root_scripts/control_panel.gd" id="4_3lhfi"]
 [ext_resource type="TileSet" uid="uid://b6ts3mi2pbpvq" path="res://pacman_tilemap.tres" id="4_al6xd"]
-[ext_resource type="Script" uid="uid://bq063osd4j4ja" path="res://root_scripts/cameras.gd" id="5_6byaw"]
 [ext_resource type="Script" uid="uid://5tkm04wdelm8" path="res://root_scripts/init.gd" id="6_ragr5"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_6byaw"]
@@ -312,23 +309,19 @@ font_size = 31
 [node name="ssxltester" type="Node2D" unique_id=558443893]
 script = ExtResource("1_3lhfi")
 
+[node name="SSXLOracle" type="SSXLOracle" parent="." unique_id=1002686766]
+
+[node name="SSXLEngine" type="SSXLEngine" parent="." unique_id=226071327]
+
+[node name="SSXLSignals" type="SSXLSignals" parent="." unique_id=2056556777]
+
 [node name="main" type="Node2D" parent="." unique_id=1448517819]
-script = ExtResource("2_kvte3")
-
-[node name="SSXLOracle" type="SSXLOracle" parent="main" unique_id=1002686766]
-
-[node name="SSXLEngine" type="SSXLEngine" parent="main" unique_id=226071327]
-
-[node name="SSXLSignals" type="SSXLSignals" parent="main" unique_id=2056556777]
+script = ExtResource("2_al6xd")
 
 [node name="EngineMonitor" type="Node" parent="main" unique_id=127311770]
-script = ExtResource("3_6byaw")
 
-[node name="SSXLTileMap" type="SSXLTileMap" parent="main" unique_id=435879159]
-
-[node name="expansive_tilemap" type="TileMap" parent="main" unique_id=2009454713]
+[node name="expansive_tilemap" type="SSXLTileMap" parent="main" unique_id=1097742010]
 tile_set = SubResource("TileSet_ragr5")
-format = 2
 
 [node name="tilemap" type="TileMap" parent="main" unique_id=684119106]
 tile_set = ExtResource("4_al6xd")
@@ -350,7 +343,6 @@ text = "SYSTEM"
 [node name="controlpanel" type="Control" parent="main" unique_id=220153243]
 layout_mode = 3
 anchors_preset = 0
-script = ExtResource("4_3lhfi")
 
 [node name="progressbar" type="ProgressBar" parent="main/controlpanel" unique_id=266651082]
 layout_mode = 0
@@ -531,7 +523,6 @@ text = "tile time of placement"
 [node name="redrawthrottle" type="Timer" parent="main/controlpanel" unique_id=1497378122]
 
 [node name="cameras" type="Node" parent="main" unique_id=1867544453]
-script = ExtResource("5_6byaw")
 
 [node name="camera1" type="Camera2D" parent="main/cameras" unique_id=1331446348]
 anchor_mode = 0
