@@ -1,79 +1,93 @@
-class_name control_panel_signal_handler extends RefCounted
-
 var controller: Control
 
 func _init(p_controller: Control) -> void:
-	# Store the reference to the main ControlPanel node
 	controller = p_controller
 
-## 🔄 ENGINE STATUS/ERROR SIGNALS
-# 
+func _on_ffi_alignment_complete() -> void:
+	_connect_local_ui_signals()
+	_connect_local_timers()
+
+func _connect_local_ui_signals() -> void:
+	var gen_callable = Callable(controller.gen_logic, "start_generation")
+	var animate_callable = Callable(controller.animation_logic, "_on_animate_button_pressed")
+	var toggle_callable = Callable(controller.utility, "on_toggle_terminal_button_pressed")
+	var width_callable = Callable(controller.ui_setup, "_on_grid_size_value_changed")
+	var height_callable = Callable(controller.ui_setup, "_on_grid_size_value_changed")
+	
+	if controller.generate_button.pressed.is_connected(gen_callable):
+		controller.generate_button.pressed.disconnect(gen_callable)
+	controller.generate_button.pressed.connect(gen_callable)
+
+	if controller.animate_ui_button.pressed.is_connected(animate_callable):
+		controller.animate_ui_button.pressed.disconnect(animate_callable)
+	controller.animate_ui_button.pressed.connect(animate_callable)
+	
+	if controller.toggle_terminal_button.pressed.is_connected(toggle_callable):
+		controller.toggle_terminal_button.pressed.disconnect(toggle_callable)
+	controller.toggle_terminal_button.pressed.connect(toggle_callable)
+	
+	if controller.grid_width.value_changed.is_connected(width_callable):
+		controller.grid_width.value_changed.disconnect(width_callable)
+	controller.grid_width.value_changed.connect(width_callable)
+	
+	if controller.grid_height.value_changed.is_connected(height_callable):
+		controller.grid_height.value_changed.disconnect(height_callable)
+	controller.grid_height.value_changed.connect(height_callable)
+
+func _connect_local_timers() -> void:
+	var engine_timer_callable = Callable(controller.animation_logic, "_on_engine_timer_timeout")
+	if is_instance_valid(controller.engine_timer) and not controller.engine_timer.timeout.is_connected(engine_timer_callable):
+		controller.engine_timer.timeout.connect(engine_timer_callable)
+
 func _on_engine_status_updated(status_message: String) -> void:
-	"""Updates the status label with a general message from the engine."""
-	if is_instance_valid(controller.status_label):
-		# Only update the status if it's a critical or final state, 
-		# allowing chunk_generated to handle progress status.
-		if status_message.begins_with("ERROR:") or status_message.begins_with("IDLE:"):
-			controller.status_label.text = status_message
+	if not is_instance_valid(controller.status_label):
+		return
+	print("DEBUG: Engine status updated →", status_message)
+	controller.status_label.text = status_message
 
 func _on_generation_error(error_message: String) -> void:
-	"""Handles a critical error signal from the generation process."""
-	print("❌ ERROR: Generation failed: %s" % error_message)
-	
-	controller.utility.reset_temporary_state()
-	
+	print("DEBUG: Generation error →", error_message)
 	if is_instance_valid(controller.status_label):
-		controller.status_label.text = "❌ ERROR: Generation failed. Check console."
+		controller.status_label.text = "ERROR: Generation failed. Check console."
 	if is_instance_valid(controller.generate_button):
 		controller.generate_button.text = "IGNITION"
+	controller.utility.reset_system_state()
 
-
-## 🏗️ GENERATION PROGRESS SIGNALS
 func _on_build_map_start() -> void:
-	"""Fired when the FFI build_map call is successfully received by the Rust engine."""
-	print("📡 Signal: build_map_start received.")
+	print("DEBUG: Build map start signal received")
 	if is_instance_valid(controller.status_label):
-		controller.status_label.text = "🏗️ Engine task started..."
+		controller.status_label.text = "Map Generation Initiated..."
 
-func _on_chunk_generated(chunk_x: int, chunk_y: int) -> void:
-	"""Updates progress bar and tile count when a chunk is processed by the engine."""
-	var tiles_in_chunk: int = controller.CHUNK_SIZE_X * controller.CHUNK_SIZE_Y
+func _on_chunk_generated(chunk_x: int, chunk_y: int, tiles_in_chunk: int) -> void:
+	if not controller.is_generating:
+		return
+	print("DEBUG: Chunk generated → (%d, %d) with %d tiles" % [chunk_x, chunk_y, tiles_in_chunk])
 	
-	# Update Progress Bar and Tile Count
-	if is_instance_valid(controller.progress_bar):
-		controller.progress_bar.value += float(tiles_in_chunk)
-	
-	controller.total_tiles_placed += tiles_in_chunk
-	
-	if is_instance_valid(controller.tiles_placed_label):
-		controller.tiles_placed_label.text = "Tiles Placed: %d" % controller.total_tiles_placed
-	
-	# Request the utility module to schedule a visual TileMap redraw (throttled)
-	# This is the key to fixing the map refresh rate.
-	controller.utility.request_redraw()
-
-	# Update the status label with percentage progress
 	var percent: int = 0
 	if is_instance_valid(controller.progress_bar) and controller.progress_bar.max_value > 0:
 		percent = int(controller.progress_bar.value / controller.progress_bar.max_value * 100.0)
 
-	if is_instance_valid(controller.status_label):
-		# Only update status if the percentage value has changed significantly (e.g., 5%)
-		if percent != controller.last_percent and (percent % 5 == 0 or percent == 100):
-			controller.status_label.text = "🏗️ Chunk (%d, %d) applied... %d%%" % [chunk_x, chunk_y, percent]
+	if percent != controller.last_percent and is_instance_valid(controller.status_label):
+		if percent % 5 == 0 or percent == 100:
+			controller.status_label.text = "Chunk (%d, %d) applied... %d%%" % [chunk_x, chunk_y, percent]
 		
 	controller.last_percent = percent
 
-
-## 💡 ANIMATION/TILE FLIP SIGNAL
-# 
-func _on_tile_flip_updated(tile_id: int, flip_frame: int) -> void:
-	"""
-	Handles an individual tile flip update signal, delegating the data to the
-	Animation Logic module for queueing and processing.
-	"""
-	if not is_instance_valid(controller.animation_logic):
-		return
+func _on_build_map_complete() -> void:
+	var total_time_ms: int = Time.get_ticks_msec() - controller.generation_start_time_ms
+	var total_time_s: float = float(total_time_ms) / 1000.0
+	var tiles_per_second: float = 0.0
+	if total_time_s > 0.0:
+		tiles_per_second = float(controller.total_tiles_placed) / total_time_s
 	
-	# FIX: Delegate the flip data to the animation logic module for queueing.
-	controller.animation_logic._on_tile_flip_updated(tile_id, flip_frame)
+	var completion_msg: String = "Generation Complete! (%.2f seconds)" % total_time_s
+	print("DEBUG: Build map complete →", completion_msg, "Tiles/sec:", tiles_per_second)
+
+	if is_instance_valid(controller.status_label):
+		controller.status_label.text = completion_msg
+	if is_instance_valid(controller.generate_button):
+		controller.generate_button.text = "IGNITION"
+	if is_instance_valid(controller.tile_placement_time_label):
+		controller.tile_placement_time_label.text = "Time: %.2fs" % total_time_s
+
+	controller.utility.reset_system_state()

@@ -1,137 +1,85 @@
-class_name control_panel_animation_logic extends RefCounted
+class_name control_panel_animation_logic
+extends RefCounted
 
-## 🎯 Properties
-var controller: Control
-# Queue to hold incoming tile updates (flips) from the engine
+var controller
 var tile_flip_queue: Array = []
-# Maximum number of tile updates to process per animation tick
 const MAX_FLIPS_PER_TICK: int = 1000
-
+var animation_is_active: bool = false
 
 func _init(p_controller: Control) -> void:
-	# Store a reference to the main controller node
 	controller = p_controller
 
-
-## ANIMATION STATE CONTROL
-
-func on_animate_checkbox_toggled(button_pressed: bool) -> void:
-	"""
-    Updates the controller's local animation state and sends the new mode 
-    to the Rust engine via FFI to update its status.
-	"""
-	controller.is_animated = button_pressed
-	print("⚙️ Animation Toggled: %s" % controller.is_animated)
+func _on_animate_button_pressed() -> void:
+	animation_is_active = !animation_is_active
+	var button_pressed: bool = animation_is_active
 	
-	# FFI: Call the direct Rust function to set the enabled state.
-	# This resolves the 'Nonexistent function 'send_animation_command'' error.
-	if is_instance_valid(controller.ssxl_engine):
+	if is_instance_valid(controller.ssxl_engine) and controller.ssxl_engine.has_method("set_animation_enabled"):
 		controller.ssxl_engine.set_animation_enabled(button_pressed)
 	
-	# Automatically switch the polling mechanism based on the animation mode
 	setup_animation_worker(button_pressed)
 
-
 func setup_animation_worker(should_animate: bool) -> void:
-	"""
-    Starts the correct timer (throttled animation or fast engine poll)
-    based on the user's animation choice.
-	"""
+	animation_is_active = should_animate
+	
+	if is_instance_valid(controller.animation_timer):
+		controller.animation_timer.stop()
+	if is_instance_valid(controller.engine_timer):
+		controller.engine_timer.stop()
+		
 	if should_animate:
 		if is_instance_valid(controller.animation_timer):
-			# Slower tick for visual updates
 			controller.animation_timer.start()
-		if is_instance_valid(controller.engine_timer):
-			# Stop the fast poll
-			controller.engine_timer.stop()
 	else:
 		if is_instance_valid(controller.engine_timer):
-			# Fast tick for engine polling
-			controller.engine_timer.start()
-		if is_instance_valid(controller.animation_timer):
-			# Stop the animation loop
-			controller.animation_timer.stop()
-
-
-## ⏱️ TIMER HANDLERS (Polling & Animation Loop)
-
-func _on_engine_timer_timeout() -> void:
-	"""
-    Called by the fast (e.g., 0.01s) engine_timer when NOT animating.
-    Its primary job is to poll the Rust engine for updates.
-	"""
-	if not controller.is_generating or not is_instance_valid(controller.ssxl_engine):
-		return
-	
-	controller.engine_tick_count += 1
-	# Manually poll the engine status
-	controller.ssxl_engine.get_status()
-
+			controller.engine_timer.call_deferred("start")
 
 func _on_animation_timer_timeout() -> void:
-	"""
-    Called by the throttled animation_timer when ANIMATING.
-    Processes a batch of tile flips and updates the screen once.
-	"""
-	if not controller.is_generating:
+	if not controller.is_generating or not is_instance_valid(controller.ssxl_tilemap):
 		return
+		
+	var batch_size: int = min(tile_flip_queue.size(), MAX_FLIPS_PER_TICK)
 	
-	# 1. Determine how many flips to process
-	var flips_to_process: int = mini(tile_flip_queue.size(), MAX_FLIPS_PER_TICK)
+	for i in range(batch_size):
+		var data: Dictionary = tile_flip_queue.pop_front()
+		if not data.is_empty():
+			process_tile_flip(data.tile_id, data.flip_frame)
+		
+	controller.ssxl_tilemap.force_update()
 	
-	if flips_to_process > 0:
-		# Process the first batch of flips directly from the queue
-		for i in range(flips_to_process):
-			var flip_data: Array = tile_flip_queue[i]
-			var tile_id: int = flip_data[0]
-			var flip_frame: int = flip_data[1]
-			
-			process_tile_flip(tile_id, flip_frame)
-			
-		# Remove the processed elements from the queue using pop_front()
-		for i in range(flips_to_process):
-			tile_flip_queue.pop_front()
+	if is_instance_valid(controller.ssxl_oracle):
+		controller.ssxl_oracle.tick()
 
-
-	# 2. Update Map and Poll Engine Status
-	if is_instance_valid(controller.expansive_tilemap):
-		# Force the TileMap to refresh with the batch of new tiles
-		controller.expansive_tilemap.force_update()
+func _on_engine_timer_timeout() -> void:
+	controller.engine_tick_count += 1
+	if is_instance_valid(controller.ssxl_oracle):
+		controller.ssxl_oracle.tick()
 	
-	# Poll Engine Status (Less frequently in animation mode)
-	if is_instance_valid(controller.ssxl_engine):
-		controller.ssxl_engine.get_status()
-
-
-## 💡 TILE FLIP PROCESSING
+	if is_instance_valid(controller.engine_timer_label):
+		controller.engine_timer_label.text = "Tick Count: %d" % controller.engine_tick_count
 
 func process_tile_flip(tile_id: int, flip_frame: int) -> void:
-	"""Converts linear tile ID to grid coords and applies the visual flip/frame."""
-	if not is_instance_valid(controller.expansive_tilemap) or not is_instance_valid(controller.grid_width):
+	if not is_instance_valid(controller.ssxl_tilemap) or not is_instance_valid(controller.grid_width):
 		return
 
-	# Use the current grid width value (which is likely a SpinBox or similar)
 	var map_width: int = int(controller.grid_width.value)
 	if map_width <= 0:
 		return
 
-	# Convert linear tile_id back to grid coordinates (x, y)
 	var x: int = tile_id % map_width
 	var y: int = tile_id / map_width
 	var coords: Vector2i = Vector2i(x, y)
 	
-	# Apply the tile flip/alternative tile index
-	controller.expansive_tilemap.set_cell_alt(0, coords, flip_frame)
-
+	var source_id: int = controller.BASE_SOURCE_ID
+	var atlas_coords: Vector2i = controller.BASE_ATLAS_COORDS
+	
+	controller.ssxl_tilemap.set_cell(0, coords, source_id, atlas_coords, flip_frame)
 
 func _on_tile_flip_updated(tile_id: int, flip_frame: int) -> void:
-	"""
-    Signal handler connected to SSXLSignals.
-    Queues the incoming tile flip data for processing on the next animation tick.
-	"""
-	# Only queue updates if the system is running and animation is enabled
-	if not controller.is_animated or not controller.is_generating:
+	if not animation_is_active or not controller.is_generating:
 		return
 
-	# Store the data in the queue immediately
-	tile_flip_queue.append([tile_id, flip_frame])
+	tile_flip_queue.append({ "tile_id": tile_id, "flip_frame": flip_frame })
+
+func redraw_tilemap_throttled() -> void:
+	if is_instance_valid(controller.ssxl_tilemap):
+		controller.ssxl_tilemap.force_update()

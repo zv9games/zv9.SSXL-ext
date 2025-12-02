@@ -1,30 +1,42 @@
 class_name control_panel_utility extends RefCounted
 
+# Reference to the main control_panel.gd node (the Orchestrator).
+# This provides access to all UI elements, state, and external nodes.
 var controller: Control
 
+# ==============================================================================
+# 1. LIFECYCLE: Constructor
+# ==============================================================================
 func _init(p_controller: Control) -> void:
-	# Store the reference to the main ControlPanel node
-	controller = p_controller
+	# Assign the reference to the main controller node.
+	if is_instance_valid(p_controller):
+		controller = p_controller
+	else:
+		push_error("❌ FATAL: ControlPanel reference missing in control_panel_utility constructor.")
 
-# ------------------------------------------------------------------------------
-# ⚠️ CRITICAL NODE CHECKING
-# ------------------------------------------------------------------------------
+
+# ==============================================================================
+# 2. CORE VALIDATION
+# ==============================================================================
+# Checks for the existence and validity of all essential FFI and scene nodes.
 func check_critical_nodes() -> bool:
-	"""Checks if all core FFI and rendering nodes are present and valid."""
 	var valid: bool = true
 	var missing_nodes: Array[String] = []
 
+	# Check FFI GDExtension nodes
 	if not is_instance_valid(controller.ssxl_engine):
 		missing_nodes.append("SSXLEngine")
 		valid = false
 	if not is_instance_valid(controller.ssxl_signals):
 		missing_nodes.append("SSXLSignals")
 		valid = false
-	if not is_instance_valid(controller.expansive_tilemap):
-		missing_nodes.append("expansive_tilemap")
-		valid = false
 	if not is_instance_valid(controller.ssxl_oracle):
 		missing_nodes.append("SSXLOracle")
+		valid = false
+		
+	# Check Scene/Presenter nodes
+	if not is_instance_valid(controller.expansive_tilemap):
+		missing_nodes.append("expansive_tilemap")
 		valid = false
 
 	if not valid:
@@ -35,141 +47,146 @@ func check_critical_nodes() -> bool:
 	
 	return valid
 
-# ------------------------------------------------------------------------------
-# ⌨️ INPUT HANDLING
-# ------------------------------------------------------------------------------
-func handle_input_event(event: InputEvent) -> void:
-	"""Handles global input events delegated from _input()."""
-	if event is InputEventKey and event.is_pressed() and not event.is_echo():
-		if event.keycode == KEY_SPACE:
-			# Check if any input field is focused (prevent spacebar from activating buttons)
-			var is_input_focused: bool = (is_instance_valid(controller.seed_input) and controller.seed_input.has_focus()) or \
-										 (is_instance_valid(controller.grid_width) and controller.grid_width.has_focus()) or \
-										 (is_instance_valid(controller.grid_height) and controller.grid_height.has_focus())
-			
-			if not is_input_focused:
-				# Spacebar toggles the camera view between UI and Map
-				toggle_camera_view()
-				controller.get_viewport().set_input_as_handled()
-				
 
-# ------------------------------------------------------------------------------
-# 🔄 REDRAW THROTTLING
-# ------------------------------------------------------------------------------
-func request_redraw() -> void:
-	"""
-	Starts the redraw throttle timer if not already running.
-	Limits TileMap updates to the timer's wait_time (e.g., 10 FPS).
-	"""
-	if not controller.redraw_pending and is_instance_valid(controller.redraw_throttle_timer):
-		controller.redraw_throttle_timer.start()
-		controller.redraw_pending = true
+# ==============================================================================
+# 3. FFI AND TIMER HANDLERS
+# ==============================================================================
 
+# FIX: This function was missing and is connected to the engine_timer.
+# It acts as the heartbeat (polling loop) for the FFI Oracle.
+func _on_engine_timer_timeout() -> void:
+	print("⚙️ FFI TICKER: Polling core. Tick Count: %d" % controller.engine_tick_count)
+	controller.ssxl_oracle.tick()
+		
+	if is_instance_valid(controller.ssxl_oracle):
+		# Calling tick() tells the Rust core to process pending tasks/signals.
+		controller.ssxl_oracle.tick()
+
+# Handles the redraw_throttle_timer timeout, forcing a visual update.
 func _on_redraw_throttle_timeout() -> void:
-	"""Forces a TileMap update when the throttle timer times out."""
-	if controller.is_generating and is_instance_valid(controller.expansive_tilemap):
+	if controller.redraw_pending and is_instance_valid(controller.expansive_tilemap):
+		# force_update() ensures all tiles placed in the background are drawn in one batch.
 		controller.expansive_tilemap.force_update()
-	controller.redraw_pending = false
+		controller.redraw_pending = false
+
+# Triggers a redraw cycle by starting the throttle timer.
+func request_redraw() -> void:
+	controller.redraw_pending = true
+	if is_instance_valid(controller.redraw_throttle_timer) and not controller.redraw_throttle_timer.is_stopped():
+		controller.redraw_throttle_timer.start()
+
+# Updates the clock label with the current system time.
+func on_clock_timer_timeout() -> void:
+	if is_instance_valid(controller.clock_label):
+		var time_string: String = Time.get_datetime_string_from_system()
+		controller.clock_label.text = "🕒 " + time_string
 
 
-# ------------------------------------------------------------------------------
-# 📷 CAMERA / UI TOGGLES (Delegated Logic)
-# ------------------------------------------------------------------------------
-
-func toggle_camera_view() -> void:
-	"""The handler connected to the 'Animate/Toggle View' button and SPACEBAR."""
-	# Toggle the current ID: 1 becomes 2, 2 becomes 1
-	var new_camera_id: int = 2 if controller.current_camera_id == 1 else 1
-	switch_to_camera_view(new_camera_id)
-
-func switch_to_camera_view(target_id: int) -> void:
-	"""
-	Sets the camera to the target_id (1=UI, 2=Map View) and updates the controller state.
-	This is called by both toggle_camera_view and gen_logic.
-	"""
-	if not is_instance_valid(controller.cameras) or not controller.cameras.has_method("switch_to_camera"):
-		return
+# ==============================================================================
+# 4. INPUT AND UI HANDLERS
+# ==============================================================================
+# Handles global input events for hotkeys (F5, F6, F7).
+func handle_input_event(event: InputEvent) -> void:
+	if event is InputEventKey and event.is_pressed() and not event.is_echo():
 		
-	controller.current_camera_id = target_id
-	controller.cameras.switch_to_camera(controller.current_camera_id)
-	print("Camera switched to: %d" % controller.current_camera_id)
-
-func set_map_zoom_and_position() -> void:
-	"""Positions the map camera (camera2) to center the generated map and calculates appropriate zoom."""
-	if not is_instance_valid(controller.camera2) or not is_instance_valid(controller.grid_width) or not is_instance_valid(controller.grid_height):
-		return
+		# F5: Start Generation (Delegates to gen_logic sub-script)
+		if event.keycode == KEY_F5:
+			# Safety check: Only run if generation is not already active.
+			if not controller.is_generating:
+				controller.gen_logic.start_generation()
+			controller.get_viewport().set_input_as_handled()
+			return
 		
-	var map_width_tiles: int = int(controller.grid_width.value)
-	var map_height_tiles: int = int(controller.grid_height.value)
-	
-	var full_map_width: float = float(map_width_tiles) * controller.tile_size.x
-	var full_map_height: float = float(map_height_tiles) * controller.tile_size.y
+		# F6: Toggle Camera View
+		elif event.keycode == KEY_F6:
+			toggle_camera_view()
+			controller.get_viewport().set_input_as_handled()
+			return
+		
+		# F7: Toggle Control Panel Visibility
+		elif event.keycode == KEY_F7:
+			on_toggle_terminal_button_pressed()
+			controller.get_viewport().set_input_as_handled()
+			return
 
-	# Center the camera on the map
-	controller.camera2.global_position = Vector2(full_map_width / 2.0, full_map_height / 2.0)
-	
-	# Calculate zoom
-	var viewport_size: Vector2 = controller.get_viewport_rect().size
-	var zoom_factor: float = min(viewport_size.x / full_map_width, viewport_size.y / full_map_height) * 0.9
-	
-	controller.camera2.zoom = Vector2(clampf(zoom_factor, 0.05, 1.0), clampf(zoom_factor, 0.05, 1.0))
-	controller.initial_zoom_set = true
-	print("Camera 2 positioned and zoomed after generation.")
-
-
+# Toggles visibility of all control panel elements except the status billboard and button.
 func on_toggle_terminal_button_pressed() -> void:
-	"""Toggles the visibility and size of the control panel."""
-	controller.panel_collapsed = !controller.panel_collapsed
+	controller.panel_collapsed = not controller.panel_collapsed
 	
-	var target_y: float = 32.0 if controller.panel_collapsed else 300.0
-	var button_text: String = "EXPAND 🔽" if controller.panel_collapsed else "COLLAPSE 🔼"
-	
-	# Apply changes
-	controller.custom_minimum_size.y = target_y
-	if is_instance_valid(controller.toggle_terminal_button):
-		controller.toggle_terminal_button.text = button_text
-	
-	# Hide/Show all main controls when collapsed
 	for child in controller.get_children():
-		if child != controller.toggle_terminal_button and child is Control:
+		# Skip the control elements that must *always* be visible
+		if child == controller.toggle_terminal_button or child == controller.status_label:
+			continue
+			
+		# Toggle visibility for all other UI controls
+		if child is Control:
 			child.visible = not controller.panel_collapsed
 
+# Toggles the active camera view between camera1 and camera2.
+func toggle_camera_view() -> void:
+	var cameras_node: Node = controller.main.get_node("cameras")
+	
+	if is_instance_valid(cameras_node) and cameras_node.has_method("_toggle_camera"):
+		# Delegate the camera switch to the dedicated Cameras node manager.
+		cameras_node._toggle_camera()
+		
+		# Update the controller's state variable based on a simple toggle between 1 and 2.
+		controller.current_camera_id = 1 if controller.current_camera_id == 2 else 2
 
-# ------------------------------------------------------------------------------
-# 🧹 STATE MANAGEMENT & MISC UTILITIES
-# ------------------------------------------------------------------------------
 
-func on_clock_timer_timeout() -> void:
-	"""Updates the clock label."""
-	if is_instance_valid(controller.clock_label):
-		controller.clock_label.text = "🕒 " + Time.get_datetime_string_from_system()
-
-func reset_temporary_state() -> void:
-	"""Resets generation-specific state flags and stops timers."""
+# ==============================================================================
+# 5. SYSTEM RESET
+# ==============================================================================
+# Resets all state variables and timers after a map generation process completes.
+func reset_system_state() -> void:
 	controller.is_generating = false
 	controller.redraw_pending = false
-	
-	if is_instance_valid(controller.generate_button):
-		controller.generate_button.disabled = false
-		
-	if is_instance_valid(controller.engine_timer):
-		controller.engine_timer.stop()
-		
-	if is_instance_valid(controller.animation_timer):
-		controller.animation_timer.stop()
-		
 	controller.engine_tick_count = 0
 	
-func clear_generation_state() -> void:
-	"""Resets all generation-related counters and labels to zero/default."""
-	reset_temporary_state() # Calls the basic reset
-	
+	# Stop all timers
+	if is_instance_valid(controller.engine_timer):
+		controller.engine_timer.stop()
+	if is_instance_valid(controller.animation_timer):
+		controller.animation_timer.stop()
+	if is_instance_valid(controller.redraw_throttle_timer):
+		controller.redraw_throttle_timer.stop()
+		
+	# Reset state metrics
 	controller.total_tiles_placed = 0
 	controller.generation_start_time_ms = 0
 	controller.initial_zoom_set = false
 	
+	# Reset UI elements
+	if is_instance_valid(controller.generate_button):
+		controller.generate_button.disabled = false
+		
 	if is_instance_valid(controller.tiles_placed_label):
 		controller.tiles_placed_label.text = "Tiles Placed: 0"
 		
-	if is_instance_valid(controller.tile_placement_time_label):
-		controller.tile_placement_time_label.text = "⏱️ Tile Placement Time: N/A"
+	if is_instance_valid(controller.progress_bar):
+		controller.progress_bar.value = 0.0
+		controller.progress_bar.max_value = 0.0
+		controller.progress_bar.visible = false
+
+
+# ==============================================================================
+# 6. GENERATION CONTROL (FORWARDED TO SSXLEngine)
+# ==============================================================================
+
+func start_generation() -> void:
+	if controller.is_generating:
+		return
+	controller.is_generating = true
+	controller.ssxl_engine.build_map(
+		controller.map_width,
+		controller.map_height,
+		controller.seed_input.text,
+		controller.generator_selector.get_item_text(controller.generator_selector.selected)
+	)
+
+func stop_generation() -> void:
+	if not controller.is_generating:
+		return
+	print("GEN_LOGIC: Stop command issued via FFI")
+	controller.ssxl_engine.stop_generation()   # ← THIS IS THE CALL YOU WERE MISSING
+	controller.is_generating = false

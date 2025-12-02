@@ -23,7 +23,7 @@ use ssxl_shared::{
 };
 
 // --- Internal Modules ---
-mod conductor;
+pub mod conductor;
 mod worker;
 mod animation_logic;
 

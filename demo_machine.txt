@@ -1,0 +1,66 @@
+# demo_machinecode.ps1
+# Tiny x86/x64 machine code: int f(int x) => x + 1
+# Bytes: mov eax, ecx; add eax, 1; ret
+# Works with Windows x64 ABI (arg in ecx, return in eax)
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class Native {
+    public const uint MEM_COMMIT  = 0x1000;
+    public const uint MEM_RESERVE = 0x2000;
+    public const uint PAGE_EXECUTE_READWRITE = 0x40;
+
+    [DllImport("kernel32")]
+    public static extern IntPtr VirtualAlloc(IntPtr lpAddress, UIntPtr dwSize, uint flAllocationType, uint flProtect);
+
+    [DllImport("kernel32")]
+    public static extern bool VirtualFree(IntPtr lpAddress, UIntPtr dwSize, uint dwFreeType);
+
+    [DllImport("kernel32")]
+    public static extern void RtlMoveMemory(IntPtr dest, byte[] src, UIntPtr size);
+}
+"@
+
+# Define the machine code function bytes
+$code = [byte[]](0x8B,0xC1, 0x83,0xC0,0x01, 0xC3) # mov eax,ecx; add eax,1; ret
+
+# Allocate executable memory and copy the bytes
+$size = [UIntPtr]::new($code.Length)
+$mem  = [Native]::VirtualAlloc([IntPtr]::Zero, $size, [Native]::MEM_COMMIT -bor [Native]::MEM_RESERVE, [Native]::PAGE_EXECUTE_READWRITE)
+if ($mem -eq [IntPtr]::Zero) { throw "VirtualAlloc failed." }
+[Native]::RtlMoveMemory($mem, $code, $size)
+
+# Create a delegate type: int f(int)
+$delegateType = [Type]::GetType("System.Func`2").MakeGenericType([int],[int])
+$func = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($mem, $delegateType)
+
+Write-Host "Machine code ready. Press Enter to stop the loop." -ForegroundColor Cyan
+
+# Endless loop that calls the machine code and prints dots
+$counter = 0
+while ($true) {
+    # Call the machine code: increments the counter
+    $counter = $func.Invoke($counter)
+
+    # Visual heartbeat
+    Write-Host -NoNewline "."
+    Start-Sleep -Milliseconds 100
+
+    # Stop on Enter
+    if ([Console]::KeyAvailable) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq "Enter") { break }
+    }
+
+    # Occasionally show the current counter
+    if (($counter % 50) -eq 0) {
+        Write-Host "`nCount: $counter"
+    }
+}
+
+Write-Host "`nStopped. Final count: $counter" -ForegroundColor Yellow
+
+# Optional: free memory (not strictly required for short demos)
+# [Native]::VirtualFree($mem, [UIntPtr]::Zero, 0x8000) # MEM_RELEASE

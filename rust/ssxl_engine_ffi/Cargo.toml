@@ -17,3 +17,4 @@ ssxl_generate = { path = "../ssxl_generate" }
 libc               = "0.2" 
 # Workspace standard logging framework
 tracing            = { workspace = true } 
+tokio 			   = { workspace = true }

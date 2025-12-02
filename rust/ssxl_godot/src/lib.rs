@@ -1,42 +1,30 @@
+// ssxl_godot/src/lib.rs (Refactored Zero-Entropy Manifest)
+
 //! # SSXL-ext GDExtension Core Library
 //!
-//! This file is the **root manifest** for the `ssxl_godot` crate. It defines the module
-//! structure, imports necessary Godot framework components, and sets up the required
-//! boilerplate for the Rust code to be loaded as a GDExtension dynamic library.
+//! This file is the **root manifest** for the `ssxl_godot` crate. It has been
+//! refactored to use a hierarchical structure, exposing only the top-level,
+//! logically segregated modules: `engine`, `ffi`, and `tilemap`.
 
 // -----------------------------------------------------------------------------
 // Public Modules (Exposed to the GDExtension Interface)
 // -----------------------------------------------------------------------------
 
-/// The core class that wraps the GDExtension Node and orchestrates the SSXL engine.
-pub mod ssxl_engine;
-/// Defines custom signals for communication between the Rust core and Godot scripts.
-pub mod ssxl_signals;
-/// A potential future module for querying engine state or procedural data (the "Oracle").
-pub mod ssxl_oracle;
-pub mod ssxl_tilemap;
-// -----------------------------------------------------------------------------
-// Private Modules (Internal Implementation Details)
-// -----------------------------------------------------------------------------
+/// Contains the SSXLEngine struct and its core logic (API, commands, oracle, tick).
+pub mod engine;
 
-/// Handles non-blocking, asynchronous polling of message channels from worker threads.
-mod async_poll;
-/// Delegates the final rendering of generated chunk data onto the Godot TileMap.
-mod chunk_presenter;
-/// Processes messages drained by the `AsyncPoller` and delegates to the `ChunkPresenter`.
-mod channel_handler;
-/// Contains utility structs and functions for initial configuration of the APIs.
-mod api_initializers;
-/// The exposed API for starting and configuring map generation from Godot.
-mod generation_api;
-/// The exposed API for controlling real-time tile animation and simulation.
-mod animation_api;
+/// Contains all Godot-exposed FFI Adapter Nodes (SSXLOracle, SSXLSignals).
+pub mod ffi;
 
-// --- Modules Required by ssxl_engine.rs ---
-/// Contains static methods for reporting the internal state (used by SSXLEngine).
-mod status_reporter;
-/// Defines a trait for API delegation in SSXLEngine.
-mod engine_api_extension;
+// FIX: Changed 'pub mod ssxl_tilemap;' to 'pub mod tilemap;'
+// This tells the compiler to look for the 'tilemap' directory/module (src/tilemap/mod.rs or src/tilemap.rs).
+// The 'tilemap/mod.rs' file will then declare 'pub mod ssxl_tilemap;'.
+/// The module for the SSXLTileMap Godot Node and its related logic.
+pub mod tilemap; 
+
+// NOTE: All previous flat modules (e.g., ssxl_engine, ssxl_signals, async_poll,
+// generation_api, channel_handler) have been consolidated into the `engine` and
+// `ffi` hierarchies for a zero-entropy structure.
 
 // -----------------------------------------------------------------------------
 // GDExtension Boilerplate
@@ -52,19 +40,10 @@ use godot::init::{ExtensionLibrary, InitLevel};
 struct SSXLExtension;
 
 /// Implements the required trait for the GDExtension to be loaded.
-/// This acts as the **primary entry point** for the Godot runtime.
-///
-/// NOTE: The `gde_api_defs.rs` file handles the class registration (like `SSXLEngine`),
-/// while this block handles the low-level library initialization hooks.
 #[gdextension]
 unsafe impl ExtensionLibrary for SSXLExtension {
     /// Called by Godot when a new initialization level is reached.
-    /// This hook is used for potential setup that needs to occur before/after
-    /// the game engine, editor, or scene is initialized.
     fn on_level_init(_level: InitLevel) {
-        // Currently, no actions are required at this low-level init stage,
-        // as setup is handled in `SSXLEngine::_init` and `_ready`.
+        // No actions required at this low-level init stage.
     }
-
-    // `on_level_deinit` is implicitly handled or omitted if no cleanup is needed.
 }

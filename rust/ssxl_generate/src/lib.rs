@@ -1,88 +1,72 @@
-// ssxl_generate/src/lib.rs
-
-//! The core library crate for the SSXL procedural generation engine.
-//!
-//! This crate orchestrates the asynchronous runtime, manages generator algorithms,
-//! and provides the central Conductor API for world creation.
-
-use ssxl_shared::chunk_data::ChunkData;
+use ssxl_shared::ChunkData;
 use ssxl_math::Vec2i;
 use tracing::{info, error};
+use std::mem;
 
-// --- 1. Internal Module Definitions ---
+// --- Module Declarations (Based on Directory Structure) ---
+// Modules that map to subdirectories (containing mod.rs or other files).
+pub mod ca;        // Contains cellular_automata_generator.rs
+pub mod conductor; // Contains conductor.rs, conductor_state.rs, sync.rs
+pub mod manager;   // Contains config_validator.rs, generator_manager.rs, runtime_manager.rs
+pub mod perlin;    // Contains perlin_generator.rs
+pub mod task;      // Contains batch_processor.rs, benchmark_logic.rs, task_queue.rs
 
-/// Core command and control center for the generation engine.
-pub mod conductor;
-/// Logic for stress-testing and profiling generator algorithms.
-pub mod benchmark_logic;
-/// Perlin noise based generator implementation.
-pub mod perlin_generator;
-/// Cellular Automata based generator implementation.
-pub mod cellular_automata_generator;
-/// Module containing Cellular Automata specific rules and utilities.
-pub mod ca; 
-/// Manages the Tokio asynchronous runtime.
-pub mod runtime_manager; 
-/// Utilities for validating generation request configurations.
-pub mod config_validator;
-/// Manages the asynchronous chunk generation task queue.
-pub mod task_queue;
-/// Thread-safe state tracking for the Conductor.
-pub mod conductor_state;
-/// Registry for all available generation algorithms.
-pub mod generator_manager;
-/// Logic for processing large batch generation requests (**Bulldozer** operation).
-pub mod batch_processor;
-/// Module for synchronous types used for external communication (Senders/Receivers).
-pub mod sync; 
+// The original declarations are removed:
+// pub mod conductor;
+// pub mod benchmark_logic;
+// pub mod perlin_generator;
+// pub mod cellular_automata_generator;
+// pub mod ca; // This was correctly declared as a directory module
+// pub mod runtime_manager;
+// pub mod config_validator;
+// pub mod task_queue;
+// pub mod conductor_state;
+// pub mod generator_manager;
+// pub mod batch_processor;
+// pub mod sync;
 
 
-// --- 2. Core Generator Trait Definition ---
-
-/// The fundamental contract for all world generation algorithms.
-/// (Duplicated here from `generator.rs` for convenience and to define the public contract).
 pub trait Generator {
-    /// Returns a unique, static string identifier for this generator.
-    fn id(&self) -> &str;
-
-    /// Executes the deterministic generation algorithm for a single chunk.
-    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData;
+	fn id(&self) -> &str;
+	fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData;
 }
 
 
-// --- 3. Public API Exports (Re-exports for external use) ---
+// --- Public Exports (Updated to use new module paths) ---
 
-// Concrete Generator implementations
-pub use cellular_automata_generator::CellularAutomataGenerator;
-pub use perlin_generator::PerlinGenerator;
+pub use ca::cellular_automata_generator::CellularAutomataGenerator;
+pub use perlin::perlin_generator::PerlinGenerator;
 
-// Conductor and Configuration Types
-pub use conductor::Conductor;
-pub use config_validator::GeneratorConfig; 
+// The Conductor is in conductor/conductor.rs
+pub use conductor::conductor::Conductor;
+// ConfigValidator is in manager/config_validator.rs
+pub use manager::config_validator::GeneratorConfig;
 
-// Synchronization and Task Types (For FFI and API integration)
-pub use sync::ConductorProgressReceiver;
-pub use sync::ConductorRequestSender;
-pub use task_queue::GenerationTask; 
+// ConductorProgressReceiver/Sender are in conductor/sync.rs
+pub use conductor::sync::ConductorProgressReceiver;
+pub use conductor::sync::ConductorRequestSender;
+// GenerationTask is in task/task_queue.rs
+pub use task::task_queue::GenerationTask;
 
-// Benchmark Utility
-pub use benchmark_logic::benchmark_generation_workload;
+// BenchmarkLogic is in task/benchmark_logic.rs
+pub use task::benchmark_logic::benchmark_generation_workload;
 
 
-// --- 4. Initialization Placeholder (Example/Debug) ---
-
-/// A placeholder function to test Conductor initialization and immediate graceful shutdown.
-/// This simulates a quick external call to verify runtime setup and teardown.
 pub fn start_runtime_placeholder() {
-    match Conductor::new(None) {
-        Ok((conductor, _state, _progress_receiver, _request_sender)) => {
-            info!("Runtime created successfully. Testing immediate graceful teardown...");
-            
-            // Execute the cleanup logic
-            conductor.graceful_teardown();
-        }
-        Err(e) => {
-            error!("Failed to initialize Conductor/Runtime: {:?}", e);
-        }
-    }
+	match Conductor::new(None) {
+		// FIX: The progress_receiver must be kept alive to prevent the channel from closing.
+		// Removed the underscore, making the variable `progress_receiver`.
+		Ok((conductor, _state, _request_sender, progress_receiver)) => {
+			info!("Runtime created successfully. Testing immediate graceful teardown...");
+			
+			// ARCHITECTURAL FIX: Use std::mem::forget to simulate the FFI/Godot side
+			// taking ownership of the receiver, which keeps the progress channel open.
+			mem::forget(progress_receiver);
+			
+			conductor.graceful_teardown();
+		}
+		Err(e) => {
+			error!("Failed to initialize Conductor/Runtime: {:?}", e);
+		}
+	}
 }

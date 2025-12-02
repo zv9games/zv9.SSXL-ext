@@ -1,6 +1,7 @@
 use ssxl_math::coordinate_system::ChunkKey;
 use ssxl_sync::AtomicResource;
-use ssxl_shared::chunk_data::ChunkData;
+// FIX: Import ChunkData directly from the root of ssxl_shared.
+use ssxl_shared::ChunkData;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, RwLock}; 

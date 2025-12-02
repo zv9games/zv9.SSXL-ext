@@ -1,124 +1,178 @@
-// ssxl_engine_ffi/src/lib.rs
-
-//! Foreign Function Interface (FFI) Bridge for the SSXL Engine.
-//!
-//! This module exposes C-compatible functions to external host environments (like Godot's
-//! GDExtension), allowing them to start, stop, and query the SSXL procedural generation
-//! runtime, which is managed by the thread-safe `Conductor` singleton.
-
-// REMOVED: use std::ffi::CString; // FIX: Unused import removed (no longer needed for ssxl_get_status pattern)
-use std::os::raw::c_char; // FIX: c_void removed as it is not used in public FFI signatures.
+use std::os::raw::c_char;
 use std::sync::OnceLock;
-// FIX: Removed the redundant import 'use std::os::raw::c_char;' (and the non-breaking space).
+use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+use std::panic;
 
-use ssxl_generate::{Conductor, start_runtime_placeholder};
-use ssxl_shared::initialize_shared_data;
+use ssxl_generate::{Conductor, start_runtime_placeholder, ConductorProgressReceiver};
+// This import will now resolve after fixing Cargo.toml
+use tokio::sync::mpsc::error::TryRecvError;
+use ssxl_shared::{initialize_shared_data, CHUNKS_COMPLETED_COUNT};
 use tracing::{info, error};
 
-// --- 1. Thread-Safe Singleton for the Conductor ---
+static CONDUCTOR: OnceLock<Mutex<Conductor>> = OnceLock::new();
+static PROGRESS_RECEIVER: OnceLock<Mutex<ConductorProgressReceiver>> = OnceLock::new();
 
-/// A thread-safe, one-time initialization container for the core Conductor runtime.
-/// Using OnceLock ensures that the Conductor is initialized exactly once, protecting
-/// against initialization race conditions across different FFI calls.
-static CONDUCTOR: OnceLock<Conductor> = OnceLock::new();
+// ------------------------------------------------------------------
 
-// --- 2. FFI Functions for Runtime Management ---
-
-/// Starts the SSXL Conductor runtime if it is not already running.
-///
-/// This function is idempotent: calling it multiple times will only initialize the
-/// runtime once. It is the primary entry point for the external engine.
-///
-/// # Safety/FFI
-/// Marked `extern "C"` and `#[no_mangle]` for C-ABI compatibility.
-///
-/// # Returns
-/// `true` if the runtime is running (either started now or was already running),
-/// `false` if initialization failed.
 #[no_mangle]
 pub extern "C" fn ssxl_start_runtime() -> bool {
-    // Ensure core engine configuration data is initialized first.
-    initialize_shared_data();
+    // Panic guard applied to maintain FFI boundary stability
+    match panic::catch_unwind(|| {
+        initialize_shared_data();
 
-    if CONDUCTOR.get().is_some() {
-        info!("FFI Bridge: Runtime already running.");
-        return true;
-    }
-
-    // Attempt to initialize and set the Conductor singleton.
-    match Conductor::new(None) {
-        Ok((conductor, _state, _progress_receiver, _request_sender)) => {
-            if CONDUCTOR.set(conductor).is_err() {
-                // Should only happen in a severe race condition during first initialization.
-                error!("FFI Bridge: Conductor::set() failed (Possible race condition).");
-                return false;
-            }
-            info!("FFI Bridge: Conductor Runtime started successfully.");
-            true
+        if CONDUCTOR.get().is_some() {
+            info!("FFI Bridge: Runtime already running.");
+            return true;
         }
-        Err(e) => {
-            tracing::error!("FFI Bridge: Failed to initialize Conductor: {:?}", e);
+
+        match Conductor::new(None) {
+            Ok((conductor, _state, _request_sender, progress_receiver)) => {
+                
+                // 1. Store Conductor
+                if CONDUCTOR.set(Mutex::new(conductor)).is_err() {
+                    error!("FFI Bridge: Conductor::set() failed (Possible race condition).");
+                    return false;
+                }
+                
+                // 2. Store the Channel Receiver, keeping the channel open.
+                if PROGRESS_RECEIVER.set(Mutex::new(progress_receiver)).is_err() {
+                    error!("FFI Bridge: PROGRESS_RECEIVER::set() failed (Possible race condition).");
+                    return false;
+                }
+                
+                info!("FFI Bridge: Conductor Runtime started successfully.");
+                true
+            }
+            Err(e) => {
+                tracing::error!("FFI Bridge: Failed to initialize Conductor: {:?}", e);
+                false
+            }
+        }
+    }) {
+        Ok(result) => result,
+        Err(_) => {
+            error!("FFI BRIDGE FATAL: A panic occurred inside ssxl_start_runtime. Preventing crash.");
             false
         }
     }
 }
 
-/// Signals the Conductor to begin a graceful shutdown sequence.
-///
-/// The FFI consumer should call this before unloading the DLL/shared library.
-/// This prevents systemic entropy by allowing worker threads to finish.
+// ------------------------------------------------------------------
+
+// CORE FIX: The non-blocking polling function that Godot must call.
 #[no_mangle]
-pub extern "C" fn ssxl_shutdown_runtime() {
-    if let Some(conductor) = CONDUCTOR.get() {
-        // The conductor's destructor will handle waiting for threads if necessary.
-        conductor.signal_shutdown_graceful();
-        info!("FFI Bridge: Conductor Runtime signalled for shutdown.");
+pub extern "C" fn ssxl_poll_progress_message(
+    buffer: *mut c_char,
+    buffer_len: usize,
+) -> isize {
+    let receiver_mutex = match PROGRESS_RECEIVER.get() {
+        Some(m) => m,
+        None => return -1, // Runtime not initialized
+    };
+
+    let mut receiver_guard = match receiver_mutex.lock() {
+        Ok(guard) => guard,
+        Err(_) => return -2, // Lock failed
+    };
+    
+    // Use try_recv() for a non-blocking poll.
+    match receiver_guard.try_recv() {
+        Ok(message) => {
+            // Using Debug formatting for message serialization.
+            let status = format!("{:?}", message); 
+
+            let bytes = status.as_bytes();
+            let write_len = bytes.len().min(buffer_len.saturating_sub(1));
+
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, write_len);
+                *buffer.add(write_len) = 0; // Null-terminate the string
+            }
+            // Return the written length (positive)
+            write_len as isize
+        }
+        Err(TryRecvError::Empty) => {
+            0 // Return 0 to signal no message was received this tick
+        }
+        Err(TryRecvError::Disconnected) => {
+            error!("FFI Bridge: Progress channel disconnected. Clearing static.");
+            
+            // Channel is permanently dead. Clear the static to reset the state.
+            unsafe {
+                let ptr = &PROGRESS_RECEIVER as *const _ as *mut OnceLock<Mutex<ConductorProgressReceiver>>;
+                (*ptr).take();
+            }
+            -3 // Return a negative error code for permanent failure
+        }
     }
 }
 
-/// Checks if the Conductor runtime has been successfully initialized.
-///
-/// # Returns
-/// `true` if the Conductor is initialized and accessible, `false` otherwise.
+// ------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn ssxl_shutdown_runtime() {
+    // Panic guard applied to maintain FFI boundary stability
+    match panic::catch_unwind(|| {
+        // 1. Signal graceful shutdown to the Conductor thread
+        if let Some(mutex) = CONDUCTOR.get() {
+            if let Ok(conductor) = mutex.lock() {
+                conductor.signal_shutdown_graceful();
+                info!("FFI Bridge: Conductor Runtime signalled for shutdown.");
+            } else {
+                error!("FFI Bridge: Failed to acquire lock for shutdown (Possible poisoned lock).");
+            }
+        }
+        
+        // 2. Explicitly drop the receiver side (closes the channel for the workers)
+        unsafe {
+            let ptr = &PROGRESS_RECEIVER as *const _ as *mut OnceLock<Mutex<ConductorProgressReceiver>>;
+            (*ptr).take();
+        }
+        info!("FFI Bridge: Progress Receiver dropped.");
+    }) {
+        Ok(_) => {},
+        Err(_) => {
+            error!("FFI BRIDGE FATAL: Panic during ssxl_shutdown_runtime.");
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+
 #[no_mangle]
 pub extern "C" fn ssxl_is_runtime_ready() -> bool {
     CONDUCTOR.get().is_some()
 }
 
-/// A convenience alias for the primary initialization function.
+#[no_mangle]
+pub extern "C" fn ssxl_is_receiver_ready() -> bool {
+    PROGRESS_RECEIVER.get().is_some()
+}
+
 #[no_mangle]
 pub extern "C" fn ssxl_initialize_engine() -> bool {
     ssxl_start_runtime()
 }
 
-// --- 3. FFI Functions for Diagnostics and Debugging ---
+// ------------------------------------------------------------------
 
-/// Triggers a structural test sequence within the Conductor's runtime manager.
-/// This is typically used for integration testing or initial smoke checks.
 #[no_mangle]
 pub extern "C" fn ssxl_trigger_runtime_test() {
-    info!("FFI Bridge: Received command to trigger Conductor structural test.");
-    start_runtime_placeholder();
-    info!("FFI Bridge: Conductor test sequence complete.");
+    match panic::catch_unwind(|| {
+        info!("FFI Bridge: Received command to trigger Conductor structural test.");
+        start_runtime_placeholder();
+        info!("FFI Bridge: Conductor test sequence complete.");
+    }) {
+        Ok(_) => {},
+        Err(_) => {
+            error!("FFI BRIDGE FATAL: Panic during runtime test. Check start_runtime_placeholder.");
+        }
+    }
 }
 
-/// **[NEW SAFE FUNCTION]** Writes a formatted status string directly into a C-owned buffer.
-///
-/// This eliminates the memory leak risk by having the calling environment (Godot)
-/// allocate and own the memory, removing the need for an explicit Rust deallocation FFI call.
-///
-/// # Safety/FFI Contract
-/// 1. The caller must ensure `buffer` is a valid, non-null pointer.
-/// 2. The caller must ensure `buffer_len` accurately reflects the allocated size.
-///
-/// # Arguments
-/// * `buffer`: A pointer to the C-allocated buffer where the string will be written.
-/// * `buffer_len`: The maximum size (in bytes) of the buffer.
-/// * `id`: A simple identifier for the status query.
-///
-/// # Returns
-/// The number of bytes written to the buffer (excluding the null terminator),
-/// or a negative value (`-1`) on failure (e.g., null buffer).
+// ------------------------------------------------------------------
+
 #[no_mangle]
 pub extern "C" fn ssxl_write_status(
     buffer: *mut c_char,
@@ -131,24 +185,24 @@ pub extern "C" fn ssxl_write_status(
         CONDUCTOR.get().is_some()
     );
 
-    // Critical safety checks before touching the raw pointer
     if buffer.is_null() || buffer_len == 0 {
         return -1;
     }
 
     let bytes = status.as_bytes();
-    // Calculate the maximum number of bytes we can copy, leaving 1 for the null terminator.
     let write_len = bytes.len().min(buffer_len.saturating_sub(1));
 
     unsafe {
-        // 1. Copy the status bytes into the C-owned memory.
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, write_len);
-        // 2. CRITICAL: Null-terminate the string for C/GDScript compatibility.
         *buffer.add(write_len) = 0;
     }
 
     write_len as isize
 }
 
-// **[REMOVED]** ssxl_get_status (Used CString::into_raw(), requiring external free)
-// **[REMOVED]** ssxl_free_string (The required cleanup function for ssxl_get_status)
+// ------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn ssxl_get_chunks_completed() -> u32 {
+    CHUNKS_COMPLETED_COUNT.load(Ordering::Relaxed) as u32
+}

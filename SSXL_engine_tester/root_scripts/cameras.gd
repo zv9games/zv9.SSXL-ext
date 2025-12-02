@@ -1,105 +1,122 @@
+# cameras.gd
+# Manages camera switching, map panning, and zooming for the SSXL Tester.
 extends Node
 
 # ----------------------------------------------------------------------
-## DEPENDENCIES (using @onready for robust access)
+## 🧭 NODE REFERENCES (Typed Dependencies)
 # ----------------------------------------------------------------------
-
-@onready var camera1: Camera2D = $camera1
-@onready var camera2: Camera2D = $camera2
+# We rely on Godot's @onready for robust, typed access to child nodes.
+@onready var camera1: Camera2D = $camera1 as Camera2D # Control Panel View
+@onready var camera2: Camera2D = $camera2 as Camera2D # Map View (Zoomable, Pannable)
 
 # ----------------------------------------------------------------------
-## CONSTANTS & STATE
+## ⚙️ CONSTANTS & STATE (The Crypto-Coded Memory)
 # ----------------------------------------------------------------------
 
 # Zoom constants
-const ZOOM_SPEED: float = 0.1 
-const MIN_ZOOM: float = 0.05 
-const MAX_ZOOM: float = 10.0 
+const ZOOM_SPEED: float = 0.1
+const MIN_ZOOM: float = 0.05
+const MAX_ZOOM: float = 10.0
 
 # Panning State
 var is_panning: bool = false
 var last_mouse_position: Vector2 = Vector2.ZERO
 
+
 # ----------------------------------------------------------------------
-## LIFECYCLE
+## 🔗 LIFECYCLE (Initialization)
 # ----------------------------------------------------------------------
 
 func _ready() -> void:
-	# Ensure camera nodes exist before attempting to use them
-	if camera1 == null or camera2 == null:
-		push_error("❌ Critical: Camera nodes (camera1 or camera2) not found as children.")
+	# Critical Node Validation
+	if not is_instance_valid(camera1) or not is_instance_valid(camera2):
+		push_error("❌ CRITICAL: Camera nodes (camera1 or camera2) not found. Check scene tree.")
 		return
 		
-	# Start by making camera1 current
+	# Start by ensuring camera1 (the UI view) is active
 	camera1.make_current()
+	print("✅ Cameras: Initialized. Camera 1 (UI View) is current.")
+
 
 # ----------------------------------------------------------------------
-## INPUT HANDLING (Toggle, Zoom, & Pan)
+## ⌨️ INPUT HANDLING (Decoupled Tempo Regulation)
 # ----------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
-	# --- 1. Camera Toggle Logic (Space/Tab) ---
-	if event is InputEventKey and event.is_pressed() and not event.is_echo():
-		if event.is_action("ui_accept") or event.is_action("ui_focus_next"):
-			get_viewport().set_input_as_handled()
-			_toggle_camera()
-			return
-
-	# Only proceed with Mouse/Map controls if camera2 is the current active camera
-	if camera2 and camera2.is_current():
+	
+	# Only handle input if the Map Camera (camera2) is currently active
+	if not is_instance_valid(camera2) or not camera2.is_current():
+		return
 		
-		# --- 2. Combined Mouse Input Handling (Zoom & Pan State) ---
-		if event is InputEventMouseButton:
+	# --- 1. Zoom Logic (Mouse Wheel) ---
+	if event is InputEventMouseButton:
+		var mouse_event: InputEventMouseButton = event
+		
+		# Zoom In
+		if mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			var new_zoom: float = camera2.zoom.x + ZOOM_SPEED
+			set_map_zoom(new_zoom)
+			get_viewport().set_input_as_handled()
+		
+		# Zoom Out
+		elif mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			var new_zoom: float = camera2.zoom.x - ZOOM_SPEED
+			set_map_zoom(new_zoom)
+			get_viewport().set_input_as_handled()
+		
+		# Panning Start/Stop (Middle Mouse Button)
+		elif mouse_event.button_index == MOUSE_BUTTON_MIDDLE:
+			is_panning = mouse_event.is_pressed()
 			
-			var current_zoom: Vector2 = camera2.zoom
-			var new_zoom: Vector2 = current_zoom
+			if is_panning:
+				last_mouse_position = mouse_event.position
 			
-			# --- A. ZOOM LOGIC (Scroll Wheel) ---
-			# We only check for the press event to prevent double-processing.
-			if event.is_pressed():
-				if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-					# Zoom IN
-					new_zoom -= Vector2(ZOOM_SPEED, ZOOM_SPEED)
-				elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-					# Zoom OUT
-					new_zoom += Vector2(ZOOM_SPEED, ZOOM_SPEED)
-			
-			if new_zoom != current_zoom:
-				# Apply and clamp zoom
-				new_zoom = new_zoom.clamp(Vector2(MIN_ZOOM, MIN_ZOOM), Vector2(MAX_ZOOM, MAX_ZOOM))
-				camera2.zoom = new_zoom
-				get_viewport().set_input_as_handled()
-				return 
-			
-			# --- B. PANNING STATE LOGIC (Middle Click) ---
-			if event.button_index == MOUSE_BUTTON_MIDDLE:
-				is_panning = event.is_pressed()
-				
-				if is_panning:
-					last_mouse_position = event.position
-				
-				get_viewport().set_input_as_handled()
-				return 
-
-		# --- 3. Camera Pan Logic (Mouse Motion) ---
-		elif event is InputEventMouseMotion and is_panning:
-			
-			var delta: Vector2 = event.position - last_mouse_position
-			
-			# Correct Pan: Moves the camera by the screen delta adjusted for current zoom level.
-			camera2.position -= delta / camera2.zoom
-			
-			last_mouse_position = event.position
 			get_viewport().set_input_as_handled()
 			return
+	
+	# --- 2. Camera Pan Logic (Mouse Motion) ---
+	elif event is InputEventMouseMotion and is_panning:
+		var delta: Vector2 = event.position - last_mouse_position
+		
+		# Correct Pan: Moves the camera by the screen delta adjusted for current zoom level.
+		# This must be inverted to make drag feel natural.
+		camera2.position -= delta / camera2.zoom
+		
+		last_mouse_position = event.position
+		get_viewport().set_input_as_handled()
+		return
+		
+	# --- 3. Camera Toggle Logic (Keyboard Shortcut - Delegated) ---
+	# NOTE: The ControlPanelUtility script is the primary handler for F6/Tab,
+	# calling the _toggle_camera() method below. This keeps input centralized.
+
 
 # ----------------------------------------------------------------------
-## PUBLIC API (No functional change, uses @onready variables)
+## 🖼️ CAMERA UTILITIES (Map Control)
+# ----------------------------------------------------------------------
+
+func set_map_zoom(target_zoom: float) -> void:
+	"""Clamps the zoom level and applies it to the map camera (camera2)."""
+	
+	if not is_instance_valid(camera2):
+		return
+		
+	# Clamp the zoom level to prevent extreme values (systemic entropy)
+	var clamped_zoom: float = clampf(target_zoom, MIN_ZOOM, MAX_ZOOM)
+	
+	# Apply zoom uniformly across X and Y axes
+	camera2.zoom = Vector2(clamped_zoom, clamped_zoom)
+
+
+# ----------------------------------------------------------------------
+## 📡 PUBLIC API (The FFI Link for the Control Panel)
 # ----------------------------------------------------------------------
 
 func switch_to_camera(index: int) -> void:
-	if camera1 == null or camera2 == null:
-		print("⚠️ Camera nodes not found.")
+	"""Makes the specified camera current (1: UI, 2: Map)."""
+	
+	if not is_instance_valid(camera1) or not is_instance_valid(camera2):
+		push_error("⚠️ Camera nodes not found.")
 		return
 
 	if index == 1:
@@ -109,17 +126,16 @@ func switch_to_camera(index: int) -> void:
 		camera2.make_current()
 		print("➡️ Switched to Camera 2 (Map View).")
 	else:
-		print("⚠️ Invalid camera index passed.")
+		push_warning("⚠️ Invalid camera index passed.")
+
 
 func _toggle_camera() -> void:
-	if camera1 == null or camera2 == null:
+	"""Switches between the two available cameras."""
+	if not is_instance_valid(camera1) or not is_instance_valid(camera2):
 		return
 
 	# Determine which camera is currently active and switch
 	if camera1.is_current():
-		switch_to_camera(2) # Use public API for consistency
+		switch_to_camera(2) # Switch to Map View
 	elif camera2.is_current():
-		switch_to_camera(1) # Use public API for consistency
-	else:
-		# Fallback: if neither is current, default to camera1
-		switch_to_camera(1)
+		switch_to_camera(1) # Switch to Control Panel View

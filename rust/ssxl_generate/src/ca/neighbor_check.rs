@@ -1,9 +1,8 @@
-// ssxl_generate/src/neighbor_check.rs
+// ssxl_generate/src/ca/neighbor_check.rs
 
-use ssxl_shared::{
-    chunk_data::{ChunkData, CHUNK_SIZE},
-    tile_type::TileType,
-};
+// FIX: Import ChunkData, CHUNK_SIZE, and TileType directly from the ssxl_shared root, 
+// as the inner modules (`chunk_data` and `tile_type`) are no longer public.
+use ssxl_shared::{ChunkData, CHUNK_SIZE, TileType};
 
 /// Counts the number of "live" (TileType::Rock) neighbors in the 3x3 Moore neighborhood
 /// surrounding a specific cell within a chunk.

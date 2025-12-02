@@ -1,0 +1,122 @@
+﻿SSXL-ext LOC Summary Report
+Generated (UTC): 2025-11-28 21:06:48
+Generated (Epoch Seconds): 1764364008
+Root Directories: .\rust, .\SSXL_engine_tester
+Target Extensions: rs, toml, gd, gdc, md
+
+------------------------------------------------------
+ FILE LOC | Relative File Path
+------------------------------------------------------
+       77 LOC | rust\cargo.toml
+      143 LOC | rust\manifest.rs
+       21 LOC | rust\ssxl_animate\Cargo.toml
+      109 LOC | rust\ssxl_animate\src\animation_logic.rs
+       89 LOC | rust\ssxl_animate\src\conductor.rs
+       60 LOC | rust\ssxl_animate\src\lib.rs
+       56 LOC | rust\ssxl_animate\src\worker.rs
+       13 LOC | rust\ssxl_cache\Cargo.toml
+      122 LOC | rust\ssxl_cache\src\lib.rs
+       34 LOC | rust\ssxl_cli\Cargo.toml
+      140 LOC | rust\ssxl_cli\src\cli_util_bench.rs
+      157 LOC | rust\ssxl_cli\src\cli_util_inspect.rs
+      139 LOC | rust\ssxl_cli\src\cli_util_loc.rs
+      190 LOC | rust\ssxl_cli\src\cli_util_menu.rs
+      127 LOC | rust\ssxl_cli\src\main.rs
+      165 LOC | rust\ssxl_cli\src\actions\actions.rs
+       71 LOC | rust\ssxl_cli\src\actions\benchmarking.rs
+      136 LOC | rust\ssxl_cli\src\actions\godot_harness.rs
+       78 LOC | rust\ssxl_cli\src\actions\mod.rs
+       52 LOC | rust\ssxl_cli\src\actions\testing.rs
+      234 LOC | rust\ssxl_cli\src\actions\test_core_suites.rs
+      137 LOC | rust\ssxl_cli\src\actions\test_suites.rs
+       13 LOC | rust\ssxl_config\src\engine.toml
+       17 LOC | rust\ssxl_engine_ffi\Cargo.toml
+      181 LOC | rust\ssxl_engine_ffi\src\lib.rs
+       25 LOC | rust\ssxl_generate\Cargo.toml
+       46 LOC | rust\ssxl_generate\src\lib.rs
+      192 LOC | rust\ssxl_generate\src\ca\cellular_automata_generator.rs
+       16 LOC | rust\ssxl_generate\src\ca\mod.rs
+       59 LOC | rust\ssxl_generate\src\ca\neighbor_check.rs
+       56 LOC | rust\ssxl_generate\src\ca\rule_set.rs
+      209 LOC | rust\ssxl_generate\src\conductor\conductor.rs
+       62 LOC | rust\ssxl_generate\src\conductor\conductor_state.rs
+       19 LOC | rust\ssxl_generate\src\conductor\sync.rs
+       59 LOC | rust\ssxl_generate\src\manager\config_validator.rs
+       30 LOC | rust\ssxl_generate\src\manager\generator.rs
+       82 LOC | rust\ssxl_generate\src\manager\generator_manager.rs
+       35 LOC | rust\ssxl_generate\src\manager\runtime_manager.rs
+       97 LOC | rust\ssxl_generate\src\perlin\perlin_generator.rs
+       67 LOC | rust\ssxl_generate\src\task\batch_processor.rs
+       25 LOC | rust\ssxl_generate\src\task\benchmark_logic.rs
+      119 LOC | rust\ssxl_generate\src\task\task_queue.rs
+       29 LOC | rust\ssxl_godot\Cargo.toml
+       35 LOC | rust\ssxl_godot\src\lib.rs
+       30 LOC | rust\ssxl_godot\src\anim\animation_api.rs
+       61 LOC | rust\ssxl_godot\src\engine\api.rs
+      102 LOC | rust\ssxl_godot\src\engine\api_initializers.rs
+       58 LOC | rust\ssxl_godot\src\engine\commands.rs
+      106 LOC | rust\ssxl_godot\src\engine\init.rs
+       23 LOC | rust\ssxl_godot\src\engine\mod.rs
+       44 LOC | rust\ssxl_godot\src\engine\poller.rs
+       62 LOC | rust\ssxl_godot\src\engine\query.rs
+       13 LOC | rust\ssxl_godot\src\engine\query_data.rs
+       60 LOC | rust\ssxl_godot\src\engine\render_batch.rs
+       81 LOC | rust\ssxl_godot\src\engine\state.rs
+       63 LOC | rust\ssxl_godot\src\engine\tick.rs
+       56 LOC | rust\ssxl_godot\src\ffi\gde_api_defs.rs
+        6 LOC | rust\ssxl_godot\src\ffi\mod.rs
+      100 LOC | rust\ssxl_godot\src\ffi\oracle.rs
+       48 LOC | rust\ssxl_godot\src\ffi\signals.rs
+       51 LOC | rust\ssxl_godot\src\tilemap\async_poll.rs
+       77 LOC | rust\ssxl_godot\src\tilemap\ssxl_tilemap.rs
+       62 LOC | rust\ssxl_godot\src\tilemap\status_reporter.rs
+       16 LOC | rust\ssxl_math\Cargo.toml
+      118 LOC | rust\ssxl_math\src\coordinate_system.rs
+       62 LOC | rust\ssxl_math\src\generation_utils.rs
+       97 LOC | rust\ssxl_math\src\hashing.rs
+       50 LOC | rust\ssxl_math\src\lib.rs
+       59 LOC | rust\ssxl_math\src\primitives.rs
+       15 LOC | rust\ssxl_shared\cargo.toml
+       74 LOC | rust\ssxl_shared\src\lib.rs
+      218 LOC | rust\ssxl_shared\src\chunk\chunk_data.rs
+       64 LOC | rust\ssxl_shared\src\chunk\grid_bounds.rs
+       22 LOC | rust\ssxl_shared\src\config\config.rs
+       60 LOC | rust\ssxl_shared\src\error\errors.rs
+       31 LOC | rust\ssxl_shared\src\job\mod.rs
+       41 LOC | rust\ssxl_shared\src\math\math_primitives.rs
+       40 LOC | rust\ssxl_shared\src\message\generation_message.rs
+       92 LOC | rust\ssxl_shared\src\message\messages.rs
+      123 LOC | rust\ssxl_shared\src\tile\tile_data.rs
+      107 LOC | rust\ssxl_shared\src\tile\tile_type.rs
+       24 LOC | rust\ssxl_sync\Cargo.toml
+       88 LOC | rust\ssxl_sync\src\animation_conductor.rs
+       65 LOC | rust\ssxl_sync\src\lib.rs
+      149 LOC | rust\ssxl_sync\src\pool.rs
+       34 LOC | rust\ssxl_sync\src\primitives.rs
+       10 LOC | rust\ssxl_tools\Cargo.toml
+      127 LOC | rust\ssxl_tools\src\lib.rs
+       21 LOC | SSXL_engine_tester\addons\S2O_godot_plugin\Aetherion.gd
+       31 LOC | SSXL_engine_tester\addons\S2O_godot_plugin\S2O_plugin.gd
+       21 LOC | SSXL_engine_tester\addons\S2O_godot_plugin\SSXL.gd
+      121 LOC | SSXL_engine_tester\root_scripts\cameras.gd
+        1 LOC | SSXL_engine_tester\root_scripts\camera_2.gd
+       73 LOC | SSXL_engine_tester\root_scripts\controlpanelanimation.gd
+      108 LOC | SSXL_engine_tester\root_scripts\controlpanelgenlogic.gd
+       80 LOC | SSXL_engine_tester\root_scripts\controlpanelsignalhandler.gd
+       96 LOC | SSXL_engine_tester\root_scripts\controlpaneluisetup.gd
+      170 LOC | SSXL_engine_tester\root_scripts\controlpanelutility.gd
+      110 LOC | SSXL_engine_tester\root_scripts\control_panel.gd
+       37 LOC | SSXL_engine_tester\root_scripts\init.gd
+        1 LOC | SSXL_engine_tester\root_scripts\logger.gd
+      104 LOC | SSXL_engine_tester\root_scripts\main.gd
+       24 LOC | SSXL_engine_tester\root_scripts\root.gd
+       28 LOC | SSXL_engine_tester\root_scripts\scenescanner.gd
+       17 LOC | SSXL_engine_tester\root_scripts\ssxl_signals.gd
+       44 LOC | SSXL_engine_tester\root_scripts\ssxl_tilemap.gd
+        5 LOC | SSXL_engine_tester\root_scripts\tester.gd
+       88 LOC | SSXL_engine_tester\tests\headless_gen_pipeline.gd
+       23 LOC | SSXL_engine_tester\test_scripts\control_panel.gd
+       72 LOC | SSXL_engine_tester\test_scripts\test_ffi_data.gd
+------------------------------------------------------
+     7987 LOC | TOTAL
+------------------------------------------------------

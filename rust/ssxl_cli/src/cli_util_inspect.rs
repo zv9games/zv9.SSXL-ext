@@ -62,19 +62,24 @@ pub fn print_module_tree() {
 
 
 pub fn print_godot_api_surface() {
-	let godot_api_files: [&str; 3] = [
+	// --- STRATEGIC UPDATE: INCLUDE FFI CORE ---
+	let godot_api_files: [&str; 4] = [
         "ssxl_godot/src/ssxl_engine.rs",
-        "ssxl_godot/src/ssxl_oracle.rs", 
+        "ssxl_godot/src/ssxl_oracle.rs",
         "ssxl_godot/src/ssxl_signals.rs",
+        "ssxl_engine_ffi/src/lib.rs", // CRITICAL: Captures C-Bindings
     ];
 
-    println!("🧪 API scan triggered (targeting {} files in ssxl_godot/src/)...", godot_api_files.len());
+    println!("🧪 API scan triggered (targeting {} files in ssxl_godot/src/ and FFI core)...", godot_api_files.len());
     
-    let fn_signature_regex = Regex::new(
-        r"^\s*pub\s+fn\s+(\w+)\s*(\([^\{]*)\s*(?:->\s*([^\{]*))?\s*\{"
+	// --- MASTER REGEX FOR ALL CALLABLE METHODS (FIXED ESCAPING) ---
+    let method_regex = Regex::new(
+        // FIX: Removed the erroneous backslashes around the "C" literal (i.e., \"C\" -> "C")
+        // and using a robust raw string literal r#""# to prevent any further escaping issues.
+        r#"(?s)(?:\s*#\[func\].*?|#\[no_mangle\].*?pub\s+extern\s+"C"\s*)\s*(?:pub\s+fn|fn)\s+(\w+)\s*(\([^\{]*)\s*(?:->\s*([^\{]*))?"#
     ).unwrap();
-    let func_marker_regex = Regex::new(r"^\s*#\[func\]\s*$").unwrap();
 
+	// Signal regex remains robust for line-based #[signal] definitions
     let signal_signature_regex = Regex::new(
         r"^\s*fn\s+(\w+)\s*(\([^;]*)\s*;\s*$"
     ).unwrap();
@@ -84,46 +89,40 @@ pub fn print_godot_api_surface() {
     let mut api_signals: Vec<(String, String, String)> = Vec::new();
 
     for file_path_str in godot_api_files.iter() {
-        let godot_lib_path: &Path = Path::new(file_path_str);
+        let path: &Path = Path::new(file_path_str);
         let file_name = Path::new(file_path_str).file_name().unwrap().to_str().unwrap();
         
-        let mut func_line_pending = false;
         let mut signal_line_pending = false;
 
-        match fs::read_to_string(godot_lib_path) {
+        match fs::read_to_string(path) {
             Ok(contents) => {
-                info!("Successfully read {}", godot_lib_path.display());
+                info!("Successfully read {}", path.display());
                 
+				// --- METHOD SCAN (Single Pass over File Content) ---
+                for cap in method_regex.captures_iter(&contents) {
+                    let method_name = cap.get(1).map(|m| m.as_str()).unwrap_or("unknown_method").to_string();
+                    let args = cap.get(2)
+                        .map(|m| m.as_str().trim_start_matches('(').trim_end_matches(')').trim().to_string())
+                        .unwrap_or_default();
+                    let return_type = cap.get(3).map_or("()".to_string(), |m| m.as_str().trim().to_string());
+                    
+                    // Simple cleanup for args
+                    let clean_args = args.replace("self, ", "self,").trim().trim_start_matches("self").trim_start_matches(",").trim().to_string();
+
+                    api_methods.push((method_name, clean_args, return_type, file_name.to_string()));
+                }
+
+
+				// --- SIGNAL SCAN (Line-by-Line, No Change Needed) ---
                 for line in contents.lines() {
                     let trimmed_line = line.trim();
 
-                    if func_marker_regex.is_match(trimmed_line) {
-                        func_line_pending = true;
-                        signal_line_pending = false;
-                        continue;
-                    }
                     if signal_marker_regex.is_match(trimmed_line) {
                         signal_line_pending = true;
-                        func_line_pending = false;
                         continue;
                     }
-
-                    if func_line_pending {
-                        if let Some(captures) = fn_signature_regex.captures(trimmed_line) {
-                            let method_name = captures.get(1).map(|m| m.as_str()).unwrap_or("unknown_method").to_string();
-                            let args = captures.get(2)
-                                .map(|m| m.as_str().trim_start_matches('(').trim_end_matches(')').trim().to_string())
-                                .unwrap_or_default();
-                            let return_type = captures.get(3).map_or("()".to_string(), |m| m.as_str().trim().to_string());
-                            
-                            api_methods.push((method_name, args, return_type, file_name.to_string()));
-                            func_line_pending = false; 
-                        } else if !trimmed_line.is_empty() {
-                            func_line_pending = false;
-                        }
-                    } 
                     
-                    else if signal_line_pending {
+                    if signal_line_pending {
                         if let Some(captures) = signal_signature_regex.captures(trimmed_line) {
                             let signal_name = captures.get(1).map(|m| m.as_str()).unwrap_or("unknown_signal").to_string();
                             let args = captures.get(2)
@@ -144,14 +143,20 @@ pub fn print_godot_api_surface() {
         }
     }
 
-	println!("\n--- 🎮 SSXL Engine Developer API Surface ---");
+	println!("\n--- 🎮 SSXL Engine Developer MASTER API Surface ---");
     
     println!("\n✅ Callable Methods ({} total):", api_methods.len());
     if api_methods.is_empty() {
-        warn!("  No #[func] methods found in targeted files.");
+        warn!("  No callable methods found in targeted files (check FFI core!).");
     } else {
         for (name, args, return_type, source_file) in &api_methods {
-            println!("  > func {}({}) -> {} [{}]", name, args, return_type, source_file);
+            // Highlighting the low-level FFI entry points for clarity
+            let marker = if source_file == "lib.rs" && api_methods.iter().any(|(n,_,_,s)| n == name && s == source_file) {
+                "[FFI CORE]"
+            } else {
+                "[GDExt]"
+            };
+            println!("  > func {}({}) -> {} {} [{}]", name, args, return_type, marker, source_file);
         }
     }
 
@@ -163,7 +168,7 @@ pub fn print_godot_api_surface() {
             println!("  > signal {}({}) [{}]", name, args, source_file);
         }
     }
-	println!("-------------------------------------------\n");
+	println!("--------------------------------------------------");
 
     info!("API scan complete: {} methods and {} signals detected.", api_methods.len(), api_signals.len());
     thread::sleep(Duration::from_secs(2));

@@ -13,10 +13,13 @@ use bincode::{serialize, deserialize};
 
 // --- Project Imports ---
 use ssxl_generate::Generator;
-use ssxl_generate::perlin_generator::PerlinGenerator;
+// FIX E0432: `perlin_generator` likely renamed to `perlin`.
+use ssxl_generate::perlin::PerlinGenerator;
 use ssxl_math::Vec2i;
-use ssxl_shared::chunk_data::CHUNK_SIZE;
-use ssxl_shared::tile_data::AnimationUpdate;
+// FIX E0432: Correct path to Chunk data constant.
+use ssxl_shared::chunk::chunk_data::CHUNK_SIZE;
+// FIX E0432: Correct path to Tile data struct.
+use ssxl_shared::tile::tile_data::AnimationUpdate;
 
 
 // -----------------------------------------------------------------------------
@@ -60,7 +63,7 @@ pub fn run_communication_channel_test() {
         if cli_sender.send("TEST_COMMAND".to_string()).is_ok() {
             messages_sent += 1;
         }
-        std::thread::sleep(Duration::from_millis(1)); 
+        std::thread::sleep(Duration::from_millis(1));
     }
     
     drop(cli_sender);
@@ -101,7 +104,7 @@ pub fn run_map_generation_test() {
     let chunk_coords = Vec2i::new(10, 20);
     
     let start = Instant::now();
-    let chunk = generator.generate_chunk(chunk_coords); 
+    let chunk = generator.generate_chunk(chunk_coords);
     let duration = start.elapsed();
 
     let expected_size = (CHUNK_SIZE * CHUNK_SIZE) as usize;

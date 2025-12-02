@@ -1259,6 +1259,7 @@ dependencies = [
  "ssxl_godot",
  "ssxl_math",
  "ssxl_shared",
+ "tokio",
  "tracing",
 ]
 

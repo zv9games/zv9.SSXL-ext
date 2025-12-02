@@ -1,38 +1,22 @@
-//! # SSXL Shared Data Crate (`ssxl_shared`)
-//!
-//! This crate contains fundamental data structures, configuration constants, and
-//! messaging definitions utilized across all modules of the SSXL-ext procedural
-//! generation engine. Its purpose is to ensure data integrity and consistency
-//! between the high-speed worker threads and the main Godot runtime.
-
 use serde::{Deserialize, Serialize};
 use tracing;
 
-// --- Module Declarations ---
-
-pub mod chunk_data;
-pub mod tile_data;
-pub mod grid_bounds;
-pub mod tile_type;
-pub mod errors;
-pub mod messages;
+pub mod chunk;
+pub mod tile;
+pub mod error;
 pub mod config;
-pub mod generation_message;
-pub mod math_primitives;
+pub mod message;
+pub mod math;
+pub mod job;
 
-// --- Public Re-exports (The Main Crate API) ---
+pub use ssxl_math::primitives::{ChunkId, TileCoord};
 
-// 1. Primitive Spatial IDs (Re-exported from ssxl_math)
-pub use ssxl_math::primitives::{ChunkId, TileCoord}; 
+pub use chunk::chunk_data::{ChunkData, CHUNK_SIZE};
+pub use tile::tile_data::TileData;
+pub use chunk::grid_bounds::GridBounds;
+pub use tile::tile_type::TileType;
 
-// 2. Core Data Structures & Constants
-pub use chunk_data::{ChunkData, CHUNK_SIZE}; 
-pub use tile_data::{AnimationUpdate, TileData}; // Canonical source for AnimationUpdate
-pub use grid_bounds::GridBounds;
-pub use tile_type::TileType;
-
-// 3. Cycle-Breaking Communication Types (From the messages module)
-pub use messages::{
+pub use message::messages::{
     AnimationCommand,
     AnimationType,
     AnimationPayload,
@@ -40,15 +24,12 @@ pub use messages::{
     AnimationConductorHandle,
     AnimationState,
     CommandResult,
+    AnimationUpdate,
 };
 
-// 4. Error Handling
-pub use errors::{SSXLError, SSXLResult};
+pub use error::errors::{SSXLError, SSXLResult};
 pub use anyhow;
 
-// --- Generic Data Structure ---
-
-/// A generic struct used to represent serializable, time-stamped data payloads.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SSXLData {
     pub id: u64,
@@ -56,24 +37,24 @@ pub struct SSXLData {
     pub value: String,
 }
 
-// --- Initialization Function ---
-
-/// Initializes the shared data module.
 pub fn initialize_shared_data() {
     tracing::info!("SSXL Shared Data Primitives initialized (Priority 1 complete).");
 }
 
-// --- Prelude for Ergonomics ---
-
-/// A convenience module that re-exports all essential types for ergonomic use.
-/// Other SSXL-ext crates are encouraged to use `use ssxl_shared::prelude::*`.
 pub mod prelude {
-    // Re-export core structs
-    pub use super::{ChunkData, TileData, GridBounds, TileType};
-    // Re-export Primitives
+    pub use super::chunk::chunk_data::{ChunkData, CHUNK_SIZE};
+    pub use super::tile::tile_data::TileData;
+    pub use super::chunk::grid_bounds::GridBounds;
+    pub use super::tile::tile_type::TileType;
+    
     pub use super::{ChunkId, TileCoord};
-    // Re-export Errors
-    pub use super::{SSXLError, SSXLResult};
-    // Re-export Communication Types (essential for high-level module interaction)
-    pub use super::{AnimationCommand, AnimationUpdate, AnimationType};
+    
+    pub use super::error::errors::{SSXLError, SSXLResult};
+    
+    pub use super::message::messages::{AnimationCommand, AnimationType};
+    pub use super::message::messages::AnimationUpdate;
 }
+
+use std::sync::atomic::AtomicUsize;
+
+pub static CHUNKS_COMPLETED_COUNT: AtomicUsize = AtomicUsize::new(0);

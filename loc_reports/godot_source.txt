@@ -1,0 +1,1585 @@
+﻿>>> FILE START: SSXL_engine_tester\addons\S2O_godot_plugin\Aetherion.gd (21 LOC) <<<
+extends Node
+
+func enter_idle():
+    print("🌙 Aetherion in idle mode.")
+    call_deferred("_bind_idle")
+
+func _bind_idle():
+    if Engine.is_editor_hint():
+        print("🧿 Editor context detected. Idle phase skipped.")
+        return
+
+    if has_method("start_idle"):
+        start_idle()
+    else:
+        print("⚠️ No idle method found. Skipping ticker.")
+
+func start_idle():
+    print("🪶 Idle ticker started.")
+    # Optional: set up heartbeat, overlay, or runtime polling
+
+func activate():
+    print("⚡ Aetherion activated.")
+    # Optional: call_deferred("_bind_active")
+
+func teardown():
+    print("🧺 Aetherion teardown.")
+    # Optional: stop ticker, release ligatures
+
+<<< FILE END: SSXL_engine_tester\addons\S2O_godot_plugin\Aetherion.gd >>>
+
+>>> FILE START: SSXL_engine_tester\addons\S2O_godot_plugin\S2O_plugin.gd (31 LOC) <<<
+@tool
+extends EditorPlugin
+
+var ssxl_instance: Node = null
+
+func _enter_tree() -> void:
+    print("🌀 SSXL plugin booting...")
+    ProjectSettings.set_setting("ssxl/plugin_enabled", true)
+
+    var script_path := "res://addons/S2O_godot_plugin/ssxl.gd"
+    if ResourceLoader.exists(script_path):
+        var script_res := load(script_path)
+        if script_res and script_res is Script:
+            ssxl_instance = script_res.new()
+            if ssxl_instance:
+                get_tree().root.add_child(ssxl_instance)
+                print("✨ SSXL instance added to scene tree.")
+                if ssxl_instance.has_method("enter_idle"):
+                    ssxl_instance.call_deferred("enter_idle")
+                else:
+                    print("⚠️ SSXL instance missing 'enter_idle' method.")
+            else:
+                push_error("❌ Failed to instantiate SSXL script.")
+        else:
+            push_error("❌ Invalid script resource at: %s" % script_path)
+    else:
+        push_error("❌ SSXL script not found at: %s" % script_path)
+
+func _exit_tree() -> void:
+    print("🧹 SSXL plugin dismissed.")
+    ProjectSettings.set_setting("ssxl/plugin_enabled", false)
+
+    if is_instance_valid(ssxl_instance):
+        ssxl_instance.queue_free()
+        print("🧺 SSXL instance freed.")
+    ssxl_instance = null
+
+<<< FILE END: SSXL_engine_tester\addons\S2O_godot_plugin\S2O_plugin.gd >>>
+
+>>> FILE START: SSXL_engine_tester\addons\S2O_godot_plugin\SSXL.gd (21 LOC) <<<
+extends Node
+
+func enter_idle():
+    print("🌙 SSXL in idle mode.")
+    call_deferred("_bind_idle")
+
+func _bind_idle():
+    if Engine.is_editor_hint():
+        print("🧿 Editor context detected. Idle phase skipped.")
+        return
+
+    if has_method("start_idle"):
+        start_idle()
+    else:
+        print("⚠️ No idle method found. Skipping ticker.")
+
+func start_idle():
+    print("🪶 Idle ticker started.")
+    # Optional: set up heartbeat, overlay, or runtime polling
+
+func activate():
+    print("⚡ SSXL activated.")
+    # Optional: call_deferred("_bind_active")
+
+func teardown():
+    print("🧺 SSXL teardown.")
+    # Optional: stop ticker, release ligatures
+
+<<< FILE END: SSXL_engine_tester\addons\S2O_godot_plugin\SSXL.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\cameras.gd (121 LOC) <<<
+# cameras.gd
+# Manages camera switching, map panning, and zooming for the SSXL Tester.
+extends Node
+
+# ----------------------------------------------------------------------
+## 🧭 NODE REFERENCES (Typed Dependencies)
+# ----------------------------------------------------------------------
+# We rely on Godot's @onready for robust, typed access to child nodes.
+@onready var camera1: Camera2D = $camera1 as Camera2D # Control Panel View
+@onready var camera2: Camera2D = $camera2 as Camera2D # Map View (Zoomable, Pannable)
+
+# ----------------------------------------------------------------------
+## ⚙️ CONSTANTS & STATE (The Crypto-Coded Memory)
+# ----------------------------------------------------------------------
+
+# Zoom constants
+const ZOOM_SPEED: float = 0.1
+const MIN_ZOOM: float = 0.05
+const MAX_ZOOM: float = 10.0
+
+# Panning State
+var is_panning: bool = false
+var last_mouse_position: Vector2 = Vector2.ZERO
+
+
+# ----------------------------------------------------------------------
+## 🔗 LIFECYCLE (Initialization)
+# ----------------------------------------------------------------------
+
+func _ready() -> void:
+	# Critical Node Validation
+	if not is_instance_valid(camera1) or not is_instance_valid(camera2):
+		push_error("❌ CRITICAL: Camera nodes (camera1 or camera2) not found. Check scene tree.")
+		return
+		
+	# Start by ensuring camera1 (the UI view) is active
+	camera1.make_current()
+	print("✅ Cameras: Initialized. Camera 1 (UI View) is current.")
+
+
+# ----------------------------------------------------------------------
+## ⌨️ INPUT HANDLING (Decoupled Tempo Regulation)
+# ----------------------------------------------------------------------
+
+func _unhandled_input(event: InputEvent) -> void:
+	
+	# Only handle input if the Map Camera (camera2) is currently active
+	if not is_instance_valid(camera2) or not camera2.is_current():
+		return
+		
+	# --- 1. Zoom Logic (Mouse Wheel) ---
+	if event is InputEventMouseButton:
+		var mouse_event: InputEventMouseButton = event
+		
+		# Zoom In
+		if mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			var new_zoom: float = camera2.zoom.x + ZOOM_SPEED
+			set_map_zoom(new_zoom)
+			get_viewport().set_input_as_handled()
+		
+		# Zoom Out
+		elif mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			var new_zoom: float = camera2.zoom.x - ZOOM_SPEED
+			set_map_zoom(new_zoom)
+			get_viewport().set_input_as_handled()
+		
+		# Panning Start/Stop (Middle Mouse Button)
+		elif mouse_event.button_index == MOUSE_BUTTON_MIDDLE:
+			is_panning = mouse_event.is_pressed()
+			
+			if is_panning:
+				last_mouse_position = mouse_event.position
+			
+			get_viewport().set_input_as_handled()
+			return
+	
+	# --- 2. Camera Pan Logic (Mouse Motion) ---
+	elif event is InputEventMouseMotion and is_panning:
+		var delta: Vector2 = event.position - last_mouse_position
+		
+		# Correct Pan: Moves the camera by the screen delta adjusted for current zoom level.
+		# This must be inverted to make drag feel natural.
+		camera2.position -= delta / camera2.zoom
+		
+		last_mouse_position = event.position
+		get_viewport().set_input_as_handled()
+		return
+		
+	# --- 3. Camera Toggle Logic (Keyboard Shortcut - Delegated) ---
+	# NOTE: The ControlPanelUtility script is the primary handler for F6/Tab,
+	# calling the _toggle_camera() method below. This keeps input centralized.
+
+
+# ----------------------------------------------------------------------
+## 🖼️ CAMERA UTILITIES (Map Control)
+# ----------------------------------------------------------------------
+
+func set_map_zoom(target_zoom: float) -> void:
+	"""Clamps the zoom level and applies it to the map camera (camera2)."""
+	
+	if not is_instance_valid(camera2):
+		return
+		
+	# Clamp the zoom level to prevent extreme values (systemic entropy)
+	var clamped_zoom: float = clampf(target_zoom, MIN_ZOOM, MAX_ZOOM)
+	
+	# Apply zoom uniformly across X and Y axes
+	camera2.zoom = Vector2(clamped_zoom, clamped_zoom)
+
+
+# ----------------------------------------------------------------------
+## 📡 PUBLIC API (The FFI Link for the Control Panel)
+# ----------------------------------------------------------------------
+
+func switch_to_camera(index: int) -> void:
+	"""Makes the specified camera current (1: UI, 2: Map)."""
+	
+	if not is_instance_valid(camera1) or not is_instance_valid(camera2):
+		push_error("⚠️ Camera nodes not found.")
+		return
+
+	if index == 1:
+		camera1.make_current()
+		print("➡️ Switched to Camera 1 (Control Panel View).")
+	elif index == 2:
+		camera2.make_current()
+		print("➡️ Switched to Camera 2 (Map View).")
+	else:
+		push_warning("⚠️ Invalid camera index passed.")
+
+
+func _toggle_camera() -> void:
+	"""Switches between the two available cameras."""
+	if not is_instance_valid(camera1) or not is_instance_valid(camera2):
+		return
+
+	# Determine which camera is currently active and switch
+	if camera1.is_current():
+		switch_to_camera(2) # Switch to Map View
+	elif camera2.is_current():
+		switch_to_camera(1) # Switch to Control Panel View
+
+<<< FILE END: SSXL_engine_tester\root_scripts\cameras.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\camera_2.gd (1 LOC) <<<
+extends Camera2D
+
+<<< FILE END: SSXL_engine_tester\root_scripts\camera_2.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\controlpanelanimation.gd (73 LOC) <<<
+class_name control_panel_animation_logic
+extends RefCounted
+
+var controller
+var tile_flip_queue: Array = []
+const MAX_FLIPS_PER_TICK: int = 1000
+var animation_is_active: bool = false
+
+func _init(p_controller: Control) -> void:
+	controller = p_controller
+
+func _on_animate_button_pressed() -> void:
+	animation_is_active = !animation_is_active
+	var button_pressed: bool = animation_is_active
+	
+	if is_instance_valid(controller.ssxl_engine) and controller.ssxl_engine.has_method("set_animation_enabled"):
+		controller.ssxl_engine.set_animation_enabled(button_pressed)
+	
+	setup_animation_worker(button_pressed)
+
+func setup_animation_worker(should_animate: bool) -> void:
+	animation_is_active = should_animate
+	
+	if is_instance_valid(controller.animation_timer):
+		controller.animation_timer.stop()
+	if is_instance_valid(controller.engine_timer):
+		controller.engine_timer.stop()
+		
+	if should_animate:
+		if is_instance_valid(controller.animation_timer):
+			controller.animation_timer.start()
+	else:
+		if is_instance_valid(controller.engine_timer):
+			controller.engine_timer.call_deferred("start")
+
+func _on_animation_timer_timeout() -> void:
+	if not controller.is_generating or not is_instance_valid(controller.ssxl_tilemap):
+		return
+		
+	var batch_size: int = min(tile_flip_queue.size(), MAX_FLIPS_PER_TICK)
+	
+	for i in range(batch_size):
+		var data: Dictionary = tile_flip_queue.pop_front()
+		if not data.is_empty():
+			process_tile_flip(data.tile_id, data.flip_frame)
+		
+	controller.ssxl_tilemap.force_update()
+	
+	if is_instance_valid(controller.ssxl_oracle):
+		controller.ssxl_oracle.tick()
+
+func _on_engine_timer_timeout() -> void:
+	controller.engine_tick_count += 1
+	if is_instance_valid(controller.ssxl_oracle):
+		controller.ssxl_oracle.tick()
+	
+	if is_instance_valid(controller.engine_timer_label):
+		controller.engine_timer_label.text = "Tick Count: %d" % controller.engine_tick_count
+
+func process_tile_flip(tile_id: int, flip_frame: int) -> void:
+	if not is_instance_valid(controller.ssxl_tilemap) or not is_instance_valid(controller.grid_width):
+		return
+
+	var map_width: int = int(controller.grid_width.value)
+	if map_width <= 0:
+		return
+
+	var x: int = tile_id % map_width
+	var y: int = tile_id / map_width
+	var coords: Vector2i = Vector2i(x, y)
+	
+	var source_id: int = controller.BASE_SOURCE_ID
+	var atlas_coords: Vector2i = controller.BASE_ATLAS_COORDS
+	
+	controller.ssxl_tilemap.set_cell(0, coords, source_id, atlas_coords, flip_frame)
+
+func _on_tile_flip_updated(tile_id: int, flip_frame: int) -> void:
+	if not animation_is_active or not controller.is_generating:
+		return
+
+	tile_flip_queue.append({ "tile_id": tile_id, "flip_frame": flip_frame })
+
+func redraw_tilemap_throttled() -> void:
+	if is_instance_valid(controller.ssxl_tilemap):
+		controller.ssxl_tilemap.force_update()
+
+<<< FILE END: SSXL_engine_tester\root_scripts\controlpanelanimation.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\controlpanelgenlogic.gd (108 LOC) <<<
+class_name control_panel_gen_logic
+extends RefCounted
+
+var control_panel: Control
+
+func _init(panel: Control) -> void:
+	control_panel = panel
+
+func start_generation() -> void:
+	if control_panel.is_generating:
+		stop_generation()
+		return
+	
+	_setup_generation_start()
+	
+	var width: int = int(control_panel.grid_width.value)
+	var height: int = int(control_panel.grid_height.value)
+	var seed_text: String = control_panel.seed_input.text
+	var generator_name: String = control_panel.tile_type_selector.get_item_text(
+		control_panel.tile_type_selector.selected
+	)
+	var seed_value: int = _parse_seed(seed_text)
+	
+	if not _validate_inputs(width, height):
+		if is_instance_valid(control_panel.utility):
+			control_panel.utility.stop_generation()
+		return
+	
+	if is_instance_valid(control_panel.ssxl_engine):
+		control_panel.ssxl_engine.set_generator(generator_name)
+		# Defer to avoid stalling UI while Rust starts
+		call_deferred("_start_ffi_generation", width, height, str(seed_value), generator_name)
+		control_panel.status_label.text = "Generating map..."
+	else:
+		if is_instance_valid(control_panel.utility):
+			control_panel.utility.stop_generation()
+
+func _start_ffi_generation(width: int, height: int, seed: String, generator_name: String) -> void:
+	if is_instance_valid(control_panel.ssxl_engine):
+		control_panel.ssxl_engine.build_map(width, height, seed, generator_name)
+
+func stop_generation() -> void:
+	# FIX: use utility (not 'quality')
+	if is_instance_valid(control_panel.utility):
+		control_panel.utility.stop_generation()
+	if is_instance_valid(control_panel.ssxl_engine):
+		control_panel.ssxl_engine.stop_generation()
+
+# SSXLTileMap rendering
+func _on_chunk_data_ready(key_x: int, key_y: int) -> void:
+	print("CHUNK RECEIVED → (", key_x, ",", key_y, ")")
+
+	if not is_instance_valid(control_panel.presenter):
+		push_error("FATAL: control_panel.presenter is NULL! Add it in control_panel.gd")
+		return
+	if not is_instance_valid(control_panel.ssxl_tilemap):
+		push_error("FATAL: ssxl_tilemap missing or invalid — cannot render chunk.")
+		return
+
+	var chunk_opt = control_panel.presenter.get_chunk_data(key_x, key_y)
+	if chunk_opt.is_none():
+		return
+
+	var chunk_data: Dictionary = chunk_opt.unwrap()
+	if not control_panel.utility.check_data_integrity(chunk_data):
+		push_warning("Chunk failed integrity: %s, %s" % [key_x, key_y])
+		return
+
+	var tiles: Array = chunk_data.tiles
+	var layer: int = 0
+	var source_id: int = control_panel.BASE_SOURCE_ID
+	var atlas_coords: Vector2i = control_panel.BASE_ATLAS_COORDS
+	var alt_id: int = control_panel.BASE_ALT_ID
+
+	var placed: int = 0
+	for tile in tiles:
+		var world_x: int = key_x * control_panel.CHUNK_SIZE_X + tile.x
+		var world_y: int = key_y * control_panel.CHUNK_SIZE_Y + tile.y
+		var coords := Vector2i(world_x, world_y)
+
+		# FIX: Godot 4 signature — set_cell(layer, coords, source_id, atlas_coords, alt_id)
+		control_panel.ssxl_tilemap.set_cell(layer, coords, source_id, atlas_coords, alt_id)
+
+		control_panel.total_tiles_placed += 1
+		placed += 1
+
+	# Optional: force update for immediate visual refresh
+	control_panel.ssxl_tilemap.force_update()
+
+	control_panel.progress_bar.value = control_panel.total_tiles_placed
+	control_panel.signal_handler._on_chunk_generated(key_x, key_y, placed)
+
+func _setup_generation_start() -> void:
+	control_panel.is_generating = true
+	control_panel.generate_button.text = "STOP GEN (F5)"
+	control_panel.generation_start_time_ms = Time.get_ticks_msec()
+	control_panel.total_tiles_placed = 0
+
+	var map_width: int = int(control_panel.grid_width.value)
+	var map_height: int = int(control_panel.grid_height.value)
+	control_panel.progress_bar.max_value = float(map_width * map_height)
+	control_panel.progress_bar.value = 0.0
+	control_panel.progress_bar.visible = true
+
+	if is_instance_valid(control_panel.ssxl_tilemap):
+		control_panel.ssxl_tilemap.clear()
+
+	# Timer orchestration
+	if control_panel.animation_logic.animation_is_active:
+		control_panel.engine_timer.stop()
+		control_panel.animation_timer.start()
+	else:
+		control_panel.animation_timer.stop()
+
+	if is_instance_valid(control_panel.engine_timer):
+		control_panel.engine_timer.stop()
+		control_panel.engine_timer.call_deferred("start")
+
+func _validate_inputs(map_width: int, map_height: int) -> bool:
+	if map_width <= 0 or map_height <= 0:
+		return false
+	if map_width % control_panel.CHUNK_SIZE_X != 0 or map_height % control_panel.CHUNK_SIZE_Y != 0:
+		push_warning("Map size must be multiple of chunk size!")
+		return false
+	return true
+
+func _parse_seed(seed_text: String) -> int:
+	if seed_text.is_empty():
+		return Time.get_ticks_msec()
+	return seed_text.strip_edges().to_lower().hash()
+
+<<< FILE END: SSXL_engine_tester\root_scripts\controlpanelgenlogic.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\controlpanelsignalhandler.gd (80 LOC) <<<
+var controller: Control
+
+func _init(p_controller: Control) -> void:
+	controller = p_controller
+
+func _on_ffi_alignment_complete() -> void:
+	_connect_local_ui_signals()
+	_connect_local_timers()
+
+func _connect_local_ui_signals() -> void:
+	var gen_callable = Callable(controller.gen_logic, "start_generation")
+	var animate_callable = Callable(controller.animation_logic, "_on_animate_button_pressed")
+	var toggle_callable = Callable(controller.utility, "on_toggle_terminal_button_pressed")
+	var width_callable = Callable(controller.ui_setup, "_on_grid_size_value_changed")
+	var height_callable = Callable(controller.ui_setup, "_on_grid_size_value_changed")
+	
+	if controller.generate_button.pressed.is_connected(gen_callable):
+		controller.generate_button.pressed.disconnect(gen_callable)
+	controller.generate_button.pressed.connect(gen_callable)
+
+	if controller.animate_ui_button.pressed.is_connected(animate_callable):
+		controller.animate_ui_button.pressed.disconnect(animate_callable)
+	controller.animate_ui_button.pressed.connect(animate_callable)
+	
+	if controller.toggle_terminal_button.pressed.is_connected(toggle_callable):
+		controller.toggle_terminal_button.pressed.disconnect(toggle_callable)
+	controller.toggle_terminal_button.pressed.connect(toggle_callable)
+	
+	if controller.grid_width.value_changed.is_connected(width_callable):
+		controller.grid_width.value_changed.disconnect(width_callable)
+	controller.grid_width.value_changed.connect(width_callable)
+	
+	if controller.grid_height.value_changed.is_connected(height_callable):
+		controller.grid_height.value_changed.disconnect(height_callable)
+	controller.grid_height.value_changed.connect(height_callable)
+
+func _connect_local_timers() -> void:
+	var engine_timer_callable = Callable(controller.animation_logic, "_on_engine_timer_timeout")
+	if is_instance_valid(controller.engine_timer) and not controller.engine_timer.timeout.is_connected(engine_timer_callable):
+		controller.engine_timer.timeout.connect(engine_timer_callable)
+
+func _on_engine_status_updated(status_message: String) -> void:
+	if not is_instance_valid(controller.status_label):
+		return
+	print("DEBUG: Engine status updated →", status_message)
+	controller.status_label.text = status_message
+
+func _on_generation_error(error_message: String) -> void:
+	print("DEBUG: Generation error →", error_message)
+	if is_instance_valid(controller.status_label):
+		controller.status_label.text = "ERROR: Generation failed. Check console."
+	if is_instance_valid(controller.generate_button):
+		controller.generate_button.text = "IGNITION"
+	controller.utility.reset_system_state()
+
+func _on_build_map_start() -> void:
+	print("DEBUG: Build map start signal received")
+	if is_instance_valid(controller.status_label):
+		controller.status_label.text = "Map Generation Initiated..."
+
+func _on_chunk_generated(chunk_x: int, chunk_y: int, tiles_in_chunk: int) -> void:
+	if not controller.is_generating:
+		return
+	print("DEBUG: Chunk generated → (%d, %d) with %d tiles" % [chunk_x, chunk_y, tiles_in_chunk])
+	
+	var percent: int = 0
+	if is_instance_valid(controller.progress_bar) and controller.progress_bar.max_value > 0:
+		percent = int(controller.progress_bar.value / controller.progress_bar.max_value * 100.0)
+
+	if percent != controller.last_percent and is_instance_valid(controller.status_label):
+		if percent % 5 == 0 or percent == 100:
+			controller.status_label.text = "Chunk (%d, %d) applied... %d%%" % [chunk_x, chunk_y, percent]
+		
+	controller.last_percent = percent
+
+func _on_build_map_complete() -> void:
+	var total_time_ms: int = Time.get_ticks_msec() - controller.generation_start_time_ms
+	var total_time_s: float = float(total_time_ms) / 1000.0
+	var tiles_per_second: float = 0.0
+	if total_time_s > 0.0:
+		tiles_per_second = float(controller.total_tiles_placed) / total_time_s
+	
+	var completion_msg: String = "Generation Complete! (%.2f seconds)" % total_time_s
+	print("DEBUG: Build map complete →", completion_msg, "Tiles/sec:", tiles_per_second)
+
+	if is_instance_valid(controller.status_label):
+		controller.status_label.text = completion_msg
+	if is_instance_valid(controller.generate_button):
+		controller.generate_button.text = "IGNITION"
+	if is_instance_valid(controller.tile_placement_time_label):
+		controller.tile_placement_time_label.text = "Time: %.2fs" % total_time_s
+
+	controller.utility.reset_system_state()
+
+<<< FILE END: SSXL_engine_tester\root_scripts\controlpanelsignalhandler.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\controlpaneluisetup.gd (96 LOC) <<<
+class_name control_panel_ui_setup
+extends RefCounted
+
+var controller: Control
+
+func _init(p_controller: Control) -> void:
+	controller = p_controller
+
+func setup_all() -> void:
+	setup_timers_properties()
+	setup_ui_elements()
+	connect_ui_signals()
+
+func setup_timers_properties() -> void:
+	if is_instance_valid(controller.engine_timer):
+		controller.engine_timer.wait_time = 0.5
+		controller.engine_timer.one_shot = false
+		controller.engine_timer.autostart = false
+	
+	if is_instance_valid(controller.animation_timer):
+		controller.animation_timer.wait_time = 0.5
+		controller.animation_timer.one_shot = false
+		controller.animation_timer.autostart = false
+	
+	if is_instance_valid(controller.redraw_throttle_timer):
+		controller.redraw_throttle_timer.one_shot = true
+		controller.redraw_throttle_timer.wait_time = 0.1
+
+func link_ffi_nodes() -> void:
+	var ssxl_engine: Node = controller.ssxl_engine
+	var ssxl_signals: Node = controller.ssxl_signals
+	var ssxl_oracle: Node = controller.ssxl_oracle
+	var tilemap: TileMap = controller.ssxl_tilemap   # FIX: use Rust SSXLTileMap
+
+	if is_instance_valid(ssxl_engine):
+		if is_instance_valid(ssxl_signals) and ssxl_engine.has_method("set_signals_node"):
+			ssxl_engine.set_signals_node(ssxl_signals)
+			print("DEBUG: Engine → Signals linked")
+
+		if is_instance_valid(tilemap) and ssxl_engine.has_method("set_tilemap"):
+			ssxl_engine.set_tilemap(tilemap)
+			print("DEBUG: Engine → SSXLTileMap linked")
+
+		if is_instance_valid(ssxl_oracle) and is_instance_valid(ssxl_signals) and ssxl_oracle.has_method("set_signals_node"):
+			ssxl_oracle.set_signals_node(ssxl_signals)
+			print("DEBUG: Oracle → Signals linked")
+
+func start_ffi_conductors() -> void:
+	var ssxl_engine: Node = controller.ssxl_engine
+	if is_instance_valid(ssxl_engine) and ssxl_engine.has_method("start_async_conductors"):
+		ssxl_engine.start_async_conductors()
+		print("DEBUG: Async conductors started")
+
+func setup_ui_elements() -> void:
+	var width_spinbox: SpinBox = controller.grid_width
+	var height_spinbox: SpinBox = controller.grid_height
+	
+	if is_instance_valid(width_spinbox) and is_instance_valid(height_spinbox):
+		width_spinbox.max_value = 1_000_000_000.0
+		width_spinbox.step = float(controller.CHUNK_SIZE_X)
+		width_spinbox.value = float(controller.CHUNK_SIZE_X * controller.DEFAULT_CHUNKS)
+		
+		height_spinbox.max_value = 1_000_000_000.0
+		height_spinbox.step = float(controller.CHUNK_SIZE_Y)
+		height_spinbox.value = float(controller.CHUNK_SIZE_Y * controller.DEFAULT_CHUNKS)
+
+	var tile_selector: OptionButton = controller.tile_type_selector
+	if is_instance_valid(tile_selector):
+		tile_selector.clear()
+		tile_selector.add_item("perlin_basic_2d", 0)
+		tile_selector.add_item("cellular_automata_solid", 1)
+		tile_selector.select(0)
+	
+	var placement_selector: OptionButton = controller.placement_mode_selector
+	if is_instance_valid(placement_selector):
+		placement_selector.clear()
+		placement_selector.add_item("perlin_basic_2d", 0)
+		placement_selector.add_item("cellular_automata_checkerboard", 1)
+		placement_selector.add_item("drunkards_walk", 2)
+		placement_selector.add_item("maze_recursive_division", 3)
+		placement_selector.select(0)
+		
+	if is_instance_valid(controller.progress_bar):
+		controller.progress_bar.visible = false
+	
+	if is_instance_valid(controller.status_label):
+		controller.status_label.text = "IDLE: Ready for Ignition."
+
+func connect_ui_signals() -> void:
+	if is_instance_valid(controller.grid_width):
+		controller.grid_width.value_changed.connect(self._on_grid_size_value_changed)
+		
+	if is_instance_valid(controller.grid_height):
+		controller.grid_height.value_changed.connect(self._on_grid_size_value_changed)
+
+	if is_instance_valid(controller.placement_mode_selector):
+		controller.placement_mode_selector.item_selected.connect(self._on_mode_selector_item_selected)
+
+	if is_instance_valid(controller.tile_type_selector):
+		controller.tile_type_selector.item_selected.connect(self._on_tile_type_selector_item_selected)
+
+func _on_grid_size_value_changed(value: float) -> void:
+	if is_instance_valid(controller.ssxl_tilemap) and not controller.is_generating:
+		controller.ssxl_tilemap.clear()
+		print("DEBUG: Tilemap cleared on grid size change")
+
+func _on_mode_selector_item_selected(index: int) -> void:
+	var mode: int = controller.placement_mode_selector.get_item_id(index)
+	print("DEBUG: Placement mode selected →", mode)
+
+func _on_tile_type_selector_item_selected(index: int) -> void:
+	var type_id: int = controller.tile_type_selector.get_item_id(index)
+	print("DEBUG: Tile type selected →", type_id)
+
+<<< FILE END: SSXL_engine_tester\root_scripts\controlpaneluisetup.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\controlpanelutility.gd (170 LOC) <<<
+class_name control_panel_utility extends RefCounted
+
+# Reference to the main control_panel.gd node (the Orchestrator).
+# This provides access to all UI elements, state, and external nodes.
+var controller: Control
+
+# ==============================================================================
+# 1. LIFECYCLE: Constructor
+# ==============================================================================
+func _init(p_controller: Control) -> void:
+	# Assign the reference to the main controller node.
+	if is_instance_valid(p_controller):
+		controller = p_controller
+	else:
+		push_error("❌ FATAL: ControlPanel reference missing in control_panel_utility constructor.")
+
+
+# ==============================================================================
+# 2. CORE VALIDATION
+# ==============================================================================
+# Checks for the existence and validity of all essential FFI and scene nodes.
+func check_critical_nodes() -> bool:
+	var valid: bool = true
+	var missing_nodes: Array[String] = []
+
+	# Check FFI GDExtension nodes
+	if not is_instance_valid(controller.ssxl_engine):
+		missing_nodes.append("SSXLEngine")
+		valid = false
+	if not is_instance_valid(controller.ssxl_signals):
+		missing_nodes.append("SSXLSignals")
+		valid = false
+	if not is_instance_valid(controller.ssxl_oracle):
+		missing_nodes.append("SSXLOracle")
+		valid = false
+		
+	# Check Scene/Presenter nodes
+	if not is_instance_valid(controller.expansive_tilemap):
+		missing_nodes.append("expansive_tilemap")
+		valid = false
+
+	if not valid:
+		var error_msg: String = "❌ CRITICAL NODES MISSING: " + ", ".join(missing_nodes)
+		push_error(error_msg)
+		if is_instance_valid(controller.status_label):
+			controller.status_label.text = error_msg
+	
+	return valid
+
+
+# ==============================================================================
+# 3. FFI AND TIMER HANDLERS
+# ==============================================================================
+
+# FIX: This function was missing and is connected to the engine_timer.
+# It acts as the heartbeat (polling loop) for the FFI Oracle.
+func _on_engine_timer_timeout() -> void:
+	print("⚙️ FFI TICKER: Polling core. Tick Count: %d" % controller.engine_tick_count)
+	controller.ssxl_oracle.tick()
+		
+	if is_instance_valid(controller.ssxl_oracle):
+		# Calling tick() tells the Rust core to process pending tasks/signals.
+		controller.ssxl_oracle.tick()
+
+# Handles the redraw_throttle_timer timeout, forcing a visual update.
+func _on_redraw_throttle_timeout() -> void:
+	if controller.redraw_pending and is_instance_valid(controller.expansive_tilemap):
+		# force_update() ensures all tiles placed in the background are drawn in one batch.
+		controller.expansive_tilemap.force_update()
+		controller.redraw_pending = false
+
+# Triggers a redraw cycle by starting the throttle timer.
+func request_redraw() -> void:
+	controller.redraw_pending = true
+	if is_instance_valid(controller.redraw_throttle_timer) and not controller.redraw_throttle_timer.is_stopped():
+		controller.redraw_throttle_timer.start()
+
+# Updates the clock label with the current system time.
+func on_clock_timer_timeout() -> void:
+	if is_instance_valid(controller.clock_label):
+		var time_string: String = Time.get_datetime_string_from_system()
+		controller.clock_label.text = "🕒 " + time_string
+
+
+# ==============================================================================
+# 4. INPUT AND UI HANDLERS
+# ==============================================================================
+# Handles global input events for hotkeys (F5, F6, F7).
+func handle_input_event(event: InputEvent) -> void:
+	if event is InputEventKey and event.is_pressed() and not event.is_echo():
+		
+		# F5: Start Generation (Delegates to gen_logic sub-script)
+		if event.keycode == KEY_F5:
+			# Safety check: Only run if generation is not already active.
+			if not controller.is_generating:
+				controller.gen_logic.start_generation()
+			controller.get_viewport().set_input_as_handled()
+			return
+		
+		# F6: Toggle Camera View
+		elif event.keycode == KEY_F6:
+			toggle_camera_view()
+			controller.get_viewport().set_input_as_handled()
+			return
+		
+		# F7: Toggle Control Panel Visibility
+		elif event.keycode == KEY_F7:
+			on_toggle_terminal_button_pressed()
+			controller.get_viewport().set_input_as_handled()
+			return
+
+# Toggles visibility of all control panel elements except the status billboard and button.
+func on_toggle_terminal_button_pressed() -> void:
+	controller.panel_collapsed = not controller.panel_collapsed
+	
+	for child in controller.get_children():
+		# Skip the control elements that must *always* be visible
+		if child == controller.toggle_terminal_button or child == controller.status_label:
+			continue
+			
+		# Toggle visibility for all other UI controls
+		if child is Control:
+			child.visible = not controller.panel_collapsed
+
+# Toggles the active camera view between camera1 and camera2.
+func toggle_camera_view() -> void:
+	var cameras_node: Node = controller.main.get_node("cameras")
+	
+	if is_instance_valid(cameras_node) and cameras_node.has_method("_toggle_camera"):
+		# Delegate the camera switch to the dedicated Cameras node manager.
+		cameras_node._toggle_camera()
+		
+		# Update the controller's state variable based on a simple toggle between 1 and 2.
+		controller.current_camera_id = 1 if controller.current_camera_id == 2 else 2
+
+
+# ==============================================================================
+# 5. SYSTEM RESET
+# ==============================================================================
+# Resets all state variables and timers after a map generation process completes.
+func reset_system_state() -> void:
+	controller.is_generating = false
+	controller.redraw_pending = false
+	controller.engine_tick_count = 0
+	
+	# Stop all timers
+	if is_instance_valid(controller.engine_timer):
+		controller.engine_timer.stop()
+	if is_instance_valid(controller.animation_timer):
+		controller.animation_timer.stop()
+	if is_instance_valid(controller.redraw_throttle_timer):
+		controller.redraw_throttle_timer.stop()
+		
+	# Reset state metrics
+	controller.total_tiles_placed = 0
+	controller.generation_start_time_ms = 0
+	controller.initial_zoom_set = false
+	
+	# Reset UI elements
+	if is_instance_valid(controller.generate_button):
+		controller.generate_button.disabled = false
+		
+	if is_instance_valid(controller.tiles_placed_label):
+		controller.tiles_placed_label.text = "Tiles Placed: 0"
+		
+	if is_instance_valid(controller.progress_bar):
+		controller.progress_bar.value = 0.0
+		controller.progress_bar.max_value = 0.0
+		controller.progress_bar.visible = false
+
+
+# ==============================================================================
+# 6. GENERATION CONTROL (FORWARDED TO SSXLEngine)
+# ==============================================================================
+
+func start_generation() -> void:
+	if controller.is_generating:
+		return
+	controller.is_generating = true
+	controller.ssxl_engine.build_map(
+		controller.map_width,
+		controller.map_height,
+		controller.seed_input.text,
+		controller.generator_selector.get_item_text(controller.generator_selector.selected)
+	)
+
+func stop_generation() -> void:
+	if not controller.is_generating:
+		return
+	print("GEN_LOGIC: Stop command issued via FFI")
+	controller.ssxl_engine.stop_generation()   # ← THIS IS THE CALL YOU WERE MISSING
+	controller.is_generating = false
+
+<<< FILE END: SSXL_engine_tester\root_scripts\controlpanelutility.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\control_panel.gd (110 LOC) <<<
+extends Control
+
+const CHUNK_SIZE_X: int = 32
+const CHUNK_SIZE_Y: int = 32
+const DEFAULT_CHUNKS: int = 12
+const BASE_SOURCE_ID: int = 0
+const BASE_ATLAS_COORDS: Vector2i = Vector2i(0, 0)
+const BASE_ALT_ID: int = 0
+
+# UI
+@onready var grid_width: SpinBox = $gridwidthspinbox
+@onready var grid_height: SpinBox = $gridheightspinbox
+@onready var seed_input: LineEdit = $seedlineedit
+@onready var placement_mode_selector: OptionButton = $placementoptionbutton
+@onready var tile_type_selector: OptionButton = $tiletypeoptionbutton
+@onready var status_label: Label = $billboard
+@onready var generate_button: Button = $map_gen_button
+@onready var animate_ui_button: Button = $animate_button
+@onready var progress_bar: ProgressBar = $progressbar
+@onready var toggle_terminal_button: Button = $toggleterminalbutton
+@onready var engine_timer: Timer = $enginetimer
+@onready var animation_timer: Timer = $AnimationTimer
+@onready var redraw_throttle_timer: Timer = $redrawthrottle
+@onready var engine_timer_label: Label = $enginetimerlabel
+@onready var tiles_placed_label: Label = $tilesplacedlabel
+@onready var tile_placement_time_label: Label = $tiletimeofplacement
+
+# Scene hierarchy
+@onready var main: Node2D = get_parent() as Node2D
+@onready var cameras: Node = main.get_node("cameras")
+@onready var clock_label: Label = main.get_node("clocklabel") as Label
+
+# RUST FFI NODES
+@onready var ssxl_engine: Node = get_node("/root/ssxltester/SSXLEngine")
+@onready var ssxl_oracle: Node = get_node("/root/ssxltester/SSXLOracle")
+@onready var ssxl_signals: Node = get_node("/root/ssxltester/SSXLSignals")
+
+# CRITICAL: These are the ones used by gen_logic
+@onready var ssxl_tilemap: Node = get_node("/root/ssxltester/main/SSXLTilemap")   # ← Rust tilemap
+@onready var presenter: Node = get_node("/root/ssxltester/SSXLChunk")            # ← Chunk data holder
+
+# Old reference — we keep it only for compatibility with some old code (safe to ignore)
+@onready var expansive_tilemap: TileMap = main.get_node("SSXLTilemap") as TileMap
+
+# State
+var last_percent: int = -1
+var tile_size: Vector2 = Vector2(16, 16)
+var panel_collapsed: bool = false
+var engine_tick_count: int = 0
+var total_tiles_placed: int = 0
+var is_generating: bool = false
+var initial_zoom_set: bool = false
+var current_camera_id: int = 1
+var generation_start_time_ms: int = 0
+var redraw_pending: bool = false
+var animation_tilemap_handle: TileMap = null
+
+# Subsystems
+var ui_setup
+var gen_logic
+var signal_handler
+var animation_logic
+var utility
+
+func _ready() -> void:
+	const SCRIPT_PATH: String = "res://root_scripts/"
+	utility = preload(SCRIPT_PATH + "controlpanelutility.gd").new(self)
+	ui_setup = preload(SCRIPT_PATH + "controlpaneluisetup.gd").new(self)
+	gen_logic = preload(SCRIPT_PATH + "controlpanelgenlogic.gd").new(self)
+	signal_handler = preload(SCRIPT_PATH + "controlpanelsignalhandler.gd").new(self)
+	animation_logic = preload(SCRIPT_PATH + "controlpanelanimation.gd").new(self)
+
+	# Basic validation
+	if not is_instance_valid(ssxl_engine) or not is_instance_valid(ssxl_signals) or not is_instance_valid(ssxl_oracle):
+		push_error("FATAL: Missing SSXL FFI nodes!")
+		return
+
+	if not is_instance_valid(ssxl_tilemap):
+		push_error("FATAL: SSXLTileMap not found! Check scene path.")
+		return
+
+	if not is_instance_valid(presenter):
+		push_error("FATAL: SSXLChunk (presenter) not found!")
+		return
+
+	ui_setup.setup_all()
+	connect_all_timer_timeouts()
+
+	animation_logic.setup_animation_worker(false)
+
+	if is_instance_valid(cameras) and cameras.has_method("switch_to_camera"):
+		cameras.switch_to_camera(current_camera_id)
+
+	if main and main.has_signal("ffi_core_ready"):
+		main.ffi_core_ready.connect(_on_ffi_core_ready, CONNECT_ONE_SHOT)
+
+	print("Control Panel: Initialized. Awaiting FFI Core Alignment...")
+
+func _on_ffi_core_ready() -> void:
+	print("Control Panel: FFI Core Ready. Finalizing connections...")
+	ui_setup.link_ffi_nodes()
+	connect_all_ffi_signals()
+	signal_handler._on_ffi_alignment_complete()
+
+func connect_all_ffi_signals() -> void:
+	print("connecting ffi signals...")
+
+	if ssxl_signals.has_signal("tile_flip_updated"):
+		if not ssxl_signals.is_connected("tile_flip_updated", Callable(animation_logic, "_on_tile_flip_updated")):
+			ssxl_signals.tile_flip_updated.connect(Callable(animation_logic, "_on_tile_flip_updated"))
+
+	if ssxl_signals.has_signal("engine_status_updated"):
+		if not ssxl_signals.is_connected("engine_status_updated", Callable(signal_handler, "_on_engine_status_updated")):
+			ssxl_signals.engine_status_updated.connect(Callable(signal_handler, "_on_engine_status_updated"))
+
+	# CRITICAL FIX — only connect if NOT already connected
+	if ssxl_signals.has_signal("chunk_data_ready"):
+		if not ssxl_signals.is_connected("chunk_data_ready", Callable(gen_logic, "_on_chunk_data_ready")):
+			ssxl_signals.chunk_data_ready.connect(Callable(gen_logic, "_on_chunk_data_ready"))
+			print("chunk_data_ready → CONNECTED (first time)")
+		else:
+			print("chunk_data_ready → already connected, skipping")
+	else:
+		push_error("FATAL: 'chunk_data_ready' signal missing on SSXLSignals!")
+
+	if ssxl_signals.has_signal("build_map_complete"):
+		if not ssxl_signals.is_connected("build_map_complete", Callable(signal_handler, "_on_build_map_complete")):
+			ssxl_signals.build_map_complete.connect(Callable(signal_handler, "_on_build_map_complete"))
+
+func connect_all_timer_timeouts() -> void:
+	redraw_throttle_timer.timeout.connect(utility._on_redraw_throttle_timeout)
+	animation_timer.timeout.connect(animation_logic._on_animation_timer_timeout)
+
+func _input(event: InputEvent) -> void:
+	utility.handle_input_event(event)
+
+<<< FILE END: SSXL_engine_tester\root_scripts\control_panel.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\init.gd (37 LOC) <<<
+extends Node
+
+# Stores a reference to every Godot Node found during the recursive scan.
+var initialized_nodes: Array[Node] = []
+
+# ----------------------------------------------------------------------------
+# CORE FUNCTION: Starts the recursive node tree scan.
+# This is called explicitly by the root orchestrator (ssxltester).
+# ----------------------------------------------------------------------------
+func initialize():
+	print("\n🎶 Init: Commencing recursive scene scan...")
+	initialized_nodes.clear()
+
+	# Get the root viewport node to start the traversal.
+	var root_node := get_tree().get_root()
+	if root_node == null:
+		push_error("❌ Init: Could not access scene root. Ritual aborted.")
+		return
+
+	_recursive_initialize(root_node)
+
+	# Locate the root orchestration node to deliver the completion report.
+	var tester := root_node.get_node("ssxltester")
+	# NOTE: Changed "AetherionTester" to "ssxltester" for project consistency.
+	if tester == null:
+		push_error("❌ Init: ssxltester node not found. No one to receive the scroll.")
+		return
+
+	print("\n📜 Init: Scroll prepared. Delivering to SSXLTester...")
+	
+	# Call the callback function on the root node to signal completion.
+	tester.call("report_initialized", initialized_nodes)
+
+# ----------------------------------------------------------------------------
+# UTILITY FUNCTION: Recursively collects all nodes starting from the given node.
+# ----------------------------------------------------------------------------
+func _recursive_initialize(node: Node) -> void:
+	# Add the current node to the collection array.
+	initialized_nodes.append(node)
+
+	# Traverse through all child nodes.
+	for child in node.get_children():
+		# Ensure the child is a valid Node instance before recursing.
+		if child is Node:
+			_recursive_initialize(child)
+
+<<< FILE END: SSXL_engine_tester\root_scripts\init.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\logger.gd (1 LOC) <<<
+extends Node
+
+<<< FILE END: SSXL_engine_tester\root_scripts\logger.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\main.gd (104 LOC) <<<
+# main.gd — FINAL VERSION (2025 SSXL FFI Sync) — RENDERING FIXED
+extends Node2D
+
+signal ffi_core_ready
+
+@onready var ssxl_oracle: Node = $"/root/ssxltester/SSXLOracle"
+@onready var ssxl_engine: Node = $"/root/ssxltester/SSXLEngine"
+@onready var ssxl_signals: Node = $"/root/ssxltester/SSXLSignals"
+@onready var ssxl_chunk_node: Node = $"/root/ssxltester/SSXLChunk"
+@onready var ssxl_tilemap: TileMap = $SSXLTilemap
+@onready var clock_timer: Timer = $clocktimer
+@onready var control_panel = $controlpanel
+
+func _ready() -> void:
+	print("\nSSXL Main: Quantum Boot Sequence Initiated")
+	_establish_ffi_links()
+	
+	if not is_instance_valid(control_panel):
+		push_error("FATAL: ControlPanel missing!")
+		return
+	
+	_connect_clock_timer()
+	
+	# First tick to wake the oracle
+	if is_instance_valid(ssxl_oracle):
+		ssxl_oracle.tick()
+		print("Oracle: First tick delivered.")
+
+func _process(delta: float) -> void:
+	# CRITICAL: Continuous tick loop to drain poller messages
+	if is_instance_valid(ssxl_engine):
+		ssxl_engine.tick(Time.get_ticks_msec())
+		# Uncomment for heartbeat:
+		# print("DEBUG: ssxl_engine.tick called")
+
+func _establish_ffi_links() -> void:
+	print("\nFFI LINK PHASE: Engaging Rust Core...")
+
+	# 1. Validate critical FFI nodes
+	if not (is_instance_valid(ssxl_oracle) and is_instance_valid(ssxl_engine)):
+		push_error("FATAL: SSXLOracle or SSXLEngine missing from scene tree!")
+		return
+
+	# 2. Oracle → Engine
+	ssxl_oracle.set_engine(ssxl_engine)
+	print("Oracle → Engine linked")
+
+	# 3. Presenter injection
+	if not is_instance_valid(ssxl_chunk_node):
+		push_error("FATAL: SSXLChunk presenter node missing!")
+		return
+	ssxl_engine.initialize_presenter(ssxl_chunk_node)
+	print("Engine: Chunk presenter initialized")
+
+	# 4. TileMap injection (assert the class at runtime)
+	if not is_instance_valid(ssxl_tilemap):
+		push_error("FATAL: SSXLTileMap missing!")
+		return
+	print("DEBUG: TileMap class =", ssxl_tilemap.get_class())
+	ssxl_engine.set_tilemap(ssxl_tilemap)
+	print("Engine: SSXLTileMap injected")
+
+	# 5. Signals node (do this BEFORE Phase 1 so Rust can emit immediately)
+	if is_instance_valid(ssxl_signals):
+		ssxl_engine.set_signals_node(ssxl_signals)
+		print("Engine → SSXLSignals linked")
+	else:
+		push_warning("SSXLSignals missing — no async callbacks!")
+		return
+
+	# 6. Phase 1: Runtime shell
+	if not ssxl_engine.initialize_runtime_shell(""):
+		push_error("FATAL: Runtime shell failed (Phase 1)")
+		return
+	print("Engine: Runtime shell ready")
+
+	# 7. Phase 2: Spawn conductors
+	if not ssxl_engine.start_async_conductors():
+		push_error("FATAL: Conductors failed to spawn (Phase 2)")
+		return
+	print("Engine: Async conductors ALIVE")
+
+	# 8. Connect critical signals safely (avoid duplicates)
+	_connect_ffi_signals()
+
+	print("FFI CORE FULLY INITIALIZED — EMITTING READY SIGNAL")
+	call_deferred("emit_signal", "ffi_core_ready")
+
+func _connect_ffi_signals() -> void:
+	# chunk_data_ready → tile placement
+	var cd_callable := Callable(control_panel.gen_logic, "_on_chunk_data_ready")
+	if ssxl_signals.has_signal("chunk_data_ready"):
+		if not ssxl_signals.is_connected("chunk_data_ready", cd_callable):
+			ssxl_signals.chunk_data_ready.connect(cd_callable)
+			print("chunk_data_ready → _on_chunk_data_ready CONNECTED — RENDERING ENABLED")
+		else:
+			print("chunk_data_ready → already connected, skipping")
+	else:
+		push_error("FATAL: 'chunk_data_ready' signal missing on SSXLSignals!")
+
+	# Optional: hook start/complete/error for UI feedback
+	var start_callable := Callable(control_panel.signal_handler, "_on_build_map_start")
+	if ssxl_signals.has_signal("build_map_start") and not ssxl_signals.is_connected("build_map_start", start_callable):
+		ssxl_signals.build_map_start.connect(start_callable)
+
+	var complete_callable := Callable(control_panel.signal_handler, "_on_build_map_complete")
+	if ssxl_signals.has_signal("build_map_complete") and not ssxl_signals.is_connected("build_map_complete", complete_callable):
+		ssxl_signals.build_map_complete.connect(complete_callable)
+
+	var err_callable := Callable(control_panel.signal_handler, "_on_generation_error")
+	if ssxl_signals.has_signal("generation_error") and not ssxl_signals.is_connected("generation_error", err_callable):
+		ssxl_signals.generation_error.connect(err_callable)
+
+func _connect_clock_timer() -> void:
+	if is_instance_valid(clock_timer) and is_instance_valid(control_panel.utility):
+		clock_timer.timeout.connect(control_panel.utility.on_clock_timer_timeout)
+		clock_timer.start()
+		print("Clock timer connected")
+	else:
+		push_error("Clock timer setup failed!")
+
+# Hook for root.gd / SSXLTester
+func enter_idle_state() -> void:
+	print("Main: Received control from root.gd — Entering idle state.")
+
+<<< FILE END: SSXL_engine_tester\root_scripts\main.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\root.gd (24 LOC) <<<
+extends Node2D
+
+var init_node: Node = null
+var main_node: Node2D = null
+
+var initialized_nodes: Array = []
+
+var is_custom_init_running: bool = false
+
+func _ready():
+	call_deferred("_start_custom_initialization")
+
+func _start_custom_initialization():
+	if is_custom_init_running:
+		return
+	is_custom_init_running = true
+
+	init_node = get_node("init")
+	main_node = get_node("main")
+
+	if not is_instance_valid(init_node) or not is_instance_valid(main_node):
+		return
+
+	init_node.call("initialize")
+
+func report_initialized(nodes: Array) -> void:
+	initialized_nodes = nodes
+
+	if is_instance_valid(main_node):
+		main_node.call("enter_idle_state") 
+	
+	is_custom_init_running = false
+	if is_instance_valid(init_node):
+		pass
+
+<<< FILE END: SSXL_engine_tester\root_scripts\root.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\scenescanner.gd (28 LOC) <<<
+extends Node
+
+# Signal emitted when the scan is complete. It passes a Dictionary (map) 
+# where keys are node names (lowercase) and values are their full NodePaths.
+signal tree_ready(map: Dictionary)
+
+# ----------------------------------------------------------------------------
+# CORE FUNCTION: Initiates the scene tree scan and emits the completion signal.
+# ----------------------------------------------------------------------------
+func scan_tree():
+	# The dictionary that will store the node name -> path mapping.
+	var map: Dictionary = {}
+	
+	# Start the recursive scan from the root of the active scene tree.
+	_recursive_scan(get_tree().root, map)
+	
+	# Signal that the scan is complete, passing the resulting map.
+	emit_signal("tree_ready", map)
+
+# ----------------------------------------------------------------------------
+# UTILITY FUNCTION: Recursively traverses the node tree.
+# ----------------------------------------------------------------------------
+func _recursive_scan(node: Node, map: Dictionary):
+	# Add the current node's name (lowercase for easy lookup) and its full path to the map.
+	map[node.name.to_lower()] = node.get_path()
+	
+	# Recurse through all children.
+	for child in node.get_children():
+		# Ensure the child is a valid Node before passing it to the function.
+		if child is Node:
+			_recursive_scan(child, map)
+<<< FILE END: SSXL_engine_tester\root_scripts\scenescanner.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\ssxl_signals.gd (17 LOC) <<<
+
+extends Node
+
+# ==============================================================================
+# FFI Data Plane Signals (Emitted by the Rust GDExtension)
+# These signals MUST be declared here to be visible to GDScript.
+# ==============================================================================
+
+# 1. PRIMARY DATA CHANNEL (CRITICAL FIX)
+signal chunk_ready(data: Dictionary) 
+
+# 2. GENERATION COMPLETION SIGNAL
+signal build_map_complete()
+# NOTE: The FFI manifest calls this 'generation_complete', but your GDScript checks for 'build_map_complete'.
+
+# 3. STATUS / LOGGING SIGNAL
+signal engine_status_updated(status: String)
+# NOTE: The FFI manifest calls this 'status_update', but your GDScript checks for 'engine_status_updated'.
+
+# 4. ANIMATION/TICKER SIGNAL
+signal tile_flip_updated(tile_id: int, flip_frame: int)
+
+# The Rust GDExtension is responsible for emitting these signals; 
+# this script just makes them visible to the Godot environment.
+
+<<< FILE END: SSXL_engine_tester\root_scripts\ssxl_signals.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\ssxl_tilemap.gd (44 LOC) <<<
+# ssxl_tilemap.gd
+extends TileMap
+
+# This method is called by the Rust ChunkPresenter via a deferred FFI call.
+func receive_chunk_data(binary_data: PackedByteArray) -> void:
+	print("📢 SSXL_TILEMAP: Received chunk data (Size: %d bytes)" % binary_data.size()) # <-- DIAGNOSTIC 1
+	
+	# 1. Deserialize the PackedByteArray back into a Dictionary.
+	var batch_data = bytes_to_var(binary_data)
+	
+	# CRITICAL FIX: Check if deserialization failed (returns Nil)
+	if not batch_data is Dictionary:
+		push_error("❌ FFI ERROR: Deserialization failed. Received Nil from bytes_to_var(). Check Rust serialization/var_to_bytes format.")
+		return
+	
+	# 2. Extract the batched arrays from the Dictionary
+	# IMPORTANT: The batch dictionary must contain these keys with valid Godot types
+	var layer: int = batch_data.get("layer", 0)
+	var positions: Array[Vector2i] = batch_data.get("positions", [])
+	var source_ids: Array[int] = batch_data.get("source_ids", [])
+	var atlas_coords: Array[Vector2i] = batch_data.get("atlas_coords", [])
+	var alt_tiles: Array[int] = batch_data.get("alt_tiles", [])
+	
+	# DIAGNOSTIC 2
+	print("📢 SSXL_TILEMAP: Deserialization successful. Placing %d tiles." % positions.size()) 
+	
+	if positions.is_empty():
+		return
+
+	# 3. Iterative set_cell() rendering
+	# Note: This loop can be slow for 147k tiles.
+	var tiles_set: int = 0
+	for i in range(positions.size()):
+		# We confirmed Source ID 0 is correct, but ensure Atlas Coords are valid.
+		self.set_cell(
+			layer,
+			positions[i],
+			source_ids[i],
+			atlas_coords[i],
+			alt_tiles[i]
+		)
+		tiles_set += 1
+
+	print("✅ SSXL_TILEMAP: Successfully set %d tiles. Requesting update." % tiles_set)
+	
+	# 4. Request a manual TileMap update
+	self.force_update()
+
+<<< FILE END: SSXL_engine_tester\root_scripts\ssxl_tilemap.gd >>>
+
+>>> FILE START: SSXL_engine_tester\root_scripts\tester.gd (5 LOC) <<<
+extends Node2D
+
+
+func _ready():
+	#var rust_node = AetherionRoot.new()
+	#add_child(rust_node)
+	pass
+
+<<< FILE END: SSXL_engine_tester\root_scripts\tester.gd >>>
+
+>>> FILE START: SSXL_engine_tester\tests\headless_gen_pipeline.gd (88 LOC) <<<
+extends Node
+
+# Ensure this matches your GDExtension class name
+const ENGINE_CLASS_NAME = "SSXLEngine"
+
+# --- Utility Functions ---
+
+# Loads the SSXLEngine GDExtension instance.
+func create_engine_instance():
+    if not ClassDB.can_instantiate(ENGINE_CLASS_NAME):
+        printerr("FATAL: GDExtension is not compiled or registered.")
+        return null
+    return ClassDB.instantiate(ENGINE_CLASS_NAME)
+
+# Function to explicitly format and print the result
+# CRITICAL: This uses 'print' (stdout) for Rust to capture the result.
+func print_test_result(test_name, success, reason):
+    if success:
+        print("✅ GDSCIPT TEST PASS: %s" % test_name)
+    else:
+        # Use printerr for detailed failures, still captured by Rust's stderr handler.
+        printerr("❌ GDSCIPT TEST FAIL: %s | Reason: %s" % [test_name, reason])
+
+# Core validation logic
+func check_data_integrity(data):
+    if not data is Dictionary:
+        printerr("FAIL: FFI return is not a Dictionary.")
+        return false
+    if not data.has("tiles") or not data.has("tile_count"):
+        printerr("FAIL: FFI Dictionary is missing 'tiles' array or 'tile_count'.")
+        return false
+    
+    var tiles = data.tiles
+    var tile_count = data.tile_count
+    
+    # Informative log to help debug generation issues
+    print("INFO: Received chunk data. Tile count: %d" % tile_count)
+    
+    if tile_count == 0 or tiles.is_empty():
+        printerr("FAIL: Chunk generation returned zero tiles. Check Rust core logic.")
+        return false
+        
+    # Add more detailed checks here (e.g., data types for 'id' and 'level')
+    if typeof(tiles[0].id) != TYPE_INT or typeof(tiles[0].level) != TYPE_FLOAT:
+        printerr("FAIL: Tile data type mismatch detected across FFI boundary.")
+        return false
+        
+    return true
+
+# --- NEW FUNCTION: Defer the quit to ensure stdout flush ---
+# This is the most reliable way to guarantee that all print() calls 
+# are processed by the engine before the process terminates.
+func quit_safe(code: int):
+    # Wait one process frame to ensure all deferred print calls are flushed
+    await get_tree().process_frame 
+    get_tree().quit(code)
+
+# --- CORE TEST RUNNER ---
+
+func _ready():
+    # 1. Instantiate the Rust Engine
+    var engine = create_engine_instance()
+    
+    var test_passed = false
+    var failure_reason = "GDExtension instantiation failed."
+    var exit_code = 1 # Assume failure by default
+    
+    if engine == null:
+        # Handle instantiation failure immediately
+        print_test_result("Generation Integration Test", test_passed, failure_reason)
+        # exit_code remains 1
+    else:
+        # 2. Run the actual generation test logic
+        failure_reason = "Unknown error."
+        var test_x = 100
+        var test_y = 200
+        
+        print("TEST: Requesting generation for chunk (%d, %d)..." % [test_x, test_y])
+        
+        # Call the FFI function from Rust
+        var chunk_data = engine.request_generation(test_x, test_y) 
+        
+        if chunk_data:
+            if check_data_integrity(chunk_data):
+                test_passed = true
+                exit_code = 0 # Success
+                failure_reason = "N/A"
+            else:
+                failure_reason = "Data integrity check failed (see errors above)."
+        else:
+            failure_reason = "FFI call returned null or an invalid result."
+
+        # 3. Report Final Status
+        print_test_result("Generation Integration Test", test_passed, failure_reason)
+    
+    # 4. Defer the exit command to the safe function
+    call_deferred("quit_safe", exit_code)
+<<< FILE END: SSXL_engine_tester\tests\headless_gen_pipeline.gd >>>
+
+>>> FILE START: SSXL_engine_tester\test_scripts\control_panel.gd (23 LOC) <<<
+extends Node
+
+func _ready():
+	# Wire up dependencies
+	$AetherionEngine.signals_node = $AetherionSignals
+
+	$AetherionEngine.set_tilemap($TileMap)
+
+	# Connect signals
+	$AetherionSignals.connect("generation_progress", Callable(self, "_on_progress"))
+	$AetherionSignals.connect("generation_complete", Callable(self, "_on_complete"))
+	$AetherionSignals.connect("map_building_status", Callable(self, "_on_status"))
+
+
+	# Trigger map generation
+	var seed = randi()
+	$AetherionEngine.build_map(
+		32, 32, seed, "basic", true,
+		Vector2i(0, 0), Vector2i(1, 0)
+	)
+
+func _on_progress(percent):
+	print("Progress:", percent)
+
+func _on_complete(results):
+	print("Map generation complete:")
+	for key in results.keys():
+		print("  %s: %s" % [key, results[key]])
+
+func _on_status(msg):
+	print("Status:", msg)
+
+<<< FILE END: SSXL_engine_tester\test_scripts\control_panel.gd >>>
+
+>>> FILE START: SSXL_engine_tester\test_scripts\test_ffi_data.gd (72 LOC) <<<
+# test_ffi_data.gd
+# Attached to the root Node in test_ffi_data.tscn
+# Goal: Validate FFI Bridge Data Integrity (Phase 7 Finalization)
+
+extends Node
+
+# The GDExtension class exposed by the Rust side
+const ENGINE_CLASS_NAME = "SSXLEngine"
+
+func _ready():
+	print("--- STARTING FFI DATA INTEGRITY TEST ---")
+	
+	# 1. Instantiate the GDExtension Class
+	var engine = load_engine()
+	if engine == null:
+		print("ERROR: Godot failed to instantiate GDExtension class.")
+		# Exit with a non-zero code to signal failure to the CLI
+		get_tree().quit(1) 
+		return
+
+	# 2. Call the FFI-bound method and measure the data returned
+	# We test key (1, 2, 3) to ensure arguments pass correctly.
+	var chunk_data = engine.generate_chunk(1, 2, 3)
+	
+	# 3. Validation Checks
+	var success = check_data_integrity(chunk_data)
+	
+	# 4. Final Quit
+	if success:
+		print("✅ FFI Data Integrity Test: PASSED.")
+		get_tree().quit(0) # Signal success to the Rust CLI
+	else:
+		print("❌ FFI Data Integrity Test: FAILED.")
+		get_tree().quit(1) # Signal failure to the Rust CLI
+
+# Helper function to safely instantiate AetherionEngine
+func load_engine():
+	if not ClassDB.can_instantiate(ENGINE_CLASS_NAME):
+		printerr("ERROR: GDExtension class '%s' not found. Ensure GDExtension is compiled and registered." % ENGINE_CLASS_NAME)
+		return null
+	return ClassDB.instantiate(ENGINE_CLASS_NAME)
+
+# Core validation logic
+func check_data_integrity(data):
+	# A. Basic Structure Check
+	if not data is Dictionary:
+		printerr("FAIL: FFI return is not a Dictionary.")
+		return false
+	if not data.has("tiles") or not data.has("tile_count"):
+		printerr("FAIL: FFI Dictionary is missing 'tiles' array or 'tile_count'.")
+		return false
+	
+	var tiles = data.tiles
+	var tile_count = data.tile_count
+	
+	print("INFO: Received chunk at key_x: %d with count: %d" % [data.get("key_x", -1), tile_count])
+	
+	# B. Non-empty Check (Assumes generation logic returns at least one tile)
+	if tile_count == 0 or tiles.is_empty():
+		printerr("FAIL: Chunk generation returned zero tiles. Check Rust core logic.")
+		return false
+		
+	# C. Data Type and Value Check (Crucial for FFI integrity)
+	var first_tile = tiles[0]
+	
+	# Validate types translated correctly across the FFI boundary
+	if typeof(first_tile.id) != TYPE_INT:
+		printerr("FAIL: Tile ID type mismatch. Expected TYPE_INT, got %s." % typeof(first_tile.id))
+		return false
+		
+	if typeof(first_tile.level) != TYPE_FLOAT:
+		printerr("FAIL: Tile Level type mismatch. Expected TYPE_FLOAT, got %s." % typeof(first_tile.level))
+		return false
+		
+	print("INFO: First tile data verified (ID: %d, Level: %f)." % [first_tile.id, first_tile.level])
+	
+	# If all checks pass
+	return true
+
+<<< FILE END: SSXL_engine_tester\test_scripts\test_ffi_data.gd >>>
+

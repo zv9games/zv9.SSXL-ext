@@ -16,7 +16,7 @@ plugin_enabled=true
 
 config/name="SSXL_Engine_Tester"
 run/main_scene="res://root_scenes/main.tscn"
-config/features=PackedStringArray("4.6", "Mobile")
+config/features=PackedStringArray("4.5", "Mobile")
 config/icon="res://icon.svg"
 
 [autoload]

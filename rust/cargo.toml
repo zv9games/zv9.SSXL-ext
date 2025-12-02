@@ -85,8 +85,3 @@ unsafe_code      = "deny"
 unused_variables = "warn"
 dead_code        = "warn"
 
-[workspace.features]
-default   = []
-profile   = []
-parallel  = []
-fast_rng  = []

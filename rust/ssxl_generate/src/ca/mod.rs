@@ -9,6 +9,10 @@
 
 // --- Sub-Modules ---
 
+// FIX: Declare the cellular_automata_generator module.
+// This allows other files to access CellularAutomataGenerator via `crate::ca::CellularAutomataGenerator`.
+pub mod cellular_automata_generator;
+
 /// Defines the specific CA rules (e.g., Survival and Birth rules like 4/5).
 /// This module abstracts the core generation logic, allowing for easy experimentation
 /// and swapping of different CA rule sets to achieve diverse world patterns.

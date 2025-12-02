@@ -1,5 +1,7 @@
 // ssxl_generate/src/ca/rule_set.rs
-use ssxl_shared::tile_type::TileType;
+
+// FIX: Import TileType directly from the root of ssxl_shared, assuming it is re-exported there.
+use ssxl_shared::TileType;
 
 // --- 1. Rule Set Identifiers ---
 
@@ -31,8 +33,8 @@ pub fn get_next_tile_type(current_type: TileType, live_neighbors: u8, ruleset: u
     // Bx-y: Tile will be born (become Rock) if live_neighbors is in range [x, y] and current state is Void.
     // Sx-y: Tile will survive (remain Rock) if live_neighbors is in range [x, y] and current state is Rock.
     let (birth_min, birth_max, survive_min, survive_max) = match ruleset {
-        RULE_MAZE => (3, 3, 1, 4),               // B3/S1-4 (Favors thin, complex structures with few dead ends)
-        RULE_BASIC_CAVE | _ => (4, 5, 1, 7),     // B4-5/S1-7 (Favors large, open, robust cave systems)
+        RULE_MAZE => (3, 3, 1, 4),           // B3/S1-4 (Favors thin, complex structures with few dead ends)
+        RULE_BASIC_CAVE | _ => (4, 5, 1, 7), // B4-5/S1-7 (Favors large, open, robust cave systems)
     };
 
     match current_type {

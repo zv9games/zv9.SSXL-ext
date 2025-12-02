@@ -33,7 +33,7 @@ pub use ssxl_animate::AnimationConductor;
 pub mod primitives;
 
 /// Manages the generic, fixed-size thread pool used for synchronous, CPU-intensive tasks.
-pub mod pool_manager;
+pub mod pool;
 
 /// Manages the dedicated worker thread and state for calculating visual animation frames.
 pub mod animation_conductor;
@@ -61,7 +61,7 @@ pub use primitives::{
 // --- 3. Thread Pool Manager Types (from pool_manager) ---
 
 /// Re-exports of all public types related to the generic CPU worker thread pool.
-pub use pool_manager::{
+pub use pool::{
     WorkerPool, 
     GenerationTask, 
     ConductorResult, 
