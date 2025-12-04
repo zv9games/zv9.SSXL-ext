@@ -1,13 +1,12 @@
-// rust/ssxl_animate/src/conductor.rs
+// rust/ssxl_animate/src/conductor.rs (Optimized: Zero Entropy Command Flow)
 
 use crate::{ConductorBehavior, AnimationCommand, CommandResult, AnimationState, UpdateSender};
-use crate::worker::process_command_parallel; // CRITICAL: Import the delegation function
+use crate::worker::process_command_parallel; 
 use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedReceiver;
-use godot::prelude::godot_print; // Assuming godot_print is available for logging
+use godot::prelude::godot_print; 
 
 /// The core, single-threaded struct responsible for managing all animation workers.
-/// It holds the Receiver for commands and the Sender for updates to the Godot main thread.
 pub struct AnimationConductor {
     // The Receiver side of the command channel
     command_rx: UnboundedReceiver<AnimationCommand>,
@@ -29,23 +28,16 @@ impl AnimationConductor {
         }
     }
 
-    /// Synchronously stops the animation by immediately updating the internal state.
-    ///
-    /// This method is designed to be called when the Conductor is locked via a Mutex.
-    /// It functions as the **animation equivalent** of the `stop_generation` command.
-    /// It relies on the external `AnimationState` struct having a `set_enabled(bool)` method.
-    pub fn stop_animation(&mut self) -> CommandResult {
-        self.state.set_enabled(false);
-        godot_print!("Animation Conductor: Synchronous stop command received. State set to disabled.");
-        Ok(())
-    }
+    // DELETED: fn stop_animation(&mut self) -> CommandResult 
+    // RATIONALE: Redundant state modification API. All state changes MUST flow through 
+    // the AnimationCommand::SetEnabled(false) in the process_command match arm 
+    // for guaranteed sequential processing (Zero Entropy).
 }
 
 #[async_trait]
 impl ConductorBehavior for AnimationConductor {
     async fn start_loop(&mut self) {
         // The main event loop for the Conductor. This loop manages the **tempo**.
-        // It awaits a command, then immediately processes it (delegates) or acts on it (state change).
         while let Some(command) = self.command_rx.recv().await {
             let _ = self.process_command(command);
         }
@@ -56,7 +48,7 @@ impl ConductorBehavior for AnimationConductor {
     fn process_command(&mut self, command: AnimationCommand) -> CommandResult {
         match command {
             // ----------------------------------------------------
-            // 1. Delegate High-Performance Work (Tile Updates)
+            // 1. Delegate High-Performance Work
             // ----------------------------------------------------
             AnimationCommand::AnimateChunkSet { .. } | AnimationCommand::StartTestAnimation => {
                 // CRITICAL OPTIMIZATION: Delegate work and clone the sender for the worker
@@ -64,17 +56,14 @@ impl ConductorBehavior for AnimationConductor {
                 Ok(())
             }
             // ----------------------------------------------------
-            // 2. Local State Management (FIX E0004)
+            // 2. Local State Management (Zero-Entropy Control)
             // ----------------------------------------------------
             AnimationCommand::SetTimeScale(scale) => {
-                // NOTE: This state update is safe because it only runs on the async Conductor thread.
                 self.state.set_time_scale(scale); 
                 Ok(())
             }
-            // FIX E0004: Handle the new SetEnabled command
             AnimationCommand::SetEnabled(enabled) => {
-                // NOTE: Requires `set_enabled(bool)` to be implemented on `AnimationState`.
-                // This updates the local state which can be queried by `get_state()`.
+                // SINGLE ENTRY POINT for state control.
                 self.state.set_enabled(enabled);
                 godot_print!("Animation Conductor: is_enabled set to {}", enabled);
                 Ok(())

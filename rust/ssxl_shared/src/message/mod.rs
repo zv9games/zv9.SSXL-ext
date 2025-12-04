@@ -1,8 +1,17 @@
-// ssxl_shared/src/message/mod.rs
+// FILE: ssxl_shared/src/message/mod.rs
 
 pub mod generation_message;
 pub mod messages;
 
-// FIX 1: Publicly re-export AnimationUpdate from the messages module.
-// This makes the type available as `ssxl_shared::message::AnimationUpdate`.
-pub use messages::AnimationUpdate;
+// FIX: Publicly re-export all necessary message and state types from the messages submodule.
+// This resolves the unresolved imports (E0432) in ssxl_godot/api_initializers.rs.
+pub use messages::{
+    // New re-exports to fix current error
+    AnimationCommand,
+    AnimationState,
+    
+    // Existing re-exports
+    AnimationUpdate,
+    GenerationCommand, 
+    GenerationResponse,
+};

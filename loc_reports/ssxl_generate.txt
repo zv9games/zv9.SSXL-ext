@@ -1,0 +1,1532 @@
+﻿>>> FILE START: rust\ssxl_generate\Cargo.toml (25 LOC) <<<
+[package]
+name = "ssxl_generate"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES (Foundation Layer) ---
+ssxl_shared = { path = "../ssxl_shared" }
+ssxl_math   = { path = "../ssxl_math" }
+ssxl_sync   = { path = "../ssxl_sync" }
+ssxl_tools = { path = "../ssxl_tools" }
+ssxl_cache  = { path = "../ssxl_cache" }
+
+# --- EXTERNAL DEPENDENCIES (Core Computation) ---
+# For parallel execution of generation algorithms
+rayon            = { workspace = true }
+# Core randomness library
+rand             = { workspace = true }
+# Used for saving/loading bitmap images (optional textures/noise visualizations)
+image            = { workspace = true }
+# Ensure we use the workspace's standard logging framework
+tracing          = { workspace = true }
+tokio            = { workspace = true }
+noise            = { workspace = true }
+glam             = { workspace = true }
+fastrand = { workspace = true }
+num_cpus = { workspace = true }
+
+
+<<< FILE END: rust\ssxl_generate\Cargo.toml >>>
+
+>>> FILE START: rust\ssxl_generate\src\lib.rs (35 LOC) <<<
+use ssxl_shared::ChunkData;
+use ssxl_math::prelude::Vec2i;
+use tracing::{info, error};
+use std::mem;
+
+pub mod ca;
+pub mod conductor;
+pub mod manager;
+pub mod perlin;
+pub mod task;
+
+pub trait Generator {
+	fn id(&self) -> &str;
+	fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData;
+}
+
+pub use ca::cellular_automata_generator::CellularAutomataGenerator;
+pub use perlin::perlin_generator::PerlinGenerator;
+
+pub use conductor::conductor::Conductor;
+pub use manager::config_validator::GeneratorConfig;
+
+pub use conductor::sync::ConductorProgressReceiver;
+pub use conductor::sync::ConductorRequestSender;
+pub use task::task_queue::GenerationTask;
+
+pub use task::benchmark_logic::benchmark_generation_workload;
+
+pub fn start_runtime_placeholder() {
+	match Conductor::new(None) {
+		Ok((conductor, _state, _request_sender, progress_receiver)) => {
+			info!("Runtime created successfully. Testing immediate graceful teardown...");
+			
+			mem::forget(progress_receiver);
+			
+			conductor.graceful_teardown();
+		}
+		Err(e) => {
+			error!("Failed to initialize Conductor/Runtime: {:?}", e);
+		}
+	}
+}
+<<< FILE END: rust\ssxl_generate\src\lib.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\ca\cellular_automata_generator.rs (194 LOC) <<<
+// ssxl_generate/src/ca/cellular_automata_generator.rs
+
+//! Implements a procedural generator based on Cellular Automata (CA) rules.
+//!
+//! This generator is responsible for creating cave systems, mazes, and other
+//! structured patterns by iterating on an initially random chunk state. It
+//! delegates complex logic to the `ca::rule_set` and `ca::neighbor_check` modules.
+
+use crate::Generator;
+use ssxl_math::prelude::Vec2i;
+use fastrand; // Lightweight, fast, and thread-safe PRNG
+use ssxl_shared::{
+    // FIX: Import all components directly from the ssxl_shared crate root.
+    ChunkData,
+    CHUNK_SIZE,
+    GridBounds,
+    TileData,
+    TileType,
+};
+use tracing::{info, warn};
+
+use crate::ca::rule_set::{RULE_SOLID, RULE_CHECKERBOARD, get_next_tile_type};
+use crate::ca::neighbor_check::count_live_neighbors;
+
+// --- 1. Generator Constants ---
+
+/// The fixed number of iterations for the CA simulation to stabilize the pattern.
+const CA_ITERATIONS: u8 = 4;
+/// The percentage of tiles randomly initialized as `TileType::Rock` (the "live" state).
+const INITIAL_FILL_PERCENT: u8 = 45;
+
+// --- 2. Generator Structure and Implementation ---
+
+/// A generator that uses Cellular Automata rules to produce structured patterns.
+#[allow(dead_code)] // Allowed since this struct is instantiated via the GeneratorManager
+pub struct CellularAutomataGenerator {
+    /// The specific B/S ruleset (e.g., RULE_BASIC_CAVE or RULE_MAZE) to apply.
+    ruleset: u8,
+}
+
+impl CellularAutomataGenerator {
+    /// Creates a new CA generator instance with the specified ruleset.
+    pub fn new(ruleset: u8) -> Self {
+        CellularAutomataGenerator { ruleset }
+    }
+}
+
+// --- 3. Internal Generation Helper Functions ---
+
+/// Generates static, non-simulated patterns (Solid or Checkerboard).
+/// (Static pattern generation is unchanged and remains efficient)
+fn generate_static_pattern(chunk_coords: Vec2i, ruleset: u8) -> ChunkData {
+    let chunk_tile_size = CHUNK_SIZE as i64;
+    
+    // Calculate world boundaries for the ChunkData metadata
+    let world_start_x = chunk_coords.x * chunk_tile_size;
+    let world_start_y = chunk_coords.y * chunk_tile_size;
+    
+    // Create a unique 64-bit Chunk ID
+    let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
+    
+    let bounds = GridBounds::new(
+        world_start_x,
+        world_start_y,
+        world_start_x + chunk_tile_size,
+        world_start_y + chunk_tile_size,
+    );
+    
+    let dimension_name = match ruleset {
+        RULE_SOLID => "Solid_Fill".to_string(),
+        RULE_CHECKERBOARD => "Checkerboard".to_string(),
+        _ => "Static_Pattern_Unknown".to_string(),
+    };
+    
+    let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
+    // Since chunk_data.tiles is a fixed-size array, we must fill a temporary Vec
+    // and let ChunkData::insert_tiles handle the conversion/copy.
+    let mut tiles_vec = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+
+    for y in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE {
+            let tile_type = match ruleset {
+                RULE_SOLID => TileType::Rock,
+                RULE_CHECKERBOARD => {
+                    // Checkerboard pattern: alternate based on coordinate parity
+                    if (x + y) % 2 == 0 {
+                        TileType::Rock
+                    } else {
+                        TileType::Void
+                    }
+                }
+                _ => TileType::Void, // Should not be reached, but defaults to Void
+            };
+            tiles_vec.push(TileData::new(tile_type, 0.0));
+        }
+    }
+
+    chunk_data.insert_tiles(tiles_vec);
+    info!("CA Generator: Finished static chunk at {:?}.", chunk_coords);
+    chunk_data
+}
+
+/// **OPTIMIZED:** Runs the full Cellular Automata simulation using double-buffering.
+///
+/// This function allocates the `target_tiles` array only once by cloning the initial state.
+/// **FIXED:** Corrected array handling using `[TileData; N]` for zero-cost `std::mem::swap` in the loop.
+fn run_ca_simulation(mut chunk_data: ChunkData, ruleset: u8) -> ChunkData {
+    // 1. The initial state is in `chunk_data.tiles` (Source buffer). 
+    // Create the second buffer (Target) by cloning the array once.
+    let mut target_tiles = chunk_data.tiles.clone();
+    
+    // `chunk_data.tiles` is the Source (Read), `target_tiles` is the Target (Write).
+
+    for i in 0..CA_ITERATIONS {
+        // Core loop: Read from `chunk_data.tiles` (Source), write to `target_tiles` (Target).
+        for y in 0..CHUNK_SIZE {
+            for x in 0..CHUNK_SIZE {
+                let index = (y * CHUNK_SIZE + x) as usize;
+                
+                // Read current tile properties from the source array
+                let current_tile = &chunk_data.tiles[index];
+                
+                // 1. Check Neighbors: reads from the current state within `&chunk_data`.
+                let live_neighbors = count_live_neighbors(&chunk_data, x, y);
+
+                // 2. Apply Rule Set
+                let new_type = get_next_tile_type(
+                    current_tile.tile_type,
+                    live_neighbors,
+                    ruleset
+                );
+
+                // 3. Update the new tile state in the TARGET buffer.
+                // We preserve the noise value from the previous step.
+                target_tiles[index] = TileData::new(new_type, current_tile.noise_value);
+            }
+        }
+        
+        // EFFICIENT SWAP: Exchange the contents of the two arrays. O(1) pointer swap.
+        // `chunk_data.tiles` now holds the new state (Source for next iteration).
+        // `target_tiles` now holds the stale state (Target for next iteration).
+        std::mem::swap(&mut chunk_data.tiles, &mut target_tiles);
+        
+        info!("CA Generator: Iteration {} complete.", i + 1);
+    }
+    
+    // The final result is in `chunk_data.tiles`.
+    chunk_data
+}
+
+// --- 4. Trait Implementation (Generator API) ---
+
+impl Generator for CellularAutomataGenerator {
+    /// Returns a unique identifier string for this generator instance.
+    fn id(&self) -> &str {
+        match self.ruleset {
+            crate::ca::rule_set::RULE_MAZE => "cellular_automata_maze",
+            crate::ca::rule_set::RULE_SOLID => "cellular_automata_solid",
+            crate::ca::rule_set::RULE_CHECKERBOARD => "cellular_automata_checkerboard",
+            crate::ca::rule_set::RULE_BASIC_CAVE | _ => "cellular_automata_basic",
+        }
+    }
+
+    /// The main logic to generate a single chunk of data.
+    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
+        info!("CA Generator: Starting chunk generation at {:?} with ruleset {}.", chunk_coords, self.ruleset);
+
+        // Handle static patterns quickly without the iterative CA loop.
+        if self.ruleset == RULE_SOLID || self.ruleset == RULE_CHECKERBOARD {
+            warn!("CA Generator: Using static pattern ruleset ({}). Bypassing CA steps.", self.ruleset);
+            return generate_static_pattern(chunk_coords, self.ruleset);
+        }
+
+        // --- Seeding for Determinism (Crypto Coded Memory) ---
+        let seed_x = chunk_coords.x as u64;
+        let seed_y = chunk_coords.y as u64;
+        let seed = seed_x.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(seed_y);
+        fastrand::seed(seed);
+        info!("CA Generator: Seeded PRNG with deterministic value: {}.", seed);
+        
+        // --- Initialization ---
+        let chunk_tile_size = CHUNK_SIZE as i64;
+        let world_start_x = chunk_coords.x * chunk_tile_size;
+        let world_start_y = chunk_coords.y * chunk_tile_size;
+        let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
+
+        let bounds = GridBounds::new(
+            world_start_x,
+            world_start_y,
+            world_start_x + chunk_tile_size,
+            world_start_y + chunk_tile_size,
+        );
+
+        let dimension_name = self.id().to_string();
+
+        let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
+        // Use a temporary Vec to build the initial randomized state
+        let mut tiles_vec = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+
+        // Initial randomization based on INITIAL_FILL_PERCENT
+        for _ in 0..(CHUNK_SIZE * CHUNK_SIZE) {
+            let random_val: u8 = fastrand::u8(0..100);
+            let is_rock = random_val < INITIAL_FILL_PERCENT;
+
+            let tile_type = if is_rock {
+                TileType::Rock
+            } else {
+                TileType::Void
+            };
+            // Noise value is typically unused in base CA but kept for data integrity
+            tiles_vec.push(TileData::new(tile_type, 0.0));
+        }
+        // Insert the initial state, which copies the data into the internal fixed-size array.
+        chunk_data.insert_tiles(tiles_vec); 
+
+        // --- Simulation Iterations (Refactored to single, optimized call) ---
+        let final_chunk_data = run_ca_simulation(chunk_data, self.ruleset);
+
+        warn!("CA Generator: Finished chunk at {:?}. Result is ready.", chunk_coords);
+        final_chunk_data
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\ca\cellular_automata_generator.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\ca\mod.rs (19 LOC) <<<
+// ssxl_generate/src/ca/mod.rs
+
+//! Core module for the Cellular Automata (CA) generation algorithms.
+//!
+//! This logic is used by the `CellularAutomataGenerator` to simulate environment
+//! growth (e.g., cave systems, walls, and borders) based on local neighborhood rules.
+//! This module provides the tools necessary to enforce a state-based system
+//! for structured, yet emergent, world design.
+
+// --- Sub-Modules ---
+
+// FIX: Declare the cellular_automata_generator module.
+// This allows other files to access CellularAutomataGenerator via `crate::ca::CellularAutomataGenerator`.
+pub mod cellular_automata_generator;
+
+/// Defines the specific CA rules (e.g., Survival and Birth rules like 4/5).
+/// This module abstracts the core generation logic, allowing for easy experimentation
+/// and swapping of different CA rule sets to achieve diverse world patterns.
+pub mod rule_set;
+
+/// Contains logic for checking a cell's immediate surroundings and calculating
+/// the neighbor count based on the current state. This is the low-level
+/// component that feeds the local state into the `rule_set`.
+pub mod neighbor_check;
+<<< FILE END: rust\ssxl_generate\src\ca\mod.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\ca\neighbor_check.rs (58 LOC) <<<
+// ssxl_generate/src/ca/neighbor_check.rs
+
+// FIX: Import ChunkData, CHUNK_SIZE, and TileType directly from the ssxl_shared root, 
+// as the inner modules (`chunk_data` and `tile_type`) are no longer public.
+use ssxl_shared::{ChunkData, CHUNK_SIZE, TileType};
+
+/// Counts the number of "live" (TileType::Rock) neighbors in the 3x3 Moore neighborhood
+/// surrounding a specific cell within a chunk.
+///
+/// This function handles boundary conditions, ensuring checks do not exceed the
+/// chunk's borders (0 to CHUNK_SIZE - 1). It is crucial for the tempo and accuracy
+/// of the Cellular Automata simulation.
+///
+/// **Safety Focus:** Explicitly checks signed coordinates (`i32`) against bounds before
+/// casting to unsigned types (`u32`) for indexing, preventing potential wraparound bugs.
+///
+/// # Arguments
+/// * `chunk_data`: The data structure containing the chunk's tiles.
+/// * `cx`: The X coordinate of the center cell (0 to CHUNK_SIZE - 1).
+/// * `cy`: The Y coordinate of the center cell (0 to CHUNK_SIZE - 1).
+///
+/// # Returns
+/// The count of live neighbors (0-8).
+pub fn count_live_neighbors(chunk_data: &ChunkData, cx: u32, cy: u32) -> u8 {
+    let mut count = 0;
+    // Cache the chunk size as i32 for direct comparison against signed coordinates.
+    const CHUNK_SIZE_I32: i32 = CHUNK_SIZE as i32;
+
+    // Convert center coordinates to i32 for safe arithmetic with dx/dy.
+    let center_x_i32 = cx as i32;
+    let center_y_i32 = cy as i32;
+
+    // Iterate through the 3x3 Moore neighborhood relative to the center cell (cx, cy).
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            // 1. Exclude the center cell itself (self-exclusion).
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+
+            // Calculate the neighbor's absolute coordinates using i32.
+            let nx = center_x_i32 + dx;
+            let ny = center_y_i32 + dy;
+
+            // 2. CRITICAL BOUNDARY CHECK: Ensure the neighbor is within the chunk's bounds [0, CHUNK_SIZE_I32 - 1].
+            if nx >= 0 && nx < CHUNK_SIZE_I32 && ny >= 0 && ny < CHUNK_SIZE_I32 {
+                
+                // Now that bounds are guaranteed, safely cast back to u32 for indexing.
+                let neighbor_x = nx as u32;
+                let neighbor_y = ny as u32;
+                
+                // Use a helper function for safer access if available, otherwise calculate index.
+                // Assuming ChunkData provides a tiles array indexed [y * size + x].
+                let index = (neighbor_y * CHUNK_SIZE + neighbor_x) as usize;
+
+                // 3. Check for the "live" state, defined as TileType::Rock.
+                // NOTE: This assumes `chunk_data.tiles` is publicly accessible.
+                if chunk_data.tiles[index].tile_type == TileType::Rock {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+<<< FILE END: rust\ssxl_generate\src\ca\neighbor_check.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\ca\rule_set.rs (57 LOC) <<<
+// ssxl_generate/src/ca/rule_set.rs
+
+// FIX: Import TileType directly from the root of ssxl_shared, assuming it is re-exported there.
+use ssxl_shared::TileType;
+
+// --- 1. Rule Set Identifiers ---
+
+/// Identifier for the standard cave generation ruleset (B4-5/S1-7).
+pub const RULE_BASIC_CAVE: u8 = 0;
+/// Identifier for the maze-like generation ruleset (B3/S1-4).
+pub const RULE_MAZE: u8 = 1;
+/// Placeholder/future rule for generating a solid block.
+pub const RULE_SOLID: u8 = 2;
+/// Placeholder/future rule for generating a checkerboard pattern.
+pub const RULE_CHECKERBOARD: u8 = 3;
+
+// --- 2. Core Rule Application Function ---
+
+/// Determines the next state of a tile based on the current state, live neighbor count, and a specific ruleset.
+///
+/// This implements the standard Birth/Survival (B/S) rules for cellular automata.
+///
+/// # Arguments
+/// * `current_type`: The tile's state at the current CA iteration (Void or Rock).
+/// * `live_neighbors`: The count of surrounding `TileType::Rock` tiles (0-8).
+/// * `ruleset`: The identifier defining the B/S parameters to use.
+///
+/// # Returns
+/// The tile's state for the next CA iteration.
+pub fn get_next_tile_type(current_type: TileType, live_neighbors: u8, ruleset: u8) -> TileType {
+
+    // Define the specific Birth (B) and Survival (S) parameters based on the ruleset ID.
+    // Bx-y: Tile will be born (become Rock) if live_neighbors is in range [x, y] and current state is Void.
+    // Sx-y: Tile will survive (remain Rock) if live_neighbors is in range [x, y] and current state is Rock.
+    let (birth_min, birth_max, survive_min, survive_max) = match ruleset {
+        RULE_MAZE => (3, 3, 1, 4),           // B3/S1-4 (Favors thin, complex structures with few dead ends)
+        RULE_BASIC_CAVE | _ => (4, 5, 1, 7), // B4-5/S1-7 (Favors large, open, robust cave systems)
+    };
+
+    match current_type {
+        // --- Survival Check: If the tile is currently Rock (alive) ---
+        TileType::Rock => {
+            if live_neighbors >= survive_min && live_neighbors <= survive_max {
+                // Within survival range: Rock survives.
+                TileType::Rock
+            } else {
+                // Outside survival range: Rock dies (becomes Void).
+                TileType::Void
+            }
+        }
+        // --- Birth Check: If the tile is currently Void (dead) ---
+        TileType::Void => {
+            if live_neighbors >= birth_min && live_neighbors <= birth_max {
+                // Within birth range: Void becomes Rock (birth).
+                TileType::Rock
+            } else {
+                // Outside birth range: Void remains Void.
+                TileType::Void
+            }
+        }
+        // Handle any other TileTypes outside the CA simulation (e.g., Water, Ore) by leaving them unchanged.
+        _ => current_type,
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\ca\rule_set.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\conductor\builder.rs (77 LOC) <<<
+// src/conductor/builder.rs
+use super::{conductor_state, Conductor};
+use super::internal_setup::ConductorInternalSetup;  // ← THIS WORKS
+
+use crate::manager::{GeneratorManager, RuntimeManager};
+use crate::task::{start_request_loop, GenerationMessage, GenerationTask as ChunkRequest};
+use ssxl_cache::ChunkCache;
+use ssxl_shared::config::config::get_config_from_path;
+use tokio::sync::mpsc::{self, Receiver, UnboundedSender};
+use tracing::info;
+use std::io;
+use std::sync::Arc;
+
+const PROGRESS_CHANNEL_BOUND: usize = 1024;
+
+pub(crate) fn setup_channels_and_state(
+    config_path: Option<&str>,
+) -> Result<ConductorInternalSetup, io::Error> {
+    let config = get_config_from_path(config_path);
+    let generator_manager = GeneratorManager::new().map_err(|e| {
+        io::Error::new(io::ErrorKind::Other, format!("Generator setup failed: {}", e))
+    })?;
+
+    let (progress_sender, progress_receiver) = mpsc::channel(PROGRESS_CHANNEL_BOUND);
+    let (request_sender_api, request_receiver) = mpsc::unbounded_channel();
+
+    let initial_id = generator_manager.get_initial_id(&config.default_generator_id());
+    let initial_state = conductor_state::ConductorState::new(initial_id.clone());
+
+    info!("Conductor initialized. Active generator: {}", initial_id);
+
+    Ok(ConductorInternalSetup {
+        request_receiver,
+        progress_sender,
+        request_sender_api,
+        progress_receiver,
+        initial_state,
+        generator_manager,
+    })
+}
+
+pub(crate) fn spawn(
+    internal_setup: ConductorInternalSetup,
+) -> Result<
+    (
+        Conductor,
+        conductor_state::ConductorState,
+        UnboundedSender<ChunkRequest>,
+        Receiver<GenerationMessage>,
+    ),
+    io::Error,
+> {
+    let ConductorInternalSetup {
+        request_receiver,
+        progress_sender,
+        request_sender_api,
+        progress_receiver,
+        initial_state,
+        generator_manager,
+    } = internal_setup;
+
+    let runtime_manager = RuntimeManager::new()?;
+    let handle = runtime_manager.get_handle();
+    let generators_for_loop = Arc::new(generator_manager.get_map_clone());
+    let chunk_cache = Arc::new(ChunkCache::new(4096)?);
+    let chunk_cache_for_loop = chunk_cache.clone();
+
+    initial_state.set_status(conductor_state::ConductorStatus::Running);
+    let state_for_loop = initial_state.clone();
+
+    start_request_loop(
+        handle,
+        request_receiver,
+        progress_sender.clone(),
+        generators_for_loop,
+        chunk_cache_for_loop,
+        Arc::new(state_for_loop),
+    );
+
+    let conductor = Conductor {
+        runtime_manager,
+        generator_manager,
+        internal_state: initial_state.clone(),
+        chunk_cache,
+        progress_sender,
+        _request_sender: request_sender_api.clone(),
+    };
+
+    Ok((conductor, initial_state, request_sender_api, progress_receiver))
+}
+<<< FILE END: rust\ssxl_generate\src\conductor\builder.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\conductor\conductor.rs (81 LOC) <<<
+// src/conductor/conductor.rs
+
+use crate::conductor::builder::{setup_channels_and_state, spawn};
+
+use ssxl_cache::ChunkCache;
+use ssxl_shared::message::{GenerationCommand, GenerationResponse};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, Receiver};
+use tracing::info;
+use std::error::Error;
+use std::io;
+use std::sync::Arc;
+
+use crate::manager::runtime_manager::RuntimeManager;
+use crate::manager::generator_manager::GeneratorManager;
+use crate::task::task_queue::{GenerationTask as ChunkRequest, GenerationMessage};
+use crate::conductor::conductor_state::{self, ConductorState};
+
+pub struct Conductor {
+    pub(crate) runtime_manager: RuntimeManager,
+    pub(crate) generator_manager: GeneratorManager,
+    pub(crate) internal_state: conductor_state::ConductorState,
+    pub(crate) chunk_cache: Arc<ChunkCache>,
+    pub progress_sender: tokio::sync::mpsc::Sender<GenerationMessage>,
+    #[allow(dead_code)]
+    pub(crate) _request_sender: UnboundedSender<ChunkRequest>,
+}
+
+impl Conductor {
+    pub fn new(
+        config_path: Option<&str>,
+    ) -> Result<
+        (
+            Self,
+            ConductorState,
+            UnboundedSender<ChunkRequest>,
+            Receiver<GenerationMessage>,
+        ),
+        io::Error,
+    > {
+        let setup = setup_channels_and_state(config_path)?;
+        spawn(setup)
+    }
+
+    pub fn new_for_ffi(
+        config_path: Option<&str>,
+    ) -> Result<
+        (
+            Self,
+            ConductorState,
+            UnboundedSender<GenerationCommand>,
+            UnboundedReceiver<GenerationResponse>,
+            Receiver<GenerationMessage>,
+        ),
+        io::Error,
+    > {
+        let setup = setup_channels_and_state(config_path)?;
+        let (conductor, state, _req_tx, progress_rx) = spawn(setup)?;
+        let (cmd_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let (_, resp_rx) = tokio::sync::mpsc::unbounded_channel();
+        Ok((conductor, state, cmd_tx, resp_rx, progress_rx))
+    }
+
+    pub fn get_active_generator_id(&self) -> String {
+        self.internal_state.get_active_generator_id()
+    }
+
+    pub fn set_generator(&mut self, id: &str) -> Result<(), Box<dyn Error>> {
+        self.internal_state.set_active_generator_id(id);
+        info!("Active generator switched to: {}", id);
+        Ok(())
+    }
+
+    pub fn stop_generation(&self) -> Result<(), Box<dyn Error>> {
+        self.internal_state.set_status(conductor_state::ConductorStatus::Stopping);
+        info!("Global stop requested.");
+        Ok(())
+    }
+
+    pub fn graceful_teardown(self) {
+        self.internal_state.set_status(conductor_state::ConductorStatus::ShuttingDown);
+        self.runtime_manager.shutdown_graceful();
+        info!("Conductor gracefully shut down.");
+    }
+
+    pub fn signal_shutdown_graceful(&self) {
+        self.internal_state.set_status(conductor_state::ConductorStatus::ShuttingDown);
+    }
+
+    pub fn request_shutdown(&self) {
+        self.signal_shutdown_graceful();
+        self.runtime_manager.shutdown_graceful();
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\conductor\conductor.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\conductor\conductor_state.rs (62 LOC) <<<
+use std::sync::{Arc, atomic::{AtomicUsize, AtomicU64, Ordering}};
+use ssxl_sync::AtomicResource;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConductorStatus {
+	Initializing,
+	Running,
+	Paused,
+	Generating,
+	Stopping,
+	ShuttingDown,
+	Error,
+}
+
+#[derive(Clone)]
+pub struct ConductorState {
+	status: AtomicResource<ConductorStatus>,
+	queue_depth: Arc<AtomicUsize>,
+	active_generator_id: AtomicResource<String>,
+	tile_counter: Arc<AtomicU64>,
+}
+
+impl ConductorState {
+	pub fn new(initial_generator_id: String) -> Self {
+		ConductorState {
+			status: AtomicResource::new(ConductorStatus::Initializing),
+			queue_depth: Arc::new(AtomicUsize::new(0)),
+			active_generator_id: AtomicResource::new(initial_generator_id),
+			tile_counter: Arc::new(AtomicU64::new(0)),
+		}
+	}
+
+	pub fn get_status(&self) -> ConductorStatus {
+        *self.status.read()
+	}
+	
+	pub fn is_active(&self) -> bool {
+		let current_status = self.get_status();
+		current_status == ConductorStatus::Running || current_status == ConductorStatus::Generating
+	}
+
+	pub fn get_queue_depth(&self) -> usize {
+		self.queue_depth.load(Ordering::Relaxed)
+	}
+
+	pub fn get_tiles_placed(&self) -> u64 {
+		self.tile_counter.load(Ordering::Relaxed)
+	}
+
+	pub fn get_active_generator_id(&self) -> String {
+		self.active_generator_id.read().clone()
+	}
+
+	pub fn increment_queue_depth(&self) {
+		self.queue_depth.fetch_add(1, Ordering::Relaxed);
+	}
+
+	pub fn decrement_queue_depth(&self) {
+		self.queue_depth.fetch_sub(1, Ordering::Relaxed);
+	}
+	
+	pub(crate) fn increment_tile_count(&self, amount: u64) {
+		self.tile_counter.fetch_add(amount, Ordering::Relaxed);
+	}
+
+	pub(crate) fn set_status(&self, new_status: ConductorStatus) {
+        *self.status.write() = new_status;
+	}
+
+	pub(crate) fn set_active_generator_id(&self, id: &str) {
+        *self.active_generator_id.write() = id.to_string();
+	}
+}
+<<< FILE END: rust\ssxl_generate\src\conductor\conductor_state.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\conductor\internal_setup.rs (14 LOC) <<<
+// src/conductor/internal_setup.rs
+
+use crate::conductor::conductor_state::ConductorState;
+use crate::manager::generator_manager::GeneratorManager;
+use crate::task::task_queue::{GenerationTask as ChunkRequest, GenerationMessage};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, Receiver, Sender};
+
+/// Internal setup struct — shared between conductor modules
+pub(crate) struct ConductorInternalSetup {
+    pub request_receiver: UnboundedReceiver<ChunkRequest>,
+    pub progress_sender: Sender<GenerationMessage>,
+    pub request_sender_api: UnboundedSender<ChunkRequest>,
+    pub progress_receiver: Receiver<GenerationMessage>,
+    pub initial_state: ConductorState,
+    pub generator_manager: GeneratorManager,
+}
+<<< FILE END: rust\ssxl_generate\src\conductor\internal_setup.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\conductor\mod.rs (10 LOC) <<<
+// src/conductor/mod.rs
+
+pub mod conductor;
+pub mod conductor_state;
+pub mod sync;
+pub mod builder;
+pub mod sync_get;
+pub mod internal_setup;
+
+pub use conductor::Conductor;
+pub use conductor_state::*;
+pub use sync::*;
+<<< FILE END: rust\ssxl_generate\src\conductor\mod.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\conductor\sync.rs (14 LOC) <<<
+// ssxl_generate/src/conductor/sync.rs
+
+// FIX: Removed unused import `self` from tokio::sync::mpsc
+use tokio::sync::mpsc::{Receiver, UnboundedSender};
+use crate::task::task_queue::GenerationMessage;
+use crate::task::task_queue::GenerationTask;
+
+pub type ConductorRequestSender = UnboundedSender<GenerationTask>;
+
+pub struct ConductorProgressReceiver {
+    pub rx: Receiver<GenerationMessage>,
+}
+
+impl ConductorProgressReceiver {
+    pub fn new(rx: Receiver<GenerationMessage>) -> Self {
+        ConductorProgressReceiver { rx }
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\conductor\sync.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\conductor\sync_get.rs (36 LOC) <<<
+// src/conductor/sync_get.rs
+use super::Conductor;
+use crate::task::{handle_chunk_unit, GenerationMessage};
+use ssxl_math::prelude::Vec2i;
+use ssxl_shared::ChunkData;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tracing::{info, error};
+
+impl Conductor {
+    pub fn get_chunk_data(&self, chunk_coords: &Vec2i) -> ChunkData {
+        let active_generator_id = self.internal_state.get_active_generator_id();
+        let (temp_sender, mut temp_receiver) = mpsc::channel(1);
+        let state_arc = Arc::new(self.internal_state.clone());
+
+        info!("Sync chunk request: {:?}", chunk_coords);
+
+        handle_chunk_unit(
+            *chunk_coords,
+            &active_generator_id,
+            self.generator_manager.get_map_ref(),
+            &self.chunk_cache,
+            &temp_sender,
+            &state_arc,
+        );
+
+        loop {
+            match temp_receiver.blocking_recv() {
+                Some(GenerationMessage::Generated(_, chunk_data_arc)) => {
+                    return Arc::try_unwrap(chunk_data_arc).unwrap_or_else(|arc| (*arc).clone());
+                }
+                Some(_) => continue,
+                None => {
+                    error!("Sync channel closed for {:?}", chunk_coords);
+                    return ChunkData::new_at_coords(*chunk_coords);
+                }
+            }
+        }
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\conductor\sync_get.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\manager\config_validator.rs (61 LOC) <<<
+use tracing::{error, info};
+use std::fmt;
+use std::collections::HashMap;
+
+// FIX: Import CHUNK_SIZE directly from the ssxl_shared crate root.
+use ssxl_shared::{CHUNK_SIZE, TileCoord, TileType};
+
+const MAX_ACTIVE_CHUNKS: i64 = 100_000_000;
+
+#[derive(Debug, Clone)]
+pub struct GeneratorConfig {
+    pub width: usize,
+    pub height: usize,
+    pub seed: String,
+    pub generator_name: String,
+    pub tile_overrides: HashMap<TileCoord, TileType>,
+}
+
+impl fmt::Display for GeneratorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{{ W: {}, H: {}, Seed: '{}', Gen: '{}', Overrides: {} }}",
+            self.width, 
+            self.height, 
+            self.seed, 
+            self.generator_name,
+            self.tile_overrides.len()
+        )
+    }
+}
+
+pub struct ConfigValidator;
+
+impl ConfigValidator {
+    pub fn validate_map_dimensions(config: &GeneratorConfig) -> Result<(), String> {
+        info!("Validating batch generation command with config: {}", config);
+
+        let chunk_size_i64 = CHUNK_SIZE as i64;
+        let map_width_i64 = config.width as i64;
+        let map_height_i64 = config.height as i64;
+
+        // The ceiling division to calculate the number of chunks: (dividend + divisor - 1) / divisor
+        let width_in_chunks = (map_width_i64 + chunk_size_i64 - 1) / chunk_size_i64;
+        let height_in_chunks = (map_height_i64 + chunk_size_i64 - 1) / chunk_size_i64;
+        let total_chunks = width_in_chunks * height_in_chunks;
+
+        if total_chunks <= 0 {
+            let error_msg = format!(
+                "Validation Failed: Calculated chunk count is zero for size {}x{}.",
+                config.width, config.height
+            );
+            error!("{}", error_msg);
+            return Err(error_msg);
+        }
+
+        if total_chunks > MAX_ACTIVE_CHUNKS {
+            let error_msg = format!(
+                "Validation Failed: Max chunks limit exceeded. Requested {} chunks ({}x{}) but the limit is {}.",
+                total_chunks, width_in_chunks, height_in_chunks, MAX_ACTIVE_CHUNKS
+            );
+            error!("{}", error_msg);
+            return Err(error_msg);
+        }
+
+        info!(
+            "Validation Passed: Map size is {}x{} chunks (Total: {}).",
+            width_in_chunks, height_in_chunks, total_chunks
+        );
+        Ok(())
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\manager\config_validator.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\manager\generator.rs (31 LOC) <<<
+// ssxl_generate/src/manager/generator.rs
+
+//! Defines the core Generator trait, the contract for all procedural generation algorithms.
+//!
+//! Any module (e.g., CellularAutomataGenerator, PerlinGenerator) intended to be managed
+//! by the GeneratorManager and executed by the Conductor must implement this trait.
+
+// FIX: Import ChunkData directly from the ssxl_shared crate root.
+use ssxl_shared::ChunkData;
+
+use ssxl_math::prelude::Vec2i;
+
+/// The fundamental trait for all world generation algorithms in the SSXL Engine.
+///
+/// This contract ensures that all generators can be treated uniformly by the
+/// Conductor runtime, maintaining the engine's modularity and high **tempo**.
+#[allow(dead_code)] // The trait itself isn't used directly, but its implementors are.
+pub trait Generator {
+    /// Returns a unique, static string identifier for this specific generator instance.
+    ///
+    /// This ID is used by the Conductor to select the active generation strategy
+    /// and should be unique across all registered generators.
+    fn id(&self) -> &str;
+
+    /// Executes the generation algorithm for a single chunk at the specified coordinates.
+    ///
+    /// The implementation must be **deterministic** and **self-contained**, relying only on
+    /// the chunk coordinates and internal seed/ruleset to produce the `ChunkData`.
+    ///
+    /// # Arguments
+    /// * `chunk_coords`: The global coordinate (X, Y) of the chunk to generate.
+    ///
+    /// # Returns
+    /// The fully generated `ChunkData` structure.
+    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData;
+}
+<<< FILE END: rust\ssxl_generate\src\manager\generator.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\manager\generator_manager.rs (84 LOC) <<<
+// ssxl_generate/src/manager/generator_manager.rs
+
+//! The GeneratorManager acts as a registry for all available procedural generation algorithms.
+//!
+//! It initializes concrete generator types (Perlin, Cellular Automata) and stores them
+//! as trait objects, enabling the Conductor to select and execute any generator by ID.
+
+use tracing::{info, warn};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use ssxl_math::prelude::Vec2i;
+// FIX: Import ChunkData directly from the ssxl_shared crate root.
+use ssxl_shared::ChunkData;
+
+use crate::Generator;
+// NOTE: These are now imported correctly via the structure (lib.rs re-exports)
+use crate::perlin::perlin_generator::PerlinGenerator;
+use crate::ca::cellular_automata_generator::CellularAutomataGenerator;
+
+use crate::ca::rule_set::{
+    RULE_BASIC_CAVE, RULE_MAZE, RULE_SOLID, RULE_CHECKERBOARD,
+};
+
+/// Type alias for a thread-safe, dynamically dispatched Generator trait object.
+/// This allows the HashMap to store different generator types uniformly.
+pub type DynGenerator = Box<dyn Generator + Send + Sync>;
+
+// --- 1. Manager Structure ---
+
+/// Manages and provides access to all initialized generation algorithms.
+pub struct GeneratorManager {
+    /// The core registry: Maps generator ID strings to thread-safe generator instances.
+    generators: HashMap<String, Arc<DynGenerator>>,
+    /// The ID of the default Perlin noise generator, used as a fallback.
+    default_perlin_id: String,
+}
+
+impl GeneratorManager {
+    /// Initializes all generator algorithms and registers them in the HashMap.
+    ///
+    /// This is the "Dimension Registry" initialization, setting up all available
+    /// generation **experiments**.
+    pub fn new() -> Result<Self, String> {
+        let mut generators: HashMap<String, Arc<DynGenerator>> = HashMap::new();
+        
+        // 1. Register Perlin Generator (The base noise layer)
+        let perlin: DynGenerator = Box::new(PerlinGenerator::new(64.0));
+        let default_perlin_id = perlin.id().to_string();
+        // Wrap in Arc for thread-safe sharing with worker tasks.
+        generators.insert(default_perlin_id.clone(), Arc::new(perlin));
+        
+        // 2. Register Cellular Automata Generators (The structured content layers)
+        let ca_generators = [RULE_BASIC_CAVE, RULE_MAZE, RULE_SOLID, RULE_CHECKERBOARD];
+        for rule in ca_generators.iter().cloned() {
+            let gen: DynGenerator = Box::new(CellularAutomataGenerator::new(rule));
+            generators.insert(gen.id().to_string(), Arc::new(gen));
+        }
+
+        info!("Registered {} generator algorithms.", generators.len());
+
+        Ok(GeneratorManager { generators, default_perlin_id })
+    }
+
+    /// Returns a reference to the internal generator map.
+    /// Used by the Conductor for immediate, local lookups.
+    pub fn get_map_ref(&self) -> &HashMap<String, Arc<DynGenerator>> {
+        &self.generators
+    }
+
+    /// Returns a clone of the internal generator map.
+    /// Used when spawning new background tasks that need to own a map copy (e.g., the Request Loop).
+    pub fn get_map_clone(&self) -> HashMap<String, Arc<DynGenerator>> {
+        self.generators.clone()
+    }
+    
+    /// Executes the generation process for a single chunk using the specified active generator ID.
+    ///
+    /// Used primarily by the Conductor for synchronous, single-chunk requests.
+    pub fn generate_single_chunk(&self, chunk_coords: Vec2i, active_id: &str) -> ChunkData {
+        let generator_arc = self.generators
+            .get(active_id)
+            // Panic is appropriate here as the generator ID should have been validated previously.
+            .unwrap_or_else(|| panic!("Cannot find active generator with ID: {}", active_id));
+
+        // Dereference the Arc<DynGenerator> and call the trait method.
+        generator_arc.generate_chunk(chunk_coords)
+    }
+
+    /// Determines the initial active generator ID, prioritizing the config ID and falling back to default Perlin.
+    pub fn get_initial_id(&self, config_id: &str) -> String {
+        if self.generators.contains_key(config_id) {
+            config_id.to_string()
+        } else {
+            warn!("Config default generator ID '{}' not found. Falling back to Perlin: {}", config_id, self.default_perlin_id);
+            self.default_perlin_id.clone()
+        }
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\manager\generator_manager.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\manager\mod.rs (10 LOC) <<<
+// ssxl_generate/src/manager/mod.rs
+
+pub mod config_validator;
+pub mod generator;
+pub mod generator_manager;
+pub mod runtime_manager;
+
+// Re-export key items for easier access from the parent crate.
+pub use config_validator::*;
+pub use generator::*;
+pub use generator_manager::*;
+pub use runtime_manager::*;
+<<< FILE END: rust\ssxl_generate\src\manager\mod.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\manager\runtime_manager.rs (35 LOC) <<<
+// ssxl_generate/src/runtime_manager.rs
+use tokio::runtime::{Runtime, Handle};
+use tracing::info;
+use num_cpus;
+use std::io;
+
+pub struct RuntimeManager {
+    runtime: Option<Runtime>,
+}
+
+impl RuntimeManager {
+    pub fn new() -> Result<Self, io::Error> {
+        let num_cores = num_cpus::get();
+        info!("Tokio Runtime initializing with {} worker threads.", num_cores);
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_cores)
+            .enable_all()
+            .build()?;
+
+        Ok(RuntimeManager {
+            runtime: Some(runtime),
+        })
+    }
+
+    pub fn get_handle(&self) -> Handle {
+        self.runtime.as_ref().unwrap().handle().clone()
+    }
+
+    pub fn shutdown_graceful(&self) {
+        info!("Tokio Runtime graceful shutdown requested.");
+    }
+}
+
+impl Drop for RuntimeManager {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            info!("RuntimeManager dropped — shutting down Tokio runtime.");
+            runtime.shutdown_background();
+        }
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\manager\runtime_manager.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\perlin\mod.rs (4 LOC) <<<
+// ssxl_generate/src/perlin/mod.rs
+
+pub mod perlin_generator;
+
+// Re-export the items.
+pub use perlin_generator::*;
+<<< FILE END: rust\ssxl_generate\src\perlin\mod.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\perlin\perlin_generator.rs (101 LOC) <<<
+// ssxl_generate/src/perlin/perlin_generator.rs
+
+//! Implements the Generator trait using the Perlin noise function.
+//!
+//! This provides the engine's primary continuous, organic generation layer,
+//! mapping noise values to different TileTypes based on a fixed threshold.
+
+use crate::Generator;
+use ssxl_math::prelude::Vec2i;
+
+// FIX: Import all components directly from the ssxl_shared crate root.
+use ssxl_shared::{
+    ChunkData,
+    CHUNK_SIZE,
+    GridBounds,
+    TileData,
+    TileType,
+};
+
+use noise::{NoiseFn, Perlin};
+use tracing::info;
+
+// --- 1. Generator Structure ---
+
+/// A generator that uses the Perlin noise algorithm to create deterministic terrain.
+pub struct PerlinGenerator {
+    /// The noise object instance, which is thread-safe and deterministic based on its seed.
+    perlin: Perlin,
+    /// The scaling factor applied to world coordinates before generating noise.
+    /// A smaller scale results in larger, smoother features.
+    scale: f64,
+}
+
+impl PerlinGenerator {
+    /// Creates a new PerlinGenerator instance.
+    ///
+    /// # Arguments
+    /// * `scale`: The frequency/scale of the noise (e.g., 64.0).
+    pub fn new(scale: f64) -> Self {
+        // NOTE: Default seed is currently hardcoded for deterministic, repeatable generation.
+        const DEFAULT_SEED: u32 = 42;
+        
+        PerlinGenerator {
+            perlin: Perlin::new(DEFAULT_SEED),
+            scale,
+        }
+    }
+}
+
+// --- 2. Generator Trait Implementation ---
+
+impl Generator for PerlinGenerator {
+    /// Returns the unique identifier for this generator.
+    fn id(&self) -> &str {
+        "perlin_basic_2d"
+    }
+
+    /// Generates a single chunk based on the Perlin noise field.
+    ///
+    /// The logic is: 1) Convert chunk coordinates to world tile coordinates,
+    /// 2) Sample the Perlin function, 3) Map the noise value to a `TileType`.
+    fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
+        let chunk_tile_size = CHUNK_SIZE as i64;
+
+        // Calculate the world coordinate of the chunk's bottom-left corner.
+        let world_start_x = chunk_coords.x * chunk_tile_size;
+        let world_start_y = chunk_coords.y * chunk_tile_size;
+
+        // Create a unique Chunk ID by packing the 2D coordinates into a 64-bit integer.
+        let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
+
+        // Define the world bounds covered by this chunk.
+        let bounds = GridBounds::new(
+            world_start_x,
+            world_start_y,
+            world_start_x + chunk_tile_size,
+            world_start_y + chunk_tile_size
+        );
+
+        let dimension_name = "2D_Noise".to_string();
+
+        let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
+
+        // Pre-allocate vector to hold all tile data for the chunk.
+        let mut tiles: Vec<TileData> = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
+
+        // Iterate through all tiles within the chunk.
+        for y in 0..chunk_tile_size {
+            for x in 0..chunk_tile_size {
+                let world_x = (world_start_x + x) as f64;
+                let world_y = (world_start_y + y) as f64;
+
+                // Sample the Perlin noise function. Coordinates are scaled down.
+                let noise_value = self.perlin.get([world_x / self.scale, world_y / self.scale]);
+
+                // Perlin output is typically [-1.0, 1.0]. Normalize to [0.0, 1.0].
+                let normalized_value = (noise_value + 1.0) / 2.0;
+
+                // Thresholding: Map the noise value to a concrete TileType (Water, Grass, Mountain).
+                let tile_type = if normalized_value < 0.35 {
+                    TileType::Water
+                } else if normalized_value < 0.60 {
+                    TileType::Grass
+                } else {
+                    TileType::Mountain
+                };
+
+                // Create the TileData, storing the raw noise value as metadata (useful for blending/details).
+                let tile = TileData::new(tile_type, normalized_value as f32);
+                tiles.push(tile);
+            }
+        }
+
+        // Insert the generated tile array into the chunk data structure.
+        chunk_data.insert_tiles(tiles);
+
+        info!(
+            "MVG generated Chunk {:?} using Perlin ({} tiles processed)",
+            chunk_coords,
+            (CHUNK_SIZE * CHUNK_SIZE)
+        );
+
+        chunk_data
+    }
+}
+<<< FILE END: rust\ssxl_generate\src\perlin\perlin_generator.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\task\batch_processor.rs (71 LOC) <<<
+// ssxl_generate/src/task/batch_processor.rs
+
+//! Logic for executing large, synchronous batches of chunk generation requests.
+
+use tokio::runtime::Handle;
+use tokio::sync::mpsc::Sender;
+use tracing::{info, warn};
+use std::collections::HashMap;
+use std::sync::Arc;
+// FIX: Removed use std::panic::{self, AssertUnwindSafe, catch_unwind};
+
+use ssxl_math::prelude::Vec2i;
+use ssxl_cache::ChunkCache;
+
+// FIX: Corrected import path for GeneratorConfig.
+use crate::manager::config_validator::GeneratorConfig;
+// FIX: Corrected import paths for ConductorState and DynGenerator.
+use crate::conductor::conductor_state::ConductorState;
+use crate::manager::generator_manager::DynGenerator;
+// FIX: The path to task_queue must now go through the 'task' module.
+use crate::task::task_queue::{handle_chunk_unit, GenerationMessage};
+use ssxl_shared::CHUNK_SIZE;
+
+
+/// Spawns a new generation task that processes a full batch of chunks *sequentially* within a 
+/// dedicated thread to ensure stability with non-thread-safe generators/caches.
+pub fn spawn_batch_generation_task(
+	runtime_handle: &Handle,
+	generators_clone: HashMap<String, Arc<DynGenerator>>,
+	chunk_cache_clone: Arc<ChunkCache>,
+	active_generator_id: String,
+	progress_sender_clone: Sender<GenerationMessage>,
+	// This argument is correct for use in this function, but not the inner call.
+	internal_state_clone: Arc<ConductorState>,
+	config_clone: GeneratorConfig,
+) {
+	info!("Conductor spawning SEQUENTIAL BATCH generation task. Config: {}", config_clone);
+
+	runtime_handle.spawn_blocking(move || {
+		// Increment the queue depth immediately to track the active task count.
+		internal_state_clone.increment_queue_depth();
+
+		// Calculation logic remains the same
+		let chunk_size_i64: i64 = CHUNK_SIZE as i64;
+		let map_width_i64: i64 = config_clone.width as i64;
+		let map_height_i64: i64 = config_clone.height as i64;
+
+		let width_in_chunks = (map_width_i64 + chunk_size_i64 - 1) / chunk_size_i64;
+		let height_in_chunks = (map_height_i64 + chunk_size_i64 - 1) / chunk_size_i64;
+
+		let all_chunk_coords: Vec<Vec2i> = (0..width_in_chunks)
+			.flat_map(|x| (0..height_in_chunks).map(move |y| Vec2i::new(x, y)))
+			.collect();
+		
+		if all_chunk_coords.is_empty() {
+			info!("Batch generation task received a map size of 0x0 chunks. Task finished immediately. Config: {}", config_clone);
+		}
+
+		// --- Core SEQUENTIAL Processing ---
+		let active_generator_id_ref = &active_generator_id;
+		
+		for &chunk_coords in all_chunk_coords.iter() {
+			
+			handle_chunk_unit(
+				chunk_coords,
+				active_generator_id_ref,
+				&generators_clone,
+				&chunk_cache_clone,
+				&progress_sender_clone,
+				// The Arc<ConductorState> is passed correctly here.
+				&internal_state_clone,
+			);
+		}
+
+		// Send final completion message.
+		if progress_sender_clone.try_send(GenerationMessage::GenerationComplete).is_err() {
+			warn!("Batch completion signal dropped (Channel full).");
+		}
+
+		// Decrement the queue depth.
+		internal_state_clone.decrement_queue_depth();
+
+		info!("Batch generation task finished processing command: {}", config_clone);
+	});
+}
+<<< FILE END: rust\ssxl_generate\src\task\batch_processor.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\task\benchmark_logic.rs (25 LOC) <<<
+// ssxl_generate/src/benchmark_logic.rs
+
+use tracing::{info, warn};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}}; // ADDED: For concurrent progress reporting
+
+pub fn benchmark_generation_workload(
+    workload_tiles: u64, 
+    processed_tiles_counter: Arc<AtomicU64> // NEW: Shared atomic counter for progress
+) {
+    warn!("Generator: Executing generation workload for {} tiles...", workload_tiles);
+
+    const UPDATE_INTERVAL: u64 = 10_000_000; 
+
+    let mut result: u64 = 0;
+    
+    for i in 0..workload_tiles {
+        result = result.wrapping_add(i % 17);
+        
+        if (i + 1) % UPDATE_INTERVAL == 0 {
+            processed_tiles_counter.fetch_add(UPDATE_INTERVAL, Ordering::Relaxed);
+        }
+    }
+
+    let final_update = workload_tiles % UPDATE_INTERVAL;
+    if final_update > 0 {
+        processed_tiles_counter.fetch_add(final_update, Ordering::Relaxed);
+    }
+    
+    info!("Generator: Workload simulation complete. Final check value: {}", result);
+}
+<<< FILE END: rust\ssxl_generate\src\task\benchmark_logic.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\task\mod.rs (8 LOC) <<<
+// ssxl_generate/src/task/mod.rs
+
+pub mod batch_processor;
+pub mod benchmark_logic;
+pub mod task_queue;
+
+// Re-export the items.
+pub use batch_processor::*;
+pub use benchmark_logic::*;
+pub use task_queue::*;
+<<< FILE END: rust\ssxl_generate\src\task\mod.rs >>>
+
+>>> FILE START: rust\ssxl_generate\src\task\task_queue.rs (137 LOC) <<<
+// ssxl_generate/src/task/task_queue.rs
+
+//! Manages the asynchronous request loop for chunk generation and the core logic
+//! for handling a single chunk request (cache check, generation, and storage).
+
+use tokio::runtime::Handle;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle; 
+// PERFORMANCE FIX: Use tracing macros instead of synchronous println!/eprintln!
+use tracing::{info, error, warn, debug}; 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use ssxl_math::prelude::Vec2i; 
+use ssxl_math::coordinate_system::ChunkKey; 
+use glam::I64Vec3;
+
+use ssxl_cache::ChunkCache;
+use crate::Generator;
+
+use crate::conductor::conductor_state; 
+
+use ssxl_shared::ChunkData; 
+use ssxl_shared::CHUNK_SIZE as SHARED_CHUNK_SIZE; 
+pub use ssxl_shared::message::generation_message::{GenerationMessage, GenerationTask}; 
+
+
+type DynGenerator = Box<dyn Generator + Send + Sync>;
+
+pub const CHUNK_SIZE: i64 = SHARED_CHUNK_SIZE as i64;
+
+
+// --- 1. Single Chunk Processing Unit (Refactored for performance logging) ---
+
+pub fn handle_chunk_unit(
+	chunk_coords: Vec2i,
+	generator_name: &str,
+	generators: &HashMap<String, Arc<DynGenerator>>,
+	chunk_cache: &Arc<ChunkCache>, 
+	progress_sender: &mpsc::Sender<GenerationMessage>,
+	conductor_state: &Arc<conductor_state::ConductorState>, 
+) {
+    let chunk_key = ChunkKey(I64Vec3 {
+        x: chunk_coords.x,
+        y: chunk_coords.y,
+        z: 0, // Default Z to 0 for 2D generation plane
+    });
+    
+	// 1. Attempt Cache Load (Cache Hit)
+	if let Ok(Some(chunk_data_arc)) = chunk_cache.load_chunk(&chunk_key) {
+		// PERFORMANCE FIX: Replaced synchronous println! with asynchronous tracing debug!
+		debug!(?chunk_coords, "Chunk Unit: Cache HIT.");
+
+		if let Err(e) = progress_sender.try_send(
+			GenerationMessage::Generated(chunk_coords, chunk_data_arc)
+		) {
+			// PERFORMANCE FIX: Replaced synchronous eprintln! with asynchronous tracing warn!
+			warn!(?chunk_coords, error = ?e, "Chunk Unit: FAILED to send ChunkGenerated message on Cache HIT (Channel full or disconnected).");
+		} else {
+			// PERFORMANCE FIX: Replaced synchronous println! with asynchronous tracing debug!
+			debug!(?chunk_coords, "Chunk Unit: SUCCESSFULLY sent ChunkGenerated message on Cache HIT.");
+		}
+		return;
+	}
+	
+	// 2. Cache Miss: Perform Generation
+	// PERFORMANCE FIX: Replaced synchronous println! with asynchronous tracing debug!
+	debug!(?chunk_coords, generator_name, "Chunk Unit: Cache MISS. Starting generation.");
+	
+	let generator_arc = generators
+		.get(generator_name)
+		.expect("Generator ID must be registered in Conductor.");
+	
+	// Execute the generation (CPU-bound operation)
+	let chunk_data: ChunkData = generator_arc.generate_chunk(chunk_coords);
+	
+	let tile_count = chunk_data.tiles.len() as u64; 
+	conductor_state.increment_tile_count(tile_count);
+	
+	let chunk_data_arc = Arc::new(chunk_data);
+
+    // 3. Save to Cache
+    if let Err(e) = chunk_cache.save_chunk(&chunk_key, chunk_data_arc.clone()) {
+        // PERFORMANCE FIX: Replaced synchronous eprintln! with asynchronous tracing error!
+        error!(?chunk_coords, error = ?e, "Chunk Unit: FAILED to save chunk to cache.");
+    }
+	
+    // 4. Send Result
+	if let Err(e) = progress_sender.try_send(
+		GenerationMessage::Generated(chunk_coords, chunk_data_arc)
+	) {
+		// PERFORMANCE FIX: Replaced synchronous eprintln! with asynchronous tracing warn!
+		warn!(?chunk_coords, error = ?e, "Chunk Unit: FAILED to send ChunkGenerated message (Channel full or disconnected).");
+	} else {
+		// PERFORMANCE FIX: Replaced synchronous println! with asynchronous tracing debug!
+		debug!(?chunk_coords, "Chunk Unit: SUCCESSFULLY sent ChunkGenerated message.");
+	}
+}
+
+// --- 2. Asynchronous Request Loop (NO CHANGES) ---
+
+pub fn start_request_loop(
+	rt_handle: Handle,
+	mut request_rx: mpsc::UnboundedReceiver<GenerationTask>,
+	progress_tx: mpsc::Sender<GenerationMessage>,
+	generators: Arc<HashMap<String, Arc<DynGenerator>>>,
+	chunk_cache: Arc<ChunkCache>,
+	conductor_state: Arc<conductor_state::ConductorState>,
+) {
+	rt_handle.spawn(async move {
+		info!("Generation Task Queue active. Listening for requests.");
+		
+        let mut active_tasks: Vec<JoinHandle<()>> = Vec::new();
+        
+		while let Some(task) = request_rx.recv().await {
+			if !conductor_state.as_ref().is_active() {
+				warn!("Request received while Conductor is paused or shutting down. Dropping task: {:?}", task.chunk_coords);
+				continue;
+			}
+
+			let progress_tx_clone = progress_tx.clone();
+			let generators_clone = generators.clone();
+			let chunk_cache_clone = chunk_cache.clone();
+            let conductor_state_clone = conductor_state.clone();
+
+			// Spawn the blocking task for sequential chunk processing
+			let handle = tokio::task::spawn_blocking(move || { 
+				handle_chunk_unit(
+					task.chunk_coords,
+					&task.generator_id,
+					&generators_clone,
+					&chunk_cache_clone,
+					&progress_tx_clone,
+					&conductor_state_clone, 
+				);
+			});
+            
+            active_tasks.push(handle);
+		}
+		
+		info!("Generation Task Queue shutting down. Waiting for {} in-flight tasks...", active_tasks.len());
+		
+        for handle in active_tasks {
+            if let Err(e) = handle.await {
+                error!("A spawned blocking task panicked: {:?}", e);
+            }
+        }
+        
+        info!("All in-flight generation tasks completed.");
+        
+		if progress_tx.send(GenerationMessage::GenerationComplete).await.is_err() {
+			error!("Failed to send final GenerationComplete message. Receiver may have already closed.");
+		}
+	});
+}
+<<< FILE END: rust\ssxl_generate\src\task\task_queue.rs >>>
+

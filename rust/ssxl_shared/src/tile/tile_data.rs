@@ -1,6 +1,6 @@
-// ssxl_shared/src/tile_data.rs
+// ssxl_shared/src/tile/tile_data.rs
 
-//! # Tile Data Structures (`ssxl_shared::tile_data`)
+//! # Tile Data Structures (`ssxl_shared::tile::tile_data`) 
 //!
 //! This module defines the `TileData` structure, which holds the minimal necessary
 //! information for a single tile in the procedural world. It also includes utility
@@ -12,7 +12,7 @@ use super::tile_type::TileType;
 use serde::{Deserialize, Serialize};
 
 // Re-exports a core math primitive for use in related structures (e.g., AnimationUpdate).
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 
 
 // --- Core Data Structure ---
@@ -36,6 +36,7 @@ pub struct TileData {
 
 impl Default for TileData {
     /// Returns the default state for a tile: `TileType::Void` with zero noise and no flags set.
+    // FIX: Removed `const` keyword to resolve error E0379 and E0015.
     fn default() -> Self {
         TileData {
             tile_type: TileType::default(),
@@ -52,7 +53,7 @@ impl Default for TileData {
 /// and the Godot runtime regarding tile animations.
 ///
 /// This message is typically used by a dedicated rendering or animation system.
-#[derive(Debug, Clone, Serialize, Deserialize)] // FIX: Added Serialize and Deserialize
+#[derive(Debug, Clone, Serialize, Deserialize)] 
 pub struct AnimationUpdate {
     /// The layer or dimension the tile belongs to.
     pub layer: i32,
@@ -73,9 +74,9 @@ pub mod tile_flags {
     /// Bit 0: Is the tile physically passable by entities? (e.g., air, water surface)
     pub const IS_TRAVERSABLE: u8 = 0b0000_0001;
     /// Bit 1: Is the tile currently visible/rendered by the client?
-    pub const IS_RENDERED:    u8 = 0b0000_0010;
+    pub const IS_RENDERED:   u8 = 0b0000_0010;
     /// Bit 2: Has this tile been manually changed post-generation by a player/editor?
-    pub const IS_MODIFIED:    u8 = 0b0000_0100;
+    pub const IS_MODIFIED:   u8 = 0b0000_0100;
     /// Bit 3: Does this tile contain a gatherable resource or item?
     pub const HAS_RESOURCE:    u8 = 0b0000_1000;
     // Bits 4-7 are reserved for future properties.
@@ -84,6 +85,7 @@ pub mod tile_flags {
 
 impl TileData {
     /// Creates a new `TileData` instance with specified type and noise value.
+    // FIX: Removed `const` keyword.
     pub fn new(tile_type: TileType, noise_value: f32) -> Self {
         TileData {
             tile_type,
@@ -93,38 +95,16 @@ impl TileData {
     }
 
     /// Checks if the tile is considered a "solid" block, typically used for collision.
+    // OPTIMIZATION: Force inlining this critical method.
+    #[inline(always)]
     pub const fn is_solid(&self) -> bool {
         // Relies on a method in TileType to define "solidity."
         !self.tile_type.is_empty()
     }
-
-    /// Sets a flag based on its **bit index** (0-7).
-    pub fn set_flag_by_index(&mut self, flag_index: u8) {
-        if flag_index < 8 {
-            // Bitwise OR assignment: sets the bit at the given index to 1.
-            self.flags |= 1 << flag_index;
-        }
-    }
-
-    /// Clears (sets to 0) a flag based on its **bit index** (0-7).
-    pub fn clear_flag_by_index(&mut self, flag_index: u8) {
-        if flag_index < 8 {
-            // Bitwise AND assignment with the inverted mask: sets the bit to 0.
-            self.flags &= !(1 << flag_index);
-        }
-    }
-
-    /// Checks the status of a flag based on its **bit index** (0-7).
-    pub fn check_flag_by_index(&self, flag_index: u8) -> bool {
-        if flag_index < 8 {
-            // Bitwise AND with the mask: returns true if the bit is set.
-            (self.flags & (1 << flag_index)) != 0
-        } else {
-            false
-        }
-    }
     
     /// Sets or clears a property using a predefined **flag mask** (e.g., `tile_flags::IS_TRAVERSABLE`).
+    // OPTIMIZATION: Force inlining this critical method.
+    #[inline(always)]
     pub fn set_flag(&mut self, flag_mask: u8, value: bool) {
         if value {
             // Set the bit(s) (|= is bitwise OR assignment).
@@ -136,6 +116,8 @@ impl TileData {
     }
 
     /// Checks the status of a property using a predefined **flag mask**.
+    // OPTIMIZATION: Force inlining this critical method.
+    #[inline(always)]
     pub const fn has_flag(&self, flag_mask: u8) -> bool {
         // Returns true if any of the bits in the mask are set in self.flags.
         (self.flags & flag_mask) != 0

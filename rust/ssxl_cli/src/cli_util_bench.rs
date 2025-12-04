@@ -1,8 +1,10 @@
+// ssxl_cli\src\cli_util_bench.rs
+
 use tracing::{info, warn, error};
 use std::time::Instant;
 use std::thread;
 use std::sync::{
-    Arc, 
+    Arc,
     atomic::{AtomicU64, Ordering}
 };
 use std::io::{self, Write};
@@ -10,7 +12,7 @@ use std::time::Duration;
 
 use ssxl_generate::benchmark_generation_workload;
 use ssxl_generate::conductor::Conductor;
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 
 pub fn test_generation_and_placement_cli() {
     warn!("🧪 Running CLI Test: Generation and Placement (Conductor Validation)...");
@@ -31,10 +33,11 @@ pub fn test_generation_and_placement_cli() {
     let mut chunks_generated = 0;
 
     let perlin_id = "perlin_basic_2d";
-    if conductor.set_active_generator(perlin_id).is_ok() {
+    if conductor.set_generator(perlin_id).is_ok() {
         info!("-> Active Generator set to: {}", perlin_id);
         for &coords in &test_coords {
-            let _chunk = conductor.generate_single_chunk(coords);
+            // FIX: Use the correct synchronous generation method: `get_chunk_data`
+            let _chunk = conductor.get_chunk_data(&coords);
             info!("  - Generated chunk {:?} successfully.", coords);
             chunks_generated += 1;
         }
@@ -43,10 +46,11 @@ pub fn test_generation_and_placement_cli() {
     }
     
     let ca_id = "cellular_automata_basic";
-    if conductor.set_active_generator(ca_id).is_ok() {
+    if conductor.set_generator(ca_id).is_ok() {
         info!("-> Active Generator set to: {}", ca_id);
         let coords = Vec2i::new(50, 50);
-        let _chunk = conductor.generate_single_chunk(coords);
+        // FIX: Use the correct synchronous generation method: `get_chunk_data`
+        let _chunk = conductor.get_chunk_data(&coords);
         info!("  - Generated chunk {:?} successfully.", coords);
         chunks_generated += 1;
     } else {
@@ -54,9 +58,9 @@ pub fn test_generation_and_placement_cli() {
     }
 
     if chunks_generated > 0 {
-        info!("✅ CLI Generation Test SUCCESS: Generated {} chunks across {} generator(s).", 
-            chunks_generated, 
-            conductor.get_active_generator_id() 
+        info!("✅ CLI Generation Test SUCCESS: Generated {} chunks across {} generator(s).",
+            chunks_generated,
+            conductor.get_active_generator_id()
         );
     } else {
         error!("❌ CLI Generation Test FAILED: Zero chunks were generated. Check Conductor initialization and generator IDs.");
@@ -84,7 +88,7 @@ pub fn run_max_grid_benchmark() {
     let ticker_counter_clone = processed_tiles.clone();
 
     let workload_handle = thread::spawn(move || {
-        benchmark_generation_workload(WORKLOAD_TILES, workload_counter_clone); 
+        benchmark_generation_workload(WORKLOAD_TILES, workload_counter_clone);
     });
 
     let start_time = Instant::now();
@@ -97,14 +101,14 @@ pub fn run_max_grid_benchmark() {
             
             let percentage = ((current as f64 / total) * 100.0).min(100.0).round() as u64;
 
-            let throughput = if elapsed > 0.0 { 
-                (current as f64 / elapsed).round() as u64 
-            } else { 
-                0 
+            let throughput = if elapsed > 0.0 {
+                (current as f64 / elapsed).round() as u64
+            } else {
+                0
             };
 
-            print!("\r⏳ Progress: {: >3}% ({: >8}M / {}M) | Throughput: ~{: >9} tiles/s", 
-                percentage, 
+            print!("\r⏳ Progress: {: >3}% ({: >8}M / {}M) | Throughput: ~{: >9} tiles/s",
+                percentage,
                 current / 1_000_000,
                 WORKLOAD_TILES / 1_000_000,
                 throughput
@@ -122,8 +126,8 @@ pub fn run_max_grid_benchmark() {
     
     if let Err(e) = workload_handle.join() {
         error!("Workload thread panicked: {:?}", e);
-        let _ = println!("\r❌ Benchmark failed: Generation thread panic. {: <100}", " "); 
-        return; 
+        let _ = println!("\r❌ Benchmark failed: Generation thread panic. {: <100}", " ");
+        return;
     }
     
     ticker_handle.join().unwrap();
@@ -133,7 +137,7 @@ pub fn run_max_grid_benchmark() {
     let duration_millis = duration.as_millis() as f64;
     let actual_tiles_placed = WORKLOAD_TILES;
     
-    println!("\r✅ Benchmark complete. Workload: {} tiles. Duration: {:.2}s", 
+    println!("\r✅ Benchmark complete. Workload: {} tiles. Duration: {:.2}s",
         actual_tiles_placed, duration_secs);
 
     if duration_secs > 0.0 {

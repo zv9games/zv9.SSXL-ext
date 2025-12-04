@@ -7,7 +7,7 @@
 //! delegates complex logic to the `ca::rule_set` and `ca::neighbor_check` modules.
 
 use crate::Generator;
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 use fastrand; // Lightweight, fast, and thread-safe PRNG
 use ssxl_shared::{
     // FIX: Import all components directly from the ssxl_shared crate root.

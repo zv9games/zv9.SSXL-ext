@@ -30,38 +30,61 @@ function Generate-LOCReportsPerLanguage {
     $Summary.Add(" FILE LOC | Relative File Path")
     $Summary.Add("------------------------------------------------------")
 
-    # Prepare combined report paths
-    $RustReportPath   = Join-Path $OutputDirPath "rust_source.txt"
-    $GodotReportPath  = Join-Path $OutputDirPath "godot_source.txt"
-    # Clear any old runs
-    Remove-Item $RustReportPath,$GodotReportPath -ErrorAction SilentlyContinue
+    # Clear any old Godot report
+    $GodotReportPath = Join-Path $OutputDirPath "godot_source.txt"
+    Remove-Item $GodotReportPath -ErrorAction SilentlyContinue
 
     foreach ($Dir in $TargetDirs) {
-        $Files = Get-ChildItem -Path $Dir -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+        $ModuleDirs = Get-ChildItem -Path $Dir -Directory -ErrorAction SilentlyContinue
+
+        foreach ($Module in $ModuleDirs) {
+            $ModuleName = $Module.Name
+            $ModulePath = $Module.FullName
+            $ModuleReportPath = Join-Path $OutputDirPath "$ModuleName.txt"
+            Remove-Item $ModuleReportPath -ErrorAction SilentlyContinue
+
+            $ModuleFiles = Get-ChildItem -Path $ModulePath -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+                $RelPath = $_.FullName -replace $ProjectRoot, ''
+                if ($RelPath -like "*\target\*" -or $RelPath -like "*\iteration5\*") { return $false }
+                $ext = $_.Extension.TrimStart('.')
+                return $RustExts -contains $ext
+            }
+
+            foreach ($File in $ModuleFiles) {
+                $Loc = (Get-Content -Path $File.FullName -ErrorAction SilentlyContinue | Measure-Object -Line).Lines
+                $RelPath = $File.FullName -replace $ProjectRoot, ''
+                $ext = $File.Extension.TrimStart('.')
+
+                $Summary.Add(("{0,9} LOC | {1}" -f $Loc, $RelPath))
+                $TotalLoc += $Loc
+
+                $Content = Get-Content -Path $File.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                $FileHeader = ">>> FILE START: $RelPath ($Loc LOC) <<<"
+                $FileFooter = "<<< FILE END: $RelPath >>>"
+
+                ($FileHeader + "`n" + $Content + "`n" + $FileFooter + "`n") | Out-File -FilePath $ModuleReportPath -Encoding UTF8 -Append
+            }
+        }
+
+        # Handle Godot files separately
+        $GodotFiles = Get-ChildItem -Path $Dir -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
             $RelPath = $_.FullName -replace $ProjectRoot, ''
             if ($RelPath -like "*\target\*" -or $RelPath -like "*\iteration5\*") { return $false }
             $ext = $_.Extension.TrimStart('.')
-            return $TargetExts -contains $ext
+            return $GdScriptExts -contains $ext
         }
 
-        foreach ($File in $Files) {
+        foreach ($File in $GodotFiles) {
             $Loc = (Get-Content -Path $File.FullName -ErrorAction SilentlyContinue | Measure-Object -Line).Lines
             $RelPath = $File.FullName -replace $ProjectRoot, ''
-            $ext = $File.Extension.TrimStart('.')
-
-            $Summary.Add(("{0,9} LOC | {1}" -f $Loc, $RelPath))
-            $TotalLoc += $Loc
-
             $Content = Get-Content -Path $File.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
             $FileHeader = ">>> FILE START: $RelPath ($Loc LOC) <<<"
             $FileFooter = "<<< FILE END: $RelPath >>>"
 
-            if ($RustExts -contains $ext) {
-                ($FileHeader + "`n" + $Content + "`n" + $FileFooter + "`n") | Out-File -FilePath $RustReportPath -Encoding UTF8 -Append
-            }
-            elseif ($GdScriptExts -contains $ext) {
-                ($FileHeader + "`n" + $Content + "`n" + $FileFooter + "`n") | Out-File -FilePath $GodotReportPath -Encoding UTF8 -Append
-            }
+            $Summary.Add(("{0,9} LOC | {1}" -f $Loc, $RelPath))
+            $TotalLoc += $Loc
+
+            ($FileHeader + "`n" + $Content + "`n" + $FileFooter + "`n") | Out-File -FilePath $GodotReportPath -Encoding UTF8 -Append
         }
     }
 
@@ -72,11 +95,12 @@ function Generate-LOCReportsPerLanguage {
     $FullSummaryPath = Join-Path $OutputDirPath $SummaryFile
     $Summary -join "`n" | Out-File -FilePath $FullSummaryPath -Encoding UTF8
 
-    Write-Host "Rust combined report: $RustReportPath"
+    Write-Host "Rust module reports saved in: $OutputDirPath"
     Write-Host "Godot combined report: $GodotReportPath"
     Write-Host "LOC summary saved: $FullSummaryPath"
 }
 
+# Call the function so it actually runs
 Generate-LOCReportsPerLanguage `
     -TargetDirs @(".\rust", ".\SSXL_engine_tester") `
     -RustExts @("rs", "toml") `

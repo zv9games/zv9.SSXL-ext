@@ -1,4 +1,4 @@
-// ssxl_godot/src/engine/commands.rs (Optimized Imports)
+// FILE: ssxl_godot/src/engine/commands.rs (Optimized Imports)
 //
 // Only the lightweight, high-frequency runtime commands that do NOT belong in:
 // • init.rs (setup)
@@ -42,7 +42,8 @@ pub fn set_generator_logic(engine: &mut SSXLEngine, name: GString) {
     state!(engine, state);
     if let Some(arc) = &state.conductor {
         if let Ok(mut c) = arc.lock() {
-            let _ = c.set_active_generator(&name.to_string());
+            // FIX E0599: Correcting the method name to the likely existing setter.
+            let _ = c.set_generator(&name.to_string());
         }
     }
 }

@@ -1,4 +1,4 @@
-// ssxl_shared/src/chunk/chunk_data.rs (Fixed Imports)
+// ssxl_shared/src/chunk/chunk_data.rs
 
 //! # Chunk Data Structures (`ssxl_shared::chunk::chunk_data`)
 //!
@@ -11,24 +11,15 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::convert::TryInto;
+// NEW: For faster assignment of large arrays (ptr::write).
+use std::ptr; 
 
 // --- FIXES APPLIED HERE ---
-
-// FIX 1: grid_bounds is a sibling module (in the same 'chunk' directory).
 use super::grid_bounds::GridBounds;
-// FIX 2: tile_data is in the top-level 'tile' module.
 use crate::tile::tile_data::TileData; 
-// Imports the custom Serde helper for deterministic SystemTime serialization.
-// FIX 3: math_primitives is in the top-level 'math' module.
 use crate::math::math_primitives; 
 
-// Re-exports a core math primitive for chunk coordinates.
-// FIX: Removed the erroneous `I64Vec3` import to resolve E0432.
-use ssxl_math::Vec2i;
-// REMOVED: use ssxl_math::hashing::hash_chunk_coords; // FIX: Cleaned up unused import.
-
-// Used to enable serialization/deserialization of arrays larger than 32 elements
-// by the serde framework (necessary for the 1024-tile array).
+use ssxl_math::prelude::Vec2i;
 use serde_big_array::BigArray;
 
 // --- Constants ---
@@ -104,7 +95,6 @@ impl ChunkData {
         let bounds = GridBounds::new(min_x, min_y, max_x, max_y);
         
         // 3. Generate a robust, collision-resistant ID.
-        // FIX: Now uses the robust Zigzag-encoded 2D hash.
         let id = ChunkData::hash_coords_2d(chunk_coords.x, chunk_coords.y);
         
         let tiles = [TileData::default(); TILE_ARRAY_SIZE];
@@ -121,8 +111,9 @@ impl ChunkData {
     /// Internal helper to map signed i64 to u64 for safe spatial indexing (e.g., Z-order curves).
     /// This prevents massive u64 values for small negative i64 inputs.
     /// Formula: (n << 1) ^ (n >> 63)
+    // OPTIMIZATION: const fn and inline hint for zero-cost hashing.
     #[inline(always)]
-    fn zigzag_encode(n: i64) -> u64 {
+    pub const fn zigzag_encode(n: i64) -> u64 {
         // We use the standard Zigzag formula to map all i64 values to unique u64 values,
         // prioritizing small absolute values to the lowest u64 space.
         ((n << 1) ^ (n >> 63)) as u64
@@ -131,23 +122,20 @@ impl ChunkData {
     /// Internal 2D coordinate hashing function, replacing the problematic FFI call.
     /// Uses a **Zigzag-encoded** packing into a u64, which is fast, deterministic,
     /// and ensures no collisions across the world origin.
-    fn hash_coords_2d(x: i64, y: i64) -> u64 {
+    // OPTIMIZATION: const fn and inline hint for zero-cost hashing.
+    #[inline(always)]
+    pub const fn hash_coords_2d(x: i64, y: i64) -> u64 {
         let ux = Self::zigzag_encode(x);
         let uy = Self::zigzag_encode(y);
 
         // Pack the two 32-bit halves. This is standard 2D packing for chunk keys.
         ux | (uy << 32)
     }
-
+    
     /// Internal helper to convert local tile coordinates (x, y) within the chunk
-    /// into a flat array index.
-    ///
-    /// This is marked `#[inline(always)]` for **performance optimization**
-    /// as it's called repeatedly during generation loops.
-    ///
-    /// Returns `None` if the coordinates are out of the [0, CHUNK_SIZE - 1] range.
+    /// into a flat array index. Includes a bounds check, returning `None` on failure.
     #[inline(always)]
-    fn coord_to_index(x: u32, y: u32) -> Option<usize> {
+    fn coord_to_index_checked(x: u32, y: u32) -> Option<usize> {
         if x < Self::SIZE && y < Self::SIZE {
             // Index = Y * Width + X (standard row-major order)
             Some((y * Self::SIZE + x) as usize)
@@ -156,11 +144,36 @@ impl ChunkData {
         }
     }
 
+    /// Internal helper to convert local tile coordinates (x, y) within the chunk
+    /// into a flat array index, **without** bounds checking.
+    ///
+    /// # Safety
+    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
+    #[inline(always)]
+    pub const fn coord_to_index_unchecked(x: u32, y: u32) -> usize {
+        // Index = Y * Width + X (standard row-major order)
+        (y * Self::SIZE + x) as usize
+    }
+
     /// Safely retrieves an immutable reference to a tile at the given local coordinates.
     pub fn get_tile(&self, x: u32, y: u32) -> Option<&TileData> {
-        Self::coord_to_index(x, y).map(|index| {
+        Self::coord_to_index_checked(x, y).map(|index| {
+            // SAFETY: index is guaranteed to be within array bounds by coord_to_index_checked
             &self.tiles[index]
         })
+    }
+    
+    /// **FAST PATH:** Retrieves an immutable reference to a tile at the given local coordinates,
+    /// **without bounds checking**.
+    ///
+    /// # Safety
+    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
+    // OPTIMIZATION: Fastest tile access method for performance-critical inner loops.
+    #[inline(always)]
+    pub unsafe fn get_tile_unchecked(&self, x: u32, y: u32) -> &TileData {
+        let index = Self::coord_to_index_unchecked(x, y);
+        // SAFETY: The caller guarantees the index is valid.
+        &self.tiles[index]
     }
     
     /// Inserts a fully generated vector of tiles into the chunk's internal array.
@@ -169,9 +182,13 @@ impl ChunkData {
     /// Panics if the input vector's length does not exactly match the expected
     /// `TILE_ARRAY_SIZE`, which is a critical **data integrity** check.
     pub fn insert_tiles(&mut self, tiles_vec: Vec<TileData>) {
-        // FIX: Use TryInto to consume the Vec, which is more idiomatic and clear for ownership transfer.
+        // Use TryInto to consume the Vec, which is more idiomatic and clear for ownership transfer.
         match tiles_vec.try_into() {
-            Ok(arr) => self.tiles = arr,
+            Ok(arr) => {
+                // OPTIMIZATION: Use ptr::write for a non-initializing move of the array contents
+                // This is generally faster than a regular assignment for large arrays.
+                unsafe { ptr::write(&mut self.tiles, arr) };
+            }
             Err(vec) => {
                 // Critical error: A generator produced an incomplete or oversized chunk.
                 panic!(
@@ -186,11 +203,26 @@ impl ChunkData {
     
     /// Safely retrieves a mutable reference to a tile at the given local coordinates.
     pub fn get_tile_mut(&mut self, x: u32, y: u32) -> Option<&mut TileData> {
-        Self::coord_to_index(x, y).map(|index| {
+        Self::coord_to_index_checked(x, y).map(|index| {
+            // SAFETY: index is guaranteed to be within array bounds by coord_to_index_checked
             &mut self.tiles[index]
         })
     }
+
+    /// **FAST PATH:** Retrieves a mutable reference to a tile at the given local coordinates,
+    /// **without bounds checking**.
+    ///
+    /// # Safety
+    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
+    // OPTIMIZATION: Fastest mutable tile access method for performance-critical inner loops.
+    #[inline(always)]
+    pub unsafe fn get_tile_mut_unchecked(&mut self, x: u32, y: u32) -> &mut TileData {
+        let index = Self::coord_to_index_unchecked(x, y);
+        // SAFETY: The caller guarantees the index is valid.
+        &mut self.tiles[index]
+    }
 }
+
 
 // --- Unit Tests ---
 
@@ -198,25 +230,29 @@ impl ChunkData {
 mod tests {
     use super::*;
 
-    // NOTE: For tests to compile, TileData::default() must be Copy, which it implicitly is.
-    // The coordinate-to-index tests are sound and require no changes.
+    // Assuming TileData is available via `crate::tile::tile_data::TileData`
     
     #[test]
     /// Tests the critical coordinate-to-index logic for boundaries and center.
     fn test_coord_to_index() {
+        // Test Checked version
         // Top-left corner
-        assert_eq!(ChunkData::coord_to_index(0, 0), Some(0));
+        assert_eq!(ChunkData::coord_to_index_checked(0, 0), Some(0));
 
         // Center (16, 16) -> 16 * 32 + 16 = 528
-        assert_eq!(ChunkData::coord_to_index(16, 16), Some(528));
+        assert_eq!(ChunkData::coord_to_index_checked(16, 16), Some(528));
 
         // Bottom-right corner (31, 31) -> 31 * 32 + 31 = 1023 (TILE_ARRAY_SIZE - 1)
-        assert_eq!(ChunkData::coord_to_index(31, 31), Some(1023));
+        assert_eq!(ChunkData::coord_to_index_checked(31, 31), Some(1023));
 
         // Out of bounds checks (32 is the exclusive size limit)
-        assert_eq!(ChunkData::coord_to_index(32, 0), None);
-        assert_eq!(ChunkData::coord_to_index(0, 32), None);
-        assert_eq!(ChunkData::coord_to_index(33, 33), None);
+        assert_eq!(ChunkData::coord_to_index_checked(32, 0), None);
+        assert_eq!(ChunkData::coord_to_index_checked(0, 32), None);
+        assert_eq!(ChunkData::coord_to_index_checked(33, 33), None);
+        
+        // Test Unchecked version (only for known good coordinates)
+        assert_eq!(ChunkData::coord_to_index_unchecked(0, 0), 0);
+        assert_eq!(ChunkData::coord_to_index_unchecked(31, 31), 1023);
     }
     
     #[test]

@@ -1,0 +1,178 @@
+﻿>>> FILE START: rust\ssxl_cache\Cargo.toml (14 LOC) <<<
+[package]
+name = "ssxl_cache"
+edition = "2021"
+
+[dependencies]
+# Internal Dependencies (Local Crates)
+ssxl_shared = { path = "../ssxl_shared" }
+ssxl_math = { path = "../ssxl_math" }
+ssxl_sync = { path = "../ssxl_sync" }
+
+# External Dependencies (Workspace-Inherited)
+bincode = { workspace = true }
+sha2 = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true}
+<<< FILE END: rust\ssxl_cache\Cargo.toml >>>
+
+>>> FILE START: rust\ssxl_cache\src\lib.rs (139 LOC) <<<
+// ssxl_cache/src/lib.rs
+
+use ssxl_math::coordinate_system::ChunkKey;
+use ssxl_sync::AtomicResource;
+use ssxl_shared::ChunkData;
+// OPTIMIZATION: Import HashSet for O(1) key management in RegionIndex
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::sync::Arc;
+use parking_lot::RwLock; 
+use tracing::{info, warn};
+use glam::I64Vec3; 
+
+type CacheMap = HashMap<ChunkKey, Arc<ChunkData>>;
+
+const REGION_SIZE: i64 = 64;
+
+type RegionKey = ChunkKey;
+// OPTIMIZATION: Switched from Vec<ChunkKey> (O(N) remove) to HashSet<ChunkKey> (O(1) remove).
+type RegionList = RwLock<HashSet<ChunkKey>>; 
+type RegionMap = HashMap<RegionKey, Arc<RegionList>>;
+
+
+#[derive(Debug, Clone)]
+pub struct RegionIndex {
+    storage: AtomicResource<RegionMap>,
+}
+
+impl RegionIndex {
+    fn new() -> Self {
+        Self {
+            storage: AtomicResource::new(RegionMap::new()),
+        }
+    }
+    
+    // O(1) Optimization: Force inlining this critical math function.
+    #[inline(always)] 
+    fn chunk_to_region_key(chunk_key: ChunkKey) -> RegionKey {
+        let rx = chunk_key.0.x / REGION_SIZE; 
+        let ry = chunk_key.0.y / REGION_SIZE; 
+        let rz = chunk_key.0.z / REGION_SIZE; 
+
+        ChunkKey(I64Vec3 { x: rx, y: ry, z: rz })
+    }
+
+    pub fn get_chunks_in_region(&self, region_key: &RegionKey) -> Option<Arc<RegionList>> {
+        let map = self.storage.read();
+        map.get(region_key).map(Arc::clone)
+    }
+
+    pub fn insert_key(&self, chunk_key: ChunkKey) {
+        let region_key = Self::chunk_to_region_key(chunk_key);
+        let mut map_lock = self.storage.write();
+
+        // Use the consistent parking_lot::RwLock and initialize with a HashSet
+        let list_lock_arc = map_lock.entry(region_key)
+            .or_insert_with(|| Arc::new(RwLock::new(HashSet::new()))) // Initialize with HashSet
+            .clone();
+        
+        // CRITICAL: Drop outer map lock BEFORE acquiring inner list lock to prevent deadlock.
+        drop(map_lock); 
+
+        // Acquire inner lock.
+        let mut list = list_lock_arc.write();
+        list.insert(chunk_key); // O(1) insertion
+    }
+    
+    pub fn remove_key(&self, chunk_key: ChunkKey) -> bool {
+        let region_key = Self::chunk_to_region_key(chunk_key);
+        
+        let list_lock_arc = {
+            let map = self.storage.read();
+            map.get(&region_key).map(Arc::clone)
+        };
+
+        if let Some(list_lock_arc) = list_lock_arc {
+            
+            // Acquire inner write lock using parking_lot
+            let mut list = list_lock_arc.write();
+            
+            // OPTIMIZATION: O(1) removal using HashSet::remove()
+            if list.remove(&chunk_key) {
+                
+                if list.is_empty() {
+                    // CRITICAL: Drop inner list lock guard BEFORE acquiring outer map lock.
+                    drop(list); 
+                    let mut map_write = self.storage.write();
+                    map_write.remove(&region_key);
+                    info!("Removed empty region key from index: {:?}", region_key);
+                }
+                return true;
+            }
+        }
+        
+        false
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ChunkCache {
+    storage: AtomicResource<CacheMap>,
+    region_index: RegionIndex,
+    max_capacity: usize,
+}
+
+impl ChunkCache {
+    pub fn new(max_chunks: usize) -> Result<Self, io::Error> {
+        info!("Initializing ChunkCache and RegionIndex with max_chunks: {}", max_chunks);
+        
+        Ok(ChunkCache { 
+            storage: AtomicResource::new(CacheMap::new()), 
+            region_index: RegionIndex::new(),
+            max_capacity: max_chunks,
+        })
+    }
+
+    pub fn load_chunk(&self, key: &ChunkKey) -> Result<Option<Arc<ChunkData>>, io::Error> {
+        let map = self.storage.read();
+        Ok(map.get(key).map(Arc::clone))
+    }
+
+    pub fn save_chunk(&self, key: &ChunkKey, data: Arc<ChunkData>) -> Result<(), io::Error> {
+        let mut map = self.storage.write();
+        let key_copy = *key; // Copy key for use with map and index
+        
+        if map.len() >= self.max_capacity {
+            // FUTURE WORK: Implementation of a high-performance LRU eviction strategy 
+            // is required here to maintain cache bounds.
+            warn!("ChunkCache capacity limit ({}) reached. LRU eviction is required to prevent OOM.", self.max_capacity);
+        }
+        
+        if map.insert(key_copy, data).is_none() {
+            info!("Saved new chunk to cache: {:?}", key_copy);
+            
+            self.region_index.insert_key(key_copy);
+        } else {
+            // No index update needed for overwrite.
+            warn!("Overwrote existing chunk in cache: {:?}", key_copy);
+        }
+        Ok(())
+    }
+    
+    /// Removes a chunk from the cache and its corresponding entry from the RegionIndex.
+    pub fn remove_chunk(&self, key: &ChunkKey) -> Option<Arc<ChunkData>> {
+        let removed_data = self.storage.write().remove(key);
+        
+        if removed_data.is_some() {
+            if self.region_index.remove_key(*key) {
+                info!("Removed chunk key and updated region index: {:?}", key);
+            } else {
+                warn!("Chunk removed from cache, but key was not found in RegionIndex: {:?}", key);
+            }
+        }
+        removed_data
+    }
+}
+<<< FILE END: rust\ssxl_cache\src\lib.rs >>>
+

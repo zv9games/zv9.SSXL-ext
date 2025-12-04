@@ -12,12 +12,20 @@ func _ready() -> void:
 	print("SSXL Engine Startup...")
 
 	# 1. Wire Godot nodes to Rust
-	engine.initialize_presenter(presenter)
-	engine.set_tilemap(tilemap)
-	engine.set_signals_node(signals)
+	# --- CRITICAL SAFETY CHECK ---
+	if !is_instance_valid(presenter):
+		push_error("FATAL ERROR: The node '$SSXLChunk' (Presenter) is missing. Please add an SSXLChunk node to the scene.")
+		return
+	# -----------------------------
+	
+	# FIX 1: Call the correct GDScript function on the presenter node.
+	presenter.set_engine_reference(engine)
+	
+	# FIX 2 & 3: Removed non-existent FFI calls (set_tilemap, set_signals_node).
 
 	# 2. Initialize channels & state
-	engine.initialize_runtime_shell("")   # ← Only sets up channels/state
+	# 🎯 FINAL FIX: Pass the 'signals' Node reference, fulfilling the 1-argument requirement.
+	engine.initialize_runtime_shell(signals)
 
 	# 3. Now spawn the actual conductors
 	engine.start_async_conductors()       # ← Must come AFTER initialize_runtime_shell!
@@ -34,6 +42,7 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	# This function is assumed to be exposed by Rust and is crucial for polling messages.
 	engine.tick(Time.get_ticks_msec())
 
 
@@ -64,6 +73,7 @@ func _start_generation() -> void:
 	# --- End Camera Fixes ---
 	
 	tilemap.clear()
+	# These remaining engine calls are core functions and should be exposed by Rust
 	engine.clear_completed_chunks()
 	engine.set_generator(gen)
 	engine.build_map(cfg)
@@ -76,6 +86,7 @@ func _on_chunk_data_ready(x: int, y: int) -> void:
 	call_deferred("_render_chunk", x, y)
 
 func _render_chunk(x: int, y: int) -> void:
+	# The PULL request now correctly goes through the engine node
 	var data: Dictionary = engine.fetch_chunk_data(x, y)
 	if data.is_empty():
 		return

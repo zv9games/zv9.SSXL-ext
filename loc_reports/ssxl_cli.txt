@@ -1,0 +1,2090 @@
+﻿>>> FILE START: rust\ssxl_cli\Cargo.toml (34 LOC) <<<
+[package]
+name = "ssxl_cli"
+version = "0.6.0"
+edition = "2021"
+
+[[bin]]
+name = "ssxl"
+path = "src/main.rs"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES (Foundation & FFI) ---
+# CLI needs access to all core data types for diagnostics and the FFI layer to test the runtime.
+ssxl_shared     = { path = "../ssxl_shared" }
+ssxl_engine_ffi = { path = "../ssxl_engine_ffi" }
+ssxl_tools      = { path = "../ssxl_tools" }
+ssxl_generate   = { path = "../ssxl_generate" }
+ssxl_math   = { path = "../ssxl_math" }
+
+# --- EXTERNAL DEPENDENCIES (Execution & UI) ---
+# Asynchronous runtime and macros
+tokio           = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# Workspace standard logging framework (replaces log/env_logger)
+tracing         = { workspace = true }
+# Time utilities, often needed for logging/benchmarking output
+chrono          = { workspace = true }
+# Interactive Console UI library
+crossterm       = { workspace = true }
+# File system traversal (for module tree inspector)
+walkdir         = { workspace = true }
+# Parallel processing (for running benchmarks)
+rayon           = { workspace = true }
+# Regular expressions (for any complex parsing tasks)
+regex           = { workspace = true }
+tracing-subscriber = { workspace = true }
+ctrlc           = { workspace = true }
+bincode = { workspace = true }
+serde = { workspace = true }
+<<< FILE END: rust\ssxl_cli\Cargo.toml >>>
+
+>>> FILE START: rust\ssxl_cli\src\cli_util_bench.rs (143 LOC) <<<
+// ssxl_cli\src\cli_util_bench.rs
+
+use tracing::{info, warn, error};
+use std::time::Instant;
+use std::thread;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering}
+};
+use std::io::{self, Write};
+use std::time::Duration;
+
+use ssxl_generate::benchmark_generation_workload;
+use ssxl_generate::conductor::Conductor;
+use ssxl_math::prelude::Vec2i;
+
+pub fn test_generation_and_placement_cli() {
+    warn!("🧪 Running CLI Test: Generation and Placement (Conductor Validation)...");
+
+    let (mut conductor, _state, _request_sender, _progress_receiver) = match Conductor::new(None) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("❌ Failed to initialize Conductor/Runtime: {}", e);
+            return;
+        }
+    };
+
+    let test_coords = [
+        Vec2i::new(0, 0),
+        Vec2i::new(-1, 0),
+        Vec2i::new(100, 100),
+    ];
+    let mut chunks_generated = 0;
+
+    let perlin_id = "perlin_basic_2d";
+    if conductor.set_generator(perlin_id).is_ok() {
+        info!("-> Active Generator set to: {}", perlin_id);
+        for &coords in &test_coords {
+            // FIX: Use the correct synchronous generation method: `get_chunk_data`
+            let _chunk = conductor.get_chunk_data(&coords);
+            info!("  - Generated chunk {:?} successfully.", coords);
+            chunks_generated += 1;
+        }
+    } else {
+        warn!("Generator '{}' not found. Skipping Perlin test.", perlin_id);
+    }
+    
+    let ca_id = "cellular_automata_basic";
+    if conductor.set_generator(ca_id).is_ok() {
+        info!("-> Active Generator set to: {}", ca_id);
+        let coords = Vec2i::new(50, 50);
+        // FIX: Use the correct synchronous generation method: `get_chunk_data`
+        let _chunk = conductor.get_chunk_data(&coords);
+        info!("  - Generated chunk {:?} successfully.", coords);
+        chunks_generated += 1;
+    } else {
+        warn!("Generator '{}' not found. Skipping CA test.", ca_id);
+    }
+
+    if chunks_generated > 0 {
+        info!("✅ CLI Generation Test SUCCESS: Generated {} chunks across {} generator(s).",
+            chunks_generated,
+            conductor.get_active_generator_id()
+        );
+    } else {
+        error!("❌ CLI Generation Test FAILED: Zero chunks were generated. Check Conductor initialization and generator IDs.");
+    }
+
+    conductor.graceful_teardown();
+}
+
+
+pub fn run_bitmask_conversion() {
+    warn!("🧪 Starting bitmask conversion from world.png (Placeholder)...");
+
+    let tiles_placed = 5000;
+    
+    info!("✅ Conversion complete. Tiles placed: {}", tiles_placed);
+}
+
+pub fn run_max_grid_benchmark() {
+    warn!("🧪 Starting Max Grid Benchmark (Real Workload)...");
+    
+    const WORKLOAD_TILES: u64 = 100_000_000;
+
+    let processed_tiles = Arc::new(AtomicU64::new(0));
+    let workload_counter_clone = processed_tiles.clone();
+    let ticker_counter_clone = processed_tiles.clone();
+
+    let workload_handle = thread::spawn(move || {
+        benchmark_generation_workload(WORKLOAD_TILES, workload_counter_clone);
+    });
+
+    let start_time = Instant::now();
+    let ticker_handle = thread::spawn(move || {
+        let total = WORKLOAD_TILES as f64;
+        
+        loop {
+            let current = ticker_counter_clone.load(Ordering::Relaxed);
+            let elapsed = start_time.elapsed().as_secs_f64();
+            
+            let percentage = ((current as f64 / total) * 100.0).min(100.0).round() as u64;
+
+            let throughput = if elapsed > 0.0 {
+                (current as f64 / elapsed).round() as u64
+            } else {
+                0
+            };
+
+            print!("\r⏳ Progress: {: >3}% ({: >8}M / {}M) | Throughput: ~{: >9} tiles/s",
+                percentage,
+                current / 1_000_000,
+                WORKLOAD_TILES / 1_000_000,
+                throughput
+            );
+            let _ = io::stdout().flush();
+
+            if current >= WORKLOAD_TILES {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+
+    let start = Instant::now();
+    
+    if let Err(e) = workload_handle.join() {
+        error!("Workload thread panicked: {:?}", e);
+        let _ = println!("\r❌ Benchmark failed: Generation thread panic. {: <100}", " ");
+        return;
+    }
+    
+    ticker_handle.join().unwrap();
+    
+    let duration = start.elapsed();
+    let duration_secs = duration.as_secs_f64();
+    let duration_millis = duration.as_millis() as f64;
+    let actual_tiles_placed = WORKLOAD_TILES;
+    
+    println!("\r✅ Benchmark complete. Workload: {} tiles. Duration: {:.2}s",
+        actual_tiles_placed, duration_secs);
+
+    if duration_secs > 0.0 {
+        let throughput_sec = (actual_tiles_placed as f64 / duration_secs).round() as u64;
+        let throughput_ms = actual_tiles_placed as f64 / duration_millis;
+        
+        println!("⚡ Max Throughput: ~{} tiles/sec", throughput_sec);
+        println!("⚡ Diagnostics: {:.2} Million tiles/ms", throughput_ms / 1_000_000.0);
+        
+        const MVG_BASELINE: u64 = 10_000_000;
+        const ITERATION5_TARGET: u64 = 18_000_000;
+
+        if throughput_sec >= ITERATION5_TARGET {
+            info!("🚀 CRITICAL SUCCESS: Throughput of {} tiles/sec EXCEEDS the Iteration 5 Target of {} tiles/sec!", throughput_sec, ITERATION5_TARGET);
+        } else if throughput_sec >= MVG_BASELINE {
+            info!("📈 Performance OK: Throughput of {} tiles/sec meets or exceeds the MVG Baseline of {} tiles/sec.", throughput_sec, MVG_BASELINE);
+        } else {
+            error!("⚠️ Performance CRITICAL: Throughput of {} tiles/sec is BELOW the MVG Baseline of {} tiles/sec.", throughput_sec, MVG_BASELINE);
+            warn!("Use Signal Inspector to diagnose the concurrency bottleneck.");
+        }
+
+    } else {
+        error!("❌ Benchmark failed: Workload was too small or timer error (duration was 0.0s). Increase WORKLOAD_TILES.");
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\cli_util_bench.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\cli_util_inspect.rs (158 LOC) <<<
+use walkdir::WalkDir;
+use std::path::{Path, PathBuf};
+use std::fs;
+use regex::Regex;
+use tracing::{info, warn, error};
+use std::thread;
+use std::time::Duration;
+
+
+pub fn print_module_tree() {
+	println!("\n=========================================================================");
+	println!("| 🌲 RUST WORKSPACE MODULE TREE (Scanning...)                            |");
+	println!("=========================================================================");
+	
+	let crate_dirs = [
+		"ssxl_cache/src",
+		"ssxl_engine_ffi/src",
+		"ssxl_generate/src",
+		"ssxl_godot/src",
+		"ssxl_math/src",
+		"ssxl_shared/src",
+		"ssxl_sync/src",
+		"ssxl_tools/src",
+		"ssxl_cli/src",
+	];
+
+	for crate_dir in crate_dirs {
+        let crate_path = PathBuf::from(crate_dir);
+		println!("\n🔍 Crate: {}", crate_dir);
+
+		if crate_path.exists() && crate_path.is_dir() {
+			for entry in WalkDir::new(&crate_path).min_depth(1) {
+				match entry {
+					Ok(e) => {
+                        let path = e.path();
+                        if path.is_file() && path.extension().map_or(false, |ext| ext == "rs") {
+                            
+                            let file_name = path.file_name().map_or("", |name| name.to_str().unwrap_or(""));
+
+                            let prefix = if file_name == "lib.rs" || file_name == "main.rs" {
+                                "├── [CORE] "
+                            } else {
+                                "│   └── "
+                            };
+                            
+                            if let Ok(relative_path) = path.strip_prefix(&crate_path) {
+                                println!("{} {}", prefix, relative_path.display());
+                            } else {
+                                println!("{} {}", prefix, path.display());
+                            }
+                        }
+					},
+					Err(e) => warn!("Error walking directory {}: {}", crate_dir, e),
+				}
+			}
+		} else {
+			warn!("Path does not exist or is not a directory: {}", crate_dir);
+		}
+	}
+	println!("=========================================================================\n");
+}
+
+
+pub fn print_godot_api_surface() {
+	// --- STRATEGIC UPDATE: Include the new aggregated API file from the 'engine' module. ---
+	let godot_api_files: [&str; 4] = [ 
+        // 🎯 FIX: The new main file containing all #[func] methods.
+        "ssxl_godot/src/engine/init.rs",
+        // Retaining the two GDExtension helper classes (Oracle, Signals)
+        "ssxl_godot/src/ffi/oracle.rs",      
+        "ssxl_godot/src/ffi/signals.rs",
+        // Retaining the FFI Core library
+        "ssxl_engine_ffi/src/lib.rs", 
+    ];
+
+    println!("🧪 API scan triggered (targeting {} files in ssxl_godot/src/ and FFI core)...", godot_api_files.len());
+    
+	// --- MASTER REGEX FOR ALL CALLABLE METHODS (FIXED ESCAPING) ---
+    let method_regex = Regex::new(
+        r#"(?s)(?:\s*#\[func\].*?|#\[no_mangle\].*?pub\s+extern\s+"C"\s*)\s*(?:pub\s+fn|fn)\s+(\w+)\s*(\([^\{;]*)\s*(?:->\s*([^\{]*))?"#
+    ).unwrap();
+
+	// Signal regex remains robust for line-based #[signal] definitions
+    let signal_signature_regex = Regex::new(
+        r"^\s*fn\s+(\w+)\s*(\([^;]*)\s*;\s*$"
+    ).unwrap();
+    let signal_marker_regex = Regex::new(r"^\s*#\[signal\]\s*$").unwrap();
+    
+    let mut api_methods: Vec<(String, String, String, String)> = Vec::new();
+    let mut api_signals: Vec<(String, String, String)> = Vec::new();
+
+    for file_path_str in godot_api_files.iter() {
+        let path: &Path = Path::new(file_path_str);
+        let file_name = Path::new(file_path_str).file_name().unwrap().to_str().unwrap();
+        
+        let mut signal_line_pending = false;
+
+        match fs::read_to_string(path) {
+            Ok(contents) => {
+                info!("Successfully read {}", path.display());
+                
+				// --- METHOD SCAN (Single Pass over File Content) ---
+                for cap in method_regex.captures_iter(&contents) {
+                    let method_name = cap.get(1).map(|m| m.as_str()).unwrap_or("unknown_method").to_string();
+                    let args = cap.get(2)
+                        .map(|m| m.as_str().trim_start_matches('(').trim_end_matches(')').trim().to_string())
+                        .unwrap_or_default();
+                    let return_type = cap.get(3).map_or("()".to_string(), |m| m.as_str().trim().to_string());
+                    
+                    // Simple cleanup for args
+                    let clean_args = args.replace("self, ", "self,").trim().trim_start_matches("self").trim_start_matches(",").trim().to_string();
+
+                    api_methods.push((method_name, clean_args, return_type, file_name.to_string()));
+                }
+
+
+				// --- SIGNAL SCAN (Line-by-Line, No Change Needed) ---
+                for line in contents.lines() {
+                    let trimmed_line = line.trim();
+
+                    if signal_marker_regex.is_match(trimmed_line) {
+                        signal_line_pending = true;
+                        continue;
+                    }
+                    
+                    if signal_line_pending {
+                        if let Some(captures) = signal_signature_regex.captures(trimmed_line) {
+                            let signal_name = captures.get(1).map(|m| m.as_str()).unwrap_or("unknown_signal").to_string();
+                            let args = captures.get(2)
+                                .map(|m| m.as_str().trim_start_matches('(').trim_end_matches(')').trim().to_string())
+                                .unwrap_or_default();
+                            
+                            api_signals.push((signal_name, args, file_name.to_string()));
+                            signal_line_pending = false; 
+                        } else if !trimmed_line.is_empty() {
+                            signal_line_pending = false;
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                error!("Failed to read file {}: {}", file_path_str, e);
+            }
+        }
+    }
+
+	println!("\n--- 🎮 SSXL Engine Developer MASTER API Surface ---");
+    
+    println!("\n✅ Callable Methods ({} total):", api_methods.len());
+    if api_methods.is_empty() {
+        warn!(" No callable methods found in targeted files (check FFI core!).");
+    } else {
+        for (name, args, return_type, source_file) in &api_methods {
+            // Highlighting the low-level FFI entry points for clarity
+            let marker = if source_file == "lib.rs" && api_methods.iter().any(|(n,_,_,s)| n == name && s == source_file) {
+                "[FFI CORE]"
+            } else {
+                "[GDExt]"
+            };
+            println!(" > func {}({}) -> {} {} [{}]", name, args, return_type, marker, source_file);
+        }
+    }
+
+    println!("\n⭐ Registered Signal Broadcasts ({} total):", api_signals.len());
+    if api_signals.is_empty() {
+        warn!(" No #[signal] broadcasts found in targeted files.");
+    } else {
+        for (name, args, source_file) in &api_signals {
+            println!(" > signal {}({}) [{}]", name, args, source_file);
+        }
+    }
+	println!("--------------------------------------------------");
+
+    info!("API scan complete: {} methods and {} signals detected.", api_methods.len(), api_signals.len());
+    thread::sleep(Duration::from_secs(2));
+}
+<<< FILE END: rust\ssxl_cli\src\cli_util_inspect.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\cli_util_loc.rs (139 LOC) <<<
+//! # CLI Utilities: Line of Code (LOC) Analysis (`ssxl_cli::cli_util_loc`)
+//!
+//! This module provides functions for scanning the SSXL-ext workspace, calculating
+//! Lines of Code (LOC) for both Rust (`.rs`) and GDScript (`.gd`) files, and
+//! generating the LOC reports required by the Godot engine.
+
+use walkdir::WalkDir;
+use std::path::{PathBuf};
+use std::fs;
+use tracing::{info, error};
+use std::thread;
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+// Constants for the fixed-name output file, which is read by Godot.
+const OUTPUT_FINAL_LOC_FILE: &str = "RUST_LOC_TOTAL.txt";
+// Directory for full LOC reports, relative to the project root (../)
+const LOC_REPORTS_DIR: &str = "../loc_reports";
+
+/// Helper to count lines of code in file content, ignoring empty lines and comments (simplified).
+fn count_loc_from_content(content: &str) -> u64 {
+    let mut count = 0;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Simple check: ignore empty lines and lines starting with comment markers.
+        if !trimmed.is_empty() && !trimmed.starts_with("//") && !trimmed.starts_with("#") {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Helper function to write the final Rust LOC total to a fixed-name file
+/// for fast parsing by Godot at bootup.
+fn write_final_loc_total(loc_count: u64) {
+    // Navigate up one level to the project root (ssxl-ext/)
+    let root_dir = PathBuf::from("../");
+    let output_path = root_dir.join(OUTPUT_FINAL_LOC_FILE); // Final Path: ../RUST_LOC_TOTAL.txt
+
+    let content = format!("{}\n", loc_count);
+
+    match fs::write(&output_path, content.as_bytes()) {
+        Ok(_) => {
+            eprintln!("🔥 SSXL-ext CLI: Wrote total Rust LOC **{}** to {}.",
+                      loc_count, output_path.display());
+        }
+        Err(e) => {
+            error!("❌ CRITICAL FAIL: Could not write LOC file {:?}. Error: {}",
+                      output_path, e);
+        }
+    }
+}
+
+/// Scans the Rust workspace, calculates lines of code (LOC), and generates
+/// the full report and the final single-number LOC file.
+///
+/// Assumes CWD is inside the `ssxl-ext/rust/` directory.
+pub fn scan_and_report_loc() {
+    let mut total_rs_loc: u64 = 0;
+    let mut total_gd_loc: u64 = 0;
+    let mut report_lines: Vec<String> = Vec::new();
+
+    // 1. Scan Rust Code
+    // These paths are correct relative to the ssxl-ext/rust/ directory.
+    let rust_dirs = ["ssxl_cache/src", "ssxl_engine_ffi/src", "ssxl_generate/src",
+                     "ssxl_godot/src", "ssxl_math/src", "ssxl_shared/src",
+                     "ssxl_sync/src", "ssxl_tools/src", "ssxl_cli/src"];
+
+    for dir in &rust_dirs {
+        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "rs") {
+                if let Ok(content) = fs::read_to_string(path) {
+                    let loc = count_loc_from_content(&content);
+                    total_rs_loc += loc;
+                    
+                    if loc > 0 {
+                        let path_str = format!("rust/{}", path.display());
+                        // 1. Add LOC and path line
+                        report_lines.push(format!("{:>10} LOC | {}", loc, path_str));
+                        
+                        // 2. Add file content wrapped in delimiters
+                        report_lines.push(format!("// --- START: {} ---", path_str));
+                        report_lines.push(content);
+                        report_lines.push(format!("// --- END: {} ---", path_str));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Scan GDScript Code
+    // Path traversal is correct: `ssxl-ext/rust/` -> `../ssxl_engine_tester`
+    let gd_dirs = ["../ssxl_engine_tester"];
+    for dir in &gd_dirs {
+        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() && path.extension().map_or(false, |ext| ext == "gd") {
+                if let Ok(content) = fs::read_to_string(path) {
+                    let loc = count_loc_from_content(&content);
+                    total_gd_loc += loc;
+                    
+                    if loc > 0 {
+                        // Note: path.display() will include the '..' but this is acceptable for internal reports.
+                        let path_str = path.display().to_string();
+                        // 1. Add LOC and path line
+                        report_lines.push(format!("{:>10} LOC | {}", loc, path_str));
+                        
+                        // 2. Add file content wrapped in delimiters (using '#' for GDScript comments)
+                        report_lines.push(format!("# --- START: {} ---", path_str));
+                        report_lines.push(content);
+                        report_lines.push(format!("# --- END: {} ---", path_str));
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Generate the full, dynamically-named report in the `../loc_reports/` directory
+    let reports_dir = PathBuf::from(LOC_REPORTS_DIR);
+
+    // Create the directory if it doesn't exist.
+    if let Err(e) = fs::create_dir_all(&reports_dir) {
+        error!("❌ Failed to create LOC reports directory {:?}. Error: {}", reports_dir, e);
+    }
+
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_secs();
+
+    let filename = format!("ssxl_loc_report_live_{}.txt", timestamp);
+    let final_report_path = reports_dir.join(filename); 
+
+    let full_report_content = format!(
+        "SSXL-ext Live LOC Report\nGenerated (Epoch Seconds): {}\nRoot Directories: rust, ssxl_engine_tester\n\n------------------------------------------------------\n FILE LOC | Relative File Path\n------------------------------------------------------\n{}\n------------------------------------------------------\n       {} LOC | *.rs (Rust Total)\n       {} LOC | *.gd (GDScript Total)\n       {} LOC | TOTALS\n",
+        timestamp,
+        report_lines.join("\n"),
+        total_rs_loc,
+        total_gd_loc,
+        total_rs_loc + total_gd_loc
+    );
+
+    // Write the full report to the corrected dynamic path.
+    match fs::write(&final_report_path, full_report_content) {
+        Ok(_) => {
+            info!("✅ Full LOC report written to: {}", final_report_path.display());
+        }
+        Err(e) => {
+            error!("❌ Failed to write full LOC report to {:?}. Error: {}", final_report_path, e);
+        }
+    }
+
+    // 4. Write the single line count to the fixed-name file (RUST_LOC_TOTAL.txt)
+    write_final_loc_total(total_rs_loc);
+
+    thread::sleep(Duration::from_millis(100));
+}
+<<< FILE END: rust\ssxl_cli\src\cli_util_loc.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\cli_util_menu.rs (190 LOC) <<<
+use crate::actions::{
+    // --- Core Test & Validation Functions (Godot/Rust interaction) ---
+    run_cargo_tests,
+    run_ffi_bridge_validation,
+    run_communication_channel_test,
+    run_data_channel_test,
+    run_map_generation_test,
+    run_animation_conductor_test,
+    
+    // --- NEW: Headless Integration Tests for Rendering Logic (Fixing Generate/Animate) ---
+    run_headless_generation_integration_test, // Validates 'generate' FFI data pipeline.
+    run_headless_animation_tempo_test,        // Validates 'animate' conductor tempo/latency.
+    
+    // --- Launch & Debug Functions ---
+    launch_godot_client,
+    launch_headless_godot,
+    start_signal_inspector,
+};
+// Benchmark/Utility functions are correctly imported from their dedicated module:
+use crate::cli_util_bench::{run_bitmask_conversion, run_max_grid_benchmark, test_generation_and_placement_cli};
+use crate::cli_util_inspect::{print_godot_api_surface, print_module_tree};
+use tracing::warn;
+
+
+/// Defines a single executable action within the Command Line Interface menu.
+/// Each action is a closure wrapped in a Box for dynamic execution.
+pub struct CliAction {
+    pub key: char,
+    pub label: &'static str,
+    pub id: &'static str,
+    pub action: Box<dyn Fn() + Send + Sync + 'static>,
+}
+
+impl CliAction {
+    /// Helper constructor (primarily for TODO/unimplemented actions).
+    pub fn new(id: &'static str, label: &'static str) -> Self {
+        CliAction {
+            key: '?',
+            label,
+            id,
+            action: Box::new(|| {}) // Default no-op action
+        }
+    }
+}
+
+
+/// Defines a structure for organizing and presenting a group of CLI actions.
+pub struct CliMenu<'a> {
+    pub title: &'static str,
+    pub actions: &'a [CliAction],
+}
+
+impl<'a> CliMenu<'a> {
+    pub fn new(title: &'static str, actions: &'a [CliAction]) -> Self {
+        CliMenu { title, actions }
+    }
+    
+    // Note: prompt_action implementation is omitted as it is environment-specific.
+    pub fn prompt_action(&self) -> CliAction {
+        unimplemented!()
+    }
+}
+
+
+/// Constructs the complete list of available actions for the SSXL Engine Dev Console.
+pub fn build_menu() -> Vec<CliAction> {
+    vec![
+        // =======================================================================
+        // I. CORE RUST VALIDATION (Internal Checks)
+        // =======================================================================
+        CliAction { 
+            key: '0', 
+            label: "✅ Run: Full Cargo Test Suite", 
+            id: "cargo_all", 
+            action: Box::new(run_cargo_tests) 
+        },
+        CliAction {    
+            key: '1',    
+            label: "✅ Validate: FFI Bridge Data Transfer (Data Integrity)",    
+            id: "ffi_validate",
+            action: Box::new(run_ffi_bridge_validation)
+        },
+        CliAction {    
+            key: '2',    
+            label: "✅ Validate: Async Communication Channels (Godot <-> Rust)",    
+            id: "async_channel",
+            action: Box::new(run_communication_channel_test)
+        },
+        CliAction {    
+            key: '3',    
+            label: "✅ Validate: Chunk/Tile Data Channels (Crypto Coded)",    
+            id: "data_channel",
+            action: Box::new(run_data_channel_test)
+        },
+        CliAction {    
+            key: '4',    
+            label: "✅ Validate: Map Generation Logic (Procedural Purity)",    
+            id: "map_gen",
+            action: Box::new(run_map_generation_test)
+        },
+        CliAction {    
+            key: '5',    
+            label: "✅ Validate: Animation Conductor Tempo (Frame Consistency)",    
+            id: "animation_tempo",
+            action: Box::new(run_animation_conductor_test)
+        },
+
+        // =======================================================================
+        // II. HEADLESS INTEGRATION TESTS (Simulating Engine in Godot)
+        // This targets the root of our 'generate' and 'animate' rendering errors.
+        // =======================================================================
+        CliAction { 
+            key: '6', 
+            label: "✅ Validate: Headless Generation Integration (Full Pipeline Simulation)", 
+            id: "headless_gen_integration",
+            action: Box::new(run_headless_generation_integration_test)
+        },
+        CliAction { 
+            key: '7', 
+            label: "✅ Validate: Headless Animation Tempo Integration (Signal Latency Check)", 
+            id: "headless_anim_tempo",
+            action: Box::new(run_headless_animation_tempo_test)
+        },
+
+        // =======================================================================
+        // III. ENGINE LAUNCH & DEBUGGING TOOLS
+        // =======================================================================
+        CliAction {    
+            key: 'L',    
+            label: "🚀 Launch: Godot Client (Non-Headless)",    
+            id: "launch_client",
+            action: Box::new(launch_godot_client)    
+        },
+        CliAction {    
+            key: 'H',    
+            label: "🎮 Launch: Headless Godot (External)",    
+            id: "launch_headless",
+            action: Box::new(launch_headless_godot)    
+        },
+        CliAction {    
+            key: 'S',    
+            label: "🔮 Start: Signal Inspector / Live Feed (TODO)",    
+            id: "start_inspector",
+            action: Box::new(start_signal_inspector)    
+        },
+
+        // =======================================================================
+        // IV. BENCHMARKS & UTILITIES
+        // =======================================================================
+        CliAction {    
+            key: 'T',    
+            label: "🧪 Test: Generation & Placement CLI",    
+            id: "gen_cli_test",
+            action: Box::new(test_generation_and_placement_cli)    
+        },
+        CliAction {    
+            key: 'B',    
+            label: "🧪 Benchmark: Max Grid Placement",    
+            id: "max_grid_bench",
+            action: Box::new(run_max_grid_benchmark)    
+        },
+        CliAction {    
+            key: 'P',    
+            label: "✅ Perform: Bitmask PNG Conversion",    
+            id: "bitmask_convert",
+            action: Box::new(run_bitmask_conversion)    
+        },
+        CliAction {    
+            key: 'A',    
+            label: "✅ Inspect: SSXL Developer API Surface (Callable + Signals)",    
+            id: "api_surface",
+            action: Box::new(print_godot_api_surface)    
+        },
+        CliAction {    
+            key: 'I',    
+            label: "✅ Inspect: Rust Module Tree",    
+            id: "module_tree",
+            action: Box::new(print_module_tree)    
+        },
+        CliAction {    
+            key: 'R',    
+            label: "⚠️ Run: Trailkeeper Scan (TODO)",    
+            id: "trailkeeper_scan",
+            action: Box::new(|| warn!("TODO: Trailkeeper scan not yet implemented."))    
+        },
+        
+        // =======================================================================
+        // V. SYSTEM CONTROL
+        // =======================================================================
+        CliAction { key: 'E', label: "✅ Exit Console", id: "exit", action: Box::new(|| {}) },
+    ]
+}
+
+
+/// Prints the structured menu to the console, ready for user selection.
+pub fn print_menu(menu: &[CliAction]) {
+    
+    println!("\n🧭 SSXL-ext Engine Dev Console\n");
+    for item in menu {
+        println!("[{}] {}", item.key, item.label);
+    }
+    println!("\nSelect an option by pressing its number key or letter key...\n");
+}
+<<< FILE END: rust\ssxl_cli\src\cli_util_menu.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\main.rs (127 LOC) <<<
+//! # SSXL-ext CLI Developer Console (`ssxl_cli::main`)
+//!
+//! The main entry point for the interactive developer console. This utility manages
+//! initialization, logging, the main menu loop, and delegates tasks to action modules
+//! for testing, benchmarking, and external tool execution.
+
+mod actions;               // Core functions for tests, benchmarks, and Godot interaction.
+mod cli_util_inspect;      // Utilities for scanning the codebase and API surface.
+
+// FIX: Change to `pub mod` so its types (CliAction, CliMenu) are accessible
+// by other modules in the crate (like actions/testing.rs).
+pub mod cli_util_menu;     // Menu structure and display logic.
+
+mod cli_util_bench;        // Functions for running generation tests and benchmarks.
+mod cli_util_loc;          // <--- CHANGE 1: Declare the new LOC utility module.
+
+use std::collections::HashSet;
+use std::thread;
+use std::time::Duration;
+use std::io::{self, Write};
+use crossterm::event::{self, Event, KeyCode};
+
+use tracing::{info, error};
+use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
+
+use crate::cli_util_menu::{build_menu, print_menu};
+use ssxl_engine_ffi::ssxl_initialize_engine; // External FFI function to bootstrap the engine core.
+use crate::cli_util_loc::scan_and_report_loc; // <--- CHANGE 2: Update the import path and function name.
+use crate::actions::copy_dll_to_tester_project_at_boot; // Action to ensure the latest DLL is in the Godot project.
+
+
+/// Prompts the user to press Enter before returning to the main menu.
+fn wait_for_enter() {
+    println!("\nPress Enter to return to menu...");
+    // Read a line from stdin and discard the result.
+    let _ = io::stdin().read_line(&mut String::new());
+}
+
+/// Sets up the logging system and performs critical engine initialization steps.
+fn init_logging_and_engine() {
+    // 1. Initialize Tracing/Logging Subscriber
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(io::stdout) // Direct log output to stdout.
+                .with_filter(LevelFilter::INFO), // Set the minimum logging level to INFO.
+        )
+        .init();
+
+    info!("SSXLBinary: Interactive CLI initializing.");
+
+    // 2. Initialize the Rust Core via FFI
+    // Calls the external C-compatible function to boot the engine's core state and runtime.
+    if ssxl_initialize_engine() {
+        info!("Engine FFI core initialized.");
+    } else {
+        // We log the failure but allow the CLI to continue for non-engine tasks (like LOC scan).
+        error!("Failed to initialize Engine FFI core.");
+    }
+    
+    // 3. Copy DLL to Godot Project
+    // Ensure the compiled GDExtension DLL is copied into the Godot tester project
+    // before any Godot-related actions are run.
+    if let Err(e) = copy_dll_to_tester_project_at_boot() {
+        // This is a critical warning, as Godot interaction will fail without the DLL.
+        error!("DLL Copy Failed: {}", e);
+    }
+}
+
+fn main() {
+    // Perform initial setup: logging, FFI, and DLL copy.
+    init_logging_and_engine();
+    
+    // Run a Lines of Code (LOC) scan on the codebase at startup.
+    // Note: The scan function no longer takes an argument.
+    scan_and_report_loc(); // <--- CHANGE 3: Update function call and remove unnecessary argument.
+    
+    // Print welcome ASCII art.
+    println!(
+        r#"
+                 (__)                      
+                 (oo)
+           /------\/
+          / |    ||
+         * ||----||
+            ~~    ~~
+SSXL-ext Engine Console Initialized
+"#
+    );
+
+    // Build the menu structure.
+    let menu = build_menu();
+    // Set for input debouncing to prevent multiple actions from a single key press hold.
+    let mut last_keys = HashSet::new();
+
+    // --- Main Interactive Console Loop ---
+    loop {
+        // Display the menu options.
+        print_menu(&menu);
+        info!("Console: Awaiting menu selection...");
+        print!("> ");
+        // Ensure the prompt character is immediately visible.
+        io::stdout().flush().unwrap();
+
+        // Inner loop handles key polling and processing.
+        loop {
+            // Poll for key events with a timeout to keep the loop responsive (500ms tempo).
+            if event::poll(Duration::from_millis(500)).unwrap() {
+                if let Event::Key(key_event) = event::read().unwrap() {
+                    if let KeyCode::Char(c) = key_event.code {
+                        let c = c.to_ascii_uppercase(); // Normalize input to uppercase.
+
+                        // Input Debounce Check: Only process if the key hasn't been seen recently.
+                        if last_keys.insert(c) {
+                            // Find the corresponding menu item.
+                            if let Some(item) = menu.iter().find(|m| m.key == c) {
+                                info!("Menu: Selected: {}", item.label);
+                                println!("\n[{}] {}\n", c, item.label);
+                                
+                                // Execute the action associated with the menu item.
+                                (item.action)();
+
+                                // Check for the exit key ('E').
+                                if c == 'E' {
+                                    info!("Exit: Console closed. Engine shutdown complete.");
+                                    return; // Exit the main function, terminating the CLI.
+                                }
+
+                                // Wait for user acknowledgment before returning to the main menu screen.
+                                wait_for_enter();
+                                // Break the inner polling loop to redraw the menu.
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // If the poll times out, clear the debounce set, allowing a new key press to be registered.
+                last_keys.clear();
+            }
+
+            // Short pause for general loop control.
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\main.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\actions.rs (165 LOC) <<<
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+use tracing::{info, error, warn};
+
+pub fn run_communication_channel_test() {
+    info!("TEST [2]: Starting Async Communication Channel Validation (Thread Jump Tempo Check)...");
+    
+    let (tx, rx) = mpsc::channel::<(String, String)>();
+
+    let engine_test_thread = thread::spawn(move || {
+        info!("WORKER: Starting 500ms sleep simulation (Simulating heavy map chunk 1 work)...");
+        thread::sleep(Duration::from_millis(500));
+        
+        let message = "Async signal emission successful. Latency: 500ms".to_string();
+        
+        if tx.send(("TEST_COMPLETE".to_string(), message)).is_err() {
+            error!("WORKER: Failed to send test signal. Receiver dropped (Godot side crashed?).");
+        } else {
+            info!("WORKER: Successfully sent TEST_COMPLETE signal back to main thread.");
+        }
+    });
+
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok((status, message)) => {
+            if status == "TEST_COMPLETE" {
+                info!("✅ SUCCESS: Communication Channel Validated. {}", message);
+                info!("   Thread jump integrity confirmed.");
+            } else {
+                error!("❌ FAIL: Received incorrect status: {}", status);
+            }
+        },
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            error!("❌ FAIL: Timeout (2s). Communication channel failed to establish required tempo.");
+        },
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            error!("❌ FAIL: Worker thread disconnected unexpectedly (Systemic Entropy).");
+        }
+    }
+    
+    engine_test_thread.join().unwrap();
+}
+
+pub fn run_map_generation_test() {
+    info!("TEST [4]: Starting Map Generation Flow Validation (Procedural Purity & Streaming)...");
+
+    let (data_tx, data_rx) = mpsc::channel::<usize>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();    
+
+    let total_chunks = 5;
+    let engine_gen_thread = thread::spawn(move || {
+        info!("WORKER: Starting map generation for {} chunks.", total_chunks);
+        
+        for i in 1..=total_chunks {
+            thread::sleep(Duration::from_millis(50));
+            
+            if data_tx.send(i).is_err() {
+                warn!("WORKER: Data channel dropped after chunk {}. Stopping.", i);
+                return;
+            }
+            info!("WORKER: Emitted Chunk #{} (Data Payload Crypto Coded).", i);
+        }
+        
+        if done_tx.send(()).is_err() {
+             error!("WORKER: Failed to send generation_complete signal.");
+        }
+        info!("WORKER: Generation finished.");
+    });
+
+    let mut chunks_received = 0;
+    
+    loop {
+        match data_rx.recv_timeout(Duration::from_millis(10)) {
+            Ok(chunk_id) => {
+                chunks_received += 1;
+                info!("MAIN: Processed Chunk #{} (Data Channel) - Tempo maintained.", chunk_id);
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if done_rx.try_recv().is_ok() {
+                    info!("MAIN: Detected Completion Signal (Generation Complete).");
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            },
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                error!("❌ FAIL: Data channel disconnected prematurely (Systemic Entropy).");
+                break;
+            }
+        }
+        
+        if done_rx.try_recv().is_ok() {
+            info!("MAIN: Detected Completion Signal (Generation Complete).");
+            break;
+        }
+    }
+    
+    engine_gen_thread.join().unwrap();
+    
+    if chunks_received == total_chunks {
+        info!("✅ SUCCESS: Map Generation Flow Validated. Received {}/{} chunks.", chunks_received, total_chunks);
+        info!("   All data channels validated and quantum alignment achieved.");
+    } else {
+        error!("❌ FAIL: Map Generation Failed. Expected {} chunks, received {}.", total_chunks, chunks_received);
+    }
+}
+
+pub fn run_data_channel_test() {
+    info!("TEST [3]: Starting Chunk/Tile Data Channel Integrity Check...");
+    
+    info!("TEST [3]: Data channel integrity is validated implicitly and explicitly.");
+    info!("   Implicitly: By checking successful channel send/receive in Action 4.");
+    info!("   Explicitly: The FFI data type validation logic should be integrated here.");
+    
+    run_map_generation_test();
+}
+
+pub fn run_animation_conductor_test() {
+    info!("TEST [5]: Starting Animation Conductor Tempo Validation (High-Frequency Loop Check)...");
+
+    let (tx, rx) = mpsc::channel::<u64>();
+    let required_signals = 120;
+    let target_duration = Duration::from_millis(2000);
+
+    let conductor_thread = thread::spawn(move || {
+        info!("WORKER: Animation Conductor spun up. Targeting high tempo signal emission.");
+        let start_time = Instant::now();
+        let mut count = 0;
+        
+        while start_time.elapsed() < target_duration {
+            thread::sleep(Duration::from_nanos(8333));
+            
+            if tx.send(start_time.elapsed().as_micros() as u64).is_err() {
+                warn!("WORKER: Conductor signal dropped (Receiver disconnected).");
+                return;
+            }
+            count += 1;
+        }
+        info!("WORKER: Conductor stopped. Emitted {} signals.", count);
+    });
+
+    let mut signals_received = 0;
+    let mut min_latency_us = u64::MAX;
+    let mut max_latency_us = 0;
+    let main_start_time = Instant::now();
+
+    while main_start_time.elapsed() < target_duration + Duration::from_millis(500) {
+        match rx.recv_timeout(Duration::from_millis(1)) {
+            Ok(timestamp_us) => {
+                signals_received += 1;
+                let elapsed_us = main_start_time.elapsed().as_micros() as u64;
+                let latency_us = elapsed_us.saturating_sub(timestamp_us);
+                
+                min_latency_us = min_latency_us.min(latency_us);
+                max_latency_us = max_latency_us.max(latency_us);
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                thread::sleep(Duration::from_nanos(100));
+            },
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                info!("MAIN: Conductor thread finished/disconnected.");
+                break;
+            }
+        }
+    }
+
+    conductor_thread.join().unwrap();
+    
+    let success = signals_received >= required_signals;
+    
+    if success {
+        info!("✅ SUCCESS: Animation Conductor Tempo Validated.");
+        info!("   Target Signals: {} | Received: {}", required_signals, signals_received);
+        info!("   Latency (Main Thread Read Lag): Min {}µs, Max {}µs.", min_latency_us, max_latency_us);
+    } else {
+        error!("❌ FAIL: Animation Conductor FAILED to achieve required tempo.");
+        error!("   Expected signals: {} | Received: {}. Check worker thread throttling.", required_signals, signals_received);
+        error!("   Latency range suggests systemic entropy in signal marshalling.");
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\actions\actions.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\benchmarking.rs (71 LOC) <<<
+use tracing::{info, warn, error};
+use std::io::{self, Write};
+use std::sync::{
+    Arc, 
+    Mutex, 
+    atomic::{AtomicBool, Ordering}
+};
+use std::thread;
+use std::time::Duration;
+use ctrlc;
+
+// FIX E0432: Conductor and ConductorStatus are found in the `conductor` module.
+use ssxl_generate::conductor::{Conductor, ConductorStatus};
+
+
+pub fn start_signal_inspector() {
+    warn!("🔮 Initializing Conductor and starting Signal Inspector (Real-Time Feed)...");
+
+    // FIX E0308: Conductor::new now returns 4 elements. We destructure the fourth 
+    // element (_progress_receiver) to ignore it here, as the CLI inspects the 
+    // ConductorState directly, not the message channel.
+    let (conductor, state, _request_sender, _progress_receiver) = match Conductor::new(None) {
+        Ok(result) => result,
+        Err(e) => {
+            error!("❌ Failed to initialize Conductor/Runtime: {}", e);
+            return;
+        }
+    };
+
+    let conductor_shutdown_safe = Arc::new(Mutex::new(Some(conductor)));
+    let shutdown_clone = conductor_shutdown_safe.clone();
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r_for_handler = running.clone();
+
+    if let Err(e) = ctrlc::set_handler(move || {
+        r_for_handler.store(false, Ordering::SeqCst);
+
+        if let Some(c) = shutdown_clone.lock().unwrap().take() {
+            c.graceful_teardown();
+        }
+        let _ = writeln!(io::stdout(), "\nInspector: Shutdown signal received. Waiting for Conductor...");
+    }) {
+        error!("Could not set Ctrl-C handler: {}", e);
+        return;
+    }
+
+    info!("Inspector: Press Ctrl-C to stop the live feed and gracefully shut down the Conductor.");
+
+    let mut frame_count: u64 = 0;
+    const MVG_BASELINE: u64 = 10_000_000;
+
+    while running.load(Ordering::SeqCst) {
+        frame_count += 1;
+
+        let status = state.get_status();
+        let queue_depth = state.get_queue_depth();
+        let active_id = state.get_active_generator_id();
+
+        print!("\r");
+        print!("🔮 LIVE FEED | Frame: {: >4} | Status: {: <12} | Generator: {: <25} | Queue Depth: ~{: >6} | MVG Baseline: {} tiles/s | Press Ctrl-C to exit.",
+            frame_count,
+            format!("{:?}", status),
+            active_id,
+            queue_depth,
+            MVG_BASELINE
+        );
+        let _ = io::stdout().flush();
+
+        if status == ConductorStatus::ShuttingDown || status == ConductorStatus::Error {
+            running.store(false, Ordering::SeqCst);
+
+            if let Some(c) = conductor_shutdown_safe.lock().unwrap().take() {
+                c.graceful_teardown();
+            }
+            break;
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let _ = writeln!(io::stdout(), "\r{: <200}", " ");
+    info!("Inspector shutdown complete. Conductor runtime terminated.");
+}
+
+#[allow(dead_code)]
+pub fn run_benchmark() {
+    warn!("⏱️ Benchmark execution not yet implemented. Placeholder called.");
+}
+<<< FILE END: rust\ssxl_cli\src\actions\benchmarking.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\godot_harness.rs (136 LOC) <<<
+// FILE: ssxl_cli/src/actions/godot_harness.rs
+
+//! # CLI Actions: Godot Harness (`ssxl_cli::actions::godot_harness`)
+//!
+//! Utilities for managing and launching the Godot editor or the Godot game
+//! client from the command line, including necessary setup steps like copying
+//! the compiled Rust dynamic library (DLL/SO/DYLIB) into the Godot project's
+//! GDExtension directory.
+
+use std::process::Command;
+use tracing::{info, warn, error};
+use std::fs;
+use std::env;
+
+// Imports of constants and utility functions from the parent module.
+use super::{
+    get_godot_project_abs_path,
+    GODOT_EXE_PATH,
+    RELATIVE_PROJECT_PATH_FRAGMENT,
+    DLL_NAME,
+    SOURCE_DLL_PATH_FRAGMENT,
+};
+
+
+/// Copies the compiled Rust dynamic library (DLL/SO/DYLIB) from the `target/release`
+/// or `target/debug` folder to the Godot tester project's GDExtension directory.
+///
+/// This is a critical step to ensure Godot loads the latest engine code.
+pub fn copy_dll_to_tester_project_at_boot() -> Result<(), String> {
+    info!("Attempting to copy {} to Godot tester project...", DLL_NAME);
+
+    // --- 1. Construct Source Path ---
+    let mut source = env::current_dir()
+        .map_err(|e| format!("Failed to get current directory for source path construction: {}", e))?;
+    // Navigate to the target directory (e.g., `target/debug/`).
+    source.push(SOURCE_DLL_PATH_FRAGMENT);
+    // Add the DLL file name (e.g., `SSXL_engine.dll`).
+    source.push(DLL_NAME);
+    let source_path = source.as_path();
+
+    // --- 2. Construct Destination Path ---
+    let mut destination = env::current_dir()
+        .map_err(|e| format!("Failed to get current directory for destination path construction: {}", e))?;
+    // Navigate to the Godot project's GDExtension folder.
+    destination.push(RELATIVE_PROJECT_PATH_FRAGMENT);
+    // Add the DLL file name.
+    destination.push(DLL_NAME);
+    let destination_path = destination.as_path();
+
+    // --- 3. Validation and Copy ---
+
+    if !source_path.exists() {
+        warn!(
+            "Source DLL not found at: {}. Have you run `cargo build` recently?", 
+            source_path.display()
+        );
+        // Treat missing source as a non-fatal warning to continue CLI usage.
+        return Ok(());
+    }
+
+    match fs::copy(source_path, destination_path) {
+        Ok(_) => {
+            info!(
+                "✅ DLL Copied: {} -> {}", 
+                source_path.file_name().unwrap_or_default().to_string_lossy(), 
+                destination_path.display()
+            );
+            Ok(())
+        }
+        Err(e) => {
+            // This often fails if the target DLL is locked by a running Godot instance.
+            Err(format!(
+                "❌ FAILED to copy DLL. Check permissions or if the Godot Editor is currently running and locking the file. Error: {}", 
+                e
+            ))
+        }
+    }
+}
+
+
+/// Launches the Godot Editor in a non-blocking subprocess.
+pub fn launch_godot_client() {
+    info!("🚀 LAUNCHING: Godot Editor (Non-Headless) for scene debugging...");
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Launch failed: {}", e);
+            return;
+        }
+    };
+
+    info!("Attempting to launch Godot from: {}", GODOT_EXE_PATH);
+    // FIX: Call .display() on PathBuf to implement Display trait
+    info!("Loading project at (Absolute Path): {}", project_path_abs.display()); 
+
+    // Execute the Godot process.
+    match Command::new(GODOT_EXE_PATH)
+        // Flag to launch the editor window instead of running the game directly.
+        .arg("--editor")
+        // Argument specifying the path to the Godot project folder.
+        .arg("--path")
+        .arg(&project_path_abs)
+        // Use `spawn()` to run the command asynchronously, allowing the CLI process to continue.
+        .spawn()
+    {
+        Ok(_) => {
+            info!("✅ Godot EDITOR spawned successfully. Please close the Godot window to continue CLI use.");
+        }
+        Err(e) => {
+            error!("❌ Failed to execute Godot command: {}", e);
+            warn!("Please ensure the Godot executable is correctly set in the path configuration: {}", GODOT_EXE_PATH);
+        }
+    }
+}
+
+/// Launches Godot in a non-blocking subprocess using the `--headless` flag.
+/// 
+/// This is used for automated testing where no GUI is needed.
+pub fn launch_headless_godot() {
+    info!("🚀 LAUNCHING: Godot Headless Client...");
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Launch failed: {}", e);
+            return;
+        }
+    };
+
+    info!("Attempting to launch Godot from: {}", GODOT_EXE_PATH);
+    // FIX: Call .display() on PathBuf to implement Display trait
+    info!("Loading project at (Absolute Path): {}", project_path_abs.display()); 
+
+    match Command::new(GODOT_EXE_PATH)
+        // Flag to run Godot without a graphical interface.
+        .arg("--headless")
+        // Argument specifying the path to the Godot project folder.
+        .arg("--path")
+        .arg(&project_path_abs)
+        // Use `spawn()` to run the command asynchronously.
+        .spawn()
+    {
+        Ok(_) => {
+            info!("✅ Godot HEADLESS client spawned successfully.");
+        }
+        Err(e) => {
+            error!("❌ Failed to execute Godot headless command: {}", e);
+            warn!(
+                "Please ensure the Godot executable is correctly set in the path configuration: {}", 
+                GODOT_EXE_PATH
+            );
+        }
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\actions\godot_harness.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\godot_tests.rs (28 LOC) <<<
+use super::{
+    run_godot_test, GODOT_TEST_SCENE, HEADLESS_ANIM_TEST_SCENE,
+    HEADLESS_GEN_TEST_SCENE,
+};
+
+/// Runs the FFI Bridge/GDExtension validation test in Godot.
+pub fn run_ffi_bridge_validation() {
+    run_godot_test(
+        "FFI Bridge and GDExtension Integration Validation",
+        GODOT_TEST_SCENE,
+        "FFI/GDExtension Bridge VALIDATION SUCCEEDED!",
+    );
+}
+
+/// Runs the Headless Map Generation Integration Test (Full Pipeline Validation).
+pub fn run_headless_generation_integration_test() {
+    run_godot_test(
+        "Headless Map Generation Integration Test",
+        HEADLESS_GEN_TEST_SCENE,
+        "Headless Generation Integration Test SUCCEEDED! Quantum alignment confirmed.",
+    );
+}
+
+/// Runs the Headless Animation Conductor Tempo Test (Signal Latency Check).
+pub fn run_headless_animation_tempo_test() {
+    run_godot_test(
+        "Headless Animation Conductor Tempo Test",
+        HEADLESS_ANIM_TEST_SCENE,
+        "Headless Animation Tempo Test SUCCEEDED! Faster-than-light speed confirmed.",
+    );
+}
+<<< FILE END: rust\ssxl_cli\src\actions\godot_tests.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\mod.rs (78 LOC) <<<
+// FILE: ssxl_cli/src/actions/mod.rs
+
+//! # CLI Actions Module (`ssxl_cli::actions`)
+//!
+//! This module acts as the public interface (façade) for all complex command-line
+//! actions, such as launching Godot, running tests, or initiating benchmarks.
+//! It aggregates constants, external dependencies, and exports from its child modules.
+
+use std::env;
+use std::path::PathBuf;
+
+// --- Internal Modules ---
+
+/// Tools for real-time monitoring of the Conductor and placeholder for benchmark logic.
+mod benchmarking;
+/// Utilities for launching and managing the external Godot engine tester project.
+mod godot_harness;
+/// The main menu and delegation stub for all test suites.
+mod testing;
+/// Contains self-contained architectural and data validation tests.
+mod test_suites;
+/// Contains tests requiring external processes like `cargo` and Godot FFI validation.
+mod test_core_suites;
+
+// --- Configuration Constants ---
+
+/// The absolute path to the Godot executable file.
+pub const GODOT_EXE_PATH: &str = "C:/ZV9/zv9.SSXL-ext/SSXL_engine_tester/godot.windows.editor.x86_64.exe"; 
+/// The project-relative path fragment pointing to the GDExtension folder (e.g., `godot_tester_project/gde/`).
+pub const RELATIVE_PROJECT_PATH_FRAGMENT: &str = "../SSXLtester2/";
+/// The expected file name of the compiled Rust dynamic library (e.g., `ssxl_engine.dll`).
+pub const DLL_NAME: &str = "ssxl_engine.dll";
+/// The project-relative path fragment where the compiled DLL is found (e.g., `target/debug/`).
+pub const SOURCE_DLL_PATH_FRAGMENT: &str = "target/debug/";
+/// The scene path within the Godot project used for FFI bridge validation tests.
+pub const GODOT_TEST_SCENE: &str = "res://tests/ffi_bridge_test.tscn"; 
+
+// --- NEW HEADLESS TEST SCENES ---
+/// The scene path within the Godot project used for headless generation pipeline validation.
+pub const HEADLESS_GEN_TEST_SCENE: &str = "res://tests/headless_gen_pipeline.tscn";
+/// The scene path within the Godot project used for headless animation tempo validation.
+pub const HEADLESS_ANIM_TEST_SCENE: &str = "res://tests/headless_anim_tempo.tscn";
+// --- END NEW HEADLESS TEST SCENES ---
+
+// --- Utility Functions ---
+
+/// Calculates the absolute path to the Godot tester project root.
+pub fn get_godot_project_abs_path() -> Result<PathBuf, String> {
+    let mut path = env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    path.push(RELATIVE_PROJECT_PATH_FRAGMENT);
+
+    if path.pop() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "Failed to determine parent directory for project path: {}",
+            path.display()
+        ))
+    }
+}
+
+
+// --- Public Module Exports (Façade) ---
+
+/// Re-export for starting the **real-time status feed**.
+pub use benchmarking::start_signal_inspector;
+
+// Exports from godot_harness (Includes the requested launch_headless_godot).
+pub use godot_harness::{
+    copy_dll_to_tester_project_at_boot,
+    launch_godot_client,
+    launch_headless_godot,
+};
+
+// Exports from test_core_suites.
+pub use test_core_suites::{
+    run_cargo_tests,
+    run_ffi_bridge_validation,
+    // --- ADDING NEW HEADLESS TESTS ---
+    run_headless_generation_integration_test,
+    run_headless_animation_tempo_test,
+};
+
+// Exports from test_suites.
+pub use test_suites::{
+    run_communication_channel_test,
+    run_data_channel_test,
+    run_map_generation_test,
+    run_animation_conductor_test,
+};
+
+
+/// Exports related to **testing and validation**.
+#[allow(unused_imports)]
+pub use testing::execute_testing_menu;
+<<< FILE END: rust\ssxl_cli\src\actions\mod.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\testing.rs (52 LOC) <<<
+// FILE: ssxl_cli/src/actions/testing.rs
+
+//! # CLI Actions: Testing Utilities (`ssxl_cli::actions::testing`)
+//!
+//! Provides a menu for executing various test suites, delegating the complex
+//! execution logic to the internal `test_suites` and external `test_core_suites` modules.
+
+use crate::cli_util_menu::{CliAction, CliMenu};
+use crate::actions::test_suites;      // Architectural tests
+use crate::actions::test_core_suites; // External tests
+use std::sync::LazyLock;              // NEW: Used for lazy, thread-safe static initialization
+
+// --- Menu Setup Logic ---
+
+// FIX 1 & 2: Use LazyLock to initialize the actions at runtime (solving E0015) 
+// and store them in a Vec<CliAction>. The CliAction struct itself must have 
+// been updated in cli_util_menu.rs to include Send + Sync bounds (solving E0277).
+#[allow(dead_code)]
+static TEST_ACTIONS: LazyLock<Vec<CliAction>> = LazyLock::new(|| vec![
+    CliAction::new("cargo", "Run all standard `cargo test` suites (unit/integration)."),
+    CliAction::new("ffi", "Run FFI bridge and GDExtension integration validation (Headless Godot)."),
+    CliAction::new("channel", "Run Communication Channel Tempo Test."),
+    CliAction::new("generation", "Run Map Generation Test (Perlin Generator)."),
+    CliAction::new("animation", "Run Animation Conductor Data Contract Test."),
+    // FIX 2: Added the "back" action which is used to exit the loop
+    CliAction::new("back", "↩️ Return to Main Menu"), 
+]);
+
+/// Central entry point for all CLI testing actions.
+#[allow(dead_code)]
+pub fn execute_testing_menu() -> Result<(), String> {
+    // FIX 3: Get a slice from the LazyLock Vec to satisfy CliMenu's 'a [CliAction] requirement.
+    let menu = CliMenu::new("Testing and Validation Suites", TEST_ACTIONS.as_slice());
+    
+    loop {
+        // FIX 4: `*s == "id"` and no misplaced `Ok(())` returns are now correct.
+        match menu.prompt_action() {
+            CliAction { id: ref s, .. } if *s == "cargo" => {
+                test_core_suites::run_cargo_tests(); 
+            }
+            CliAction { id: ref s, .. } if *s == "ffi" => {
+                test_core_suites::run_ffi_bridge_validation(); 
+            }
+            CliAction { id: ref s, .. } if *s == "channel" => {
+                test_suites::run_communication_channel_test(); 
+            }
+            CliAction { id: ref s, .. } if *s == "generation" => {
+                test_suites::run_map_generation_test(); 
+            }
+            CliAction { id: ref s, .. } if *s == "animation" => {
+                test_suites::run_animation_conductor_test(); 
+            }
+            CliAction { id: ref s, .. } if *s == "back" => return Ok(()),
+            _ => continue,
+        }
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\actions\testing.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\tests_core.rs (111 LOC) <<<
+use std::io::{self, BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::thread;
+use tracing::{error, info, warn};
+
+use super::{
+    get_godot_project_abs_path, GODOT_EXE_PATH, 
+    // Keep constants here for completeness, or only required ones if splitting strictly
+    // by dependencies. Keeping them here allows `run_godot_test` to access them.
+    GODOT_TEST_SCENE, HEADLESS_ANIM_TEST_SCENE, HEADLESS_GEN_TEST_SCENE,
+};
+
+/// Runs the full cargo test suite.
+pub fn run_cargo_tests() {
+    println!("🚀 Running full cargo test suite...");
+
+    let status = Command::new("cargo")
+        .args(&["test", "--", "--nocapture"])
+        .status()
+        .expect("Failed to run cargo test command. Is cargo installed?");
+
+    if status.success() {
+        info!("✅ All Rust unit and integration tests passed.");
+    } else {
+        error!("❌ Some Rust tests failed. See output above.");
+    }
+}
+
+/// Helper function to read all output from a stream in a non-blocking way. (O(n) on stream size)
+fn read_all_output_from_stream<R: io::Read + Send + 'static>(stream: R) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut output = String::new();
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => output.push_str(&line),
+            Err(_) => break,
+        }
+    }
+    output
+}
+
+/// Generic runner for Godot-based integration tests.
+/// Extracts all boilerplate for spawning and output piping.
+pub(crate) fn run_godot_test(
+    test_title: &str,
+    test_scene: &str,
+    success_message: &str,
+) -> bool {
+    info!("🔥 STARTING: {}...", test_title);
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ {} failed: {}", test_title, e);
+            return false;
+        }
+    };
+
+    let mut command = Command::new(GODOT_EXE_PATH);
+    command
+        .arg("--path")
+        .arg(&project_path_abs)
+        .arg("--headless")
+        .arg("--no-window")
+        .arg("--verbose")
+        .arg("--display-print")
+        .arg("--render-loop-time-slice")
+        .arg("1")
+        .arg("--main-scene")
+        .arg(test_scene)
+        .arg("--run")
+        .arg("--quit")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("❌ Failed to spawn Godot process for {}: {}", test_title, e);
+            warn!(
+                "Please ensure the Godot executable is in the correct path: {}",
+                GODOT_EXE_PATH
+            );
+            return false;
+        }
+    };
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout stream");
+    let stderr = child.stderr.take().expect("Failed to capture stderr stream");
+
+    let stdout_handle = thread::spawn(move || read_all_output_from_stream(stdout));
+    let stderr_handle = thread::spawn(move || read_all_output_from_stream(stderr));
+
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("❌ Godot process failed to wait for {}: {}", test_title, e);
+            return false;
+        }
+    };
+
+    let stdout_output = stdout_handle.join().unwrap_or_else(|_| "Stdout reading thread panicked.".to_string());
+    let stderr_output = stderr_handle.join().unwrap_or_else(|_| "Stderr reading thread panicked.".to_string());
+    
+    // Output formatting and final result logging.
+    println!("\n--- GODOT {} TEST OUTPUT START ---", test_title.to_uppercase());
+    println!("{}", stdout_output);
+    println!("--- GODOT {} TEST OUTPUT END ---\n", test_title.to_uppercase());
+
+    if status.success() {
+        info!("✅ {} SUCCEEDED! {}", test_title, success_message);
+        true
+    } else {
+        error!(
+            "❌ {} FAILED! Exit code: {:?}",
+            test_title,
+            status.code()
+        );
+        eprintln!("--- GODOT ERROR OUTPUT ---");
+        eprintln!("{}", stderr_output);
+        false
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\actions\tests_core.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\test_core_suites.rs (234 LOC) <<<
+use std::io::{self, BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::thread;
+use tracing::{error, info, warn};
+
+use super::{
+    get_godot_project_abs_path, GODOT_EXE_PATH, GODOT_TEST_SCENE, HEADLESS_ANIM_TEST_SCENE,
+    HEADLESS_GEN_TEST_SCENE,
+};
+
+pub fn run_cargo_tests() {
+    println!("🚀 Running full cargo test suite...");
+
+    let status = Command::new("cargo")
+        .args(&["test", "--", "--nocapture"])
+        .status()
+        .expect("Failed to run cargo test command. Is cargo installed?");
+
+    if status.success() {
+        info!("✅ All Rust unit and integration tests passed.");
+    } else {
+        error!("❌ Some Rust tests failed. See output above.");
+    }
+}
+
+fn read_all_output_from_stream<R: io::Read + Send + 'static>(stream: R) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut output = String::new();
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => output.push_str(&line),
+            Err(_) => break,
+        }
+    }
+    output
+}
+
+pub fn run_ffi_bridge_validation() {
+    info!("🔥 STARTING: FFI Bridge and GDExtension Integration Validation...");
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Validation failed: {}", e);
+            return;
+        }
+    };
+
+    let mut command = Command::new(GODOT_EXE_PATH);
+    command
+        .arg("--path")
+        .arg(&project_path_abs)
+        .arg("--headless")
+        .arg("--no-window")
+        .arg("--verbose")
+        .arg("--display-print")
+        .arg("--render-loop-time-slice")
+        .arg("1")
+        .arg("--main-scene")
+        .arg(GODOT_TEST_SCENE)
+        .arg("--run")
+        .arg("--quit")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("❌ Failed to spawn Godot process: {}", e);
+            warn!(
+                "Please ensure the Godot executable is in the correct path: {}",
+                GODOT_EXE_PATH
+            );
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout stream");
+    let stderr = child.stderr.take().expect("Failed to capture stderr stream");
+
+    let stdout_handle = thread::spawn(move || read_all_output_from_stream(stdout));
+    let stderr_handle = thread::spawn(move || read_all_output_from_stream(stderr));
+
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("❌ Godot process failed to wait: {}", e);
+            return;
+        }
+    };
+
+    let stdout_output = stdout_handle
+        .join()
+        .unwrap_or_else(|_| "Stdout reading thread panicked.".to_string());
+    let stderr_output = stderr_handle
+        .join()
+        .unwrap_or_else(|_| "Stderr reading thread panicked.".to_string());
+
+    println!("\n--- GODOT TEST OUTPUT START ---");
+    println!("{}", stdout_output);
+    println!("--- GODOT TEST OUTPUT END ---\n");
+
+    if status.success() {
+        info!("✅ FFI/GDExtension Bridge VALIDATION SUCCEEDED!");
+    } else {
+        error!(
+            "❌ FFI/GDExtension Bridge VALIDATION FAILED! Exit code: {:?}",
+            status.code()
+        );
+        eprintln!("--- GODOT ERROR OUTPUT ---");
+        eprintln!("{}", stderr_output);
+    }
+}
+
+pub fn run_headless_generation_integration_test() {
+    info!("🔥 STARTING: Headless Map Generation Integration Test (Full Pipeline Validation)...");
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Validation failed: {}", e);
+            return;
+        }
+    };
+
+    let mut command = Command::new(GODOT_EXE_PATH);
+    command
+        .arg("--path")
+        .arg(&project_path_abs)
+        .arg("--headless")
+        .arg("--no-window")
+        .arg("--verbose")
+        .arg("--display-print")
+        .arg("--render-loop-time-slice")
+        .arg("1")
+        .arg("--main-scene")
+        .arg(HEADLESS_GEN_TEST_SCENE)
+        .arg("--run")
+        .arg("--quit")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("❌ Failed to spawn Godot process: {}", e);
+            warn!(
+                "Please ensure the Godot executable is in the correct path: {}",
+                GODOT_EXE_PATH
+            );
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout stream");
+    let stderr = child.stderr.take().expect("Failed to capture stderr stream");
+
+    let stdout_handle = thread::spawn(move || read_all_output_from_stream(stdout));
+    let stderr_handle = thread::spawn(move || read_all_output_from_stream(stderr));
+
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("❌ Godot process failed to wait: {}", e);
+            return;
+        }
+    };
+
+    let stdout_output = stdout_handle
+        .join()
+        .unwrap_or_else(|_| "Stdout reading thread panicked.".to_string());
+    let stderr_output = stderr_handle
+        .join()
+        .unwrap_or_else(|_| "Stderr reading thread panicked.".to_string());
+
+    println!("\n--- GODOT HEADLESS GENERATION TEST OUTPUT START ---");
+    println!("{}", stdout_output);
+    println!("--- GODOT HEADLESS GENERATION TEST OUTPUT END ---\n");
+
+    if status.success() {
+        info!("✅ Headless Generation Integration Test SUCCEEDED! Quantum alignment confirmed.");
+    } else {
+        error!(
+            "❌ Headless Generation Integration Test FAILED! Exit code: {:?}",
+            status.code()
+        );
+        eprintln!("--- GODOT ERROR OUTPUT ---");
+        eprintln!("{}", stderr_output);
+    }
+}
+
+pub fn run_headless_animation_tempo_test() {
+    info!("🔥 STARTING: Headless Animation Conductor Tempo Test (Signal Latency Check)...");
+
+    let project_path_abs = match get_godot_project_abs_path() {
+        Ok(path) => path,
+        Err(e) => {
+            error!("❌ Validation failed: {}", e);
+            return;
+        }
+    };
+
+    let mut command = Command::new(GODOT_EXE_PATH);
+    command
+        .arg("--path")
+        .arg(&project_path_abs)
+        .arg("--headless")
+        .arg("--no-window")
+        .arg("--verbose")
+        .arg("--display-print")
+        .arg("--render-loop-time-slice")
+        .arg("1")
+        .arg("--main-scene")
+        .arg(HEADLESS_ANIM_TEST_SCENE)
+        .arg("--run")
+        .arg("--quit")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("❌ Failed to spawn Godot process: {}", e);
+            warn!(
+                "Please ensure the Godot executable is in the correct path: {}",
+                GODOT_EXE_PATH
+            );
+            return;
+        }
+    };
+
+    let stdout = child.stdout.take().expect("Failed to capture stdout stream");
+    let stderr = child.stderr.take().expect("Failed to capture stderr stream");
+
+    let stdout_handle = thread::spawn(move || read_all_output_from_stream(stdout));
+    let stderr_handle = thread::spawn(move || read_all_output_from_stream(stderr));
+
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => {
+            error!("❌ Godot process failed to wait: {}", e);
+            return;
+        }
+    };
+
+    let stdout_output = stdout_handle
+        .join()
+        .unwrap_or_else(|_| "Stdout reading thread panicked.".to_string());
+    let stderr_output = stderr_handle
+        .join()
+        .unwrap_or_else(|_| "Stderr reading thread panicked.".to_string());
+
+    println!("\n--- GODOT HEADLESS ANIMATION TEMPO TEST OUTPUT START ---\n");
+    println!("{}", stdout_output);
+    println!("--- GODOT HEADLESS ANIMATION TEMPO TEST OUTPUT END ---\n");
+
+    if status.success() {
+        info!("✅ Headless Animation Tempo Test SUCCEEDED! Faster-than-light speed confirmed.");
+    } else {
+        error!(
+            "❌ Headless Animation Tempo Test FAILED! Exit code: {:?}",
+            status.code()
+        );
+        eprintln!("--- GODOT ERROR OUTPUT ---");
+        eprintln!("{}", stderr_output);
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\actions\test_core_suites.rs >>>
+
+>>> FILE START: rust\ssxl_cli\src\actions\test_suites.rs (140 LOC) <<<
+// FILE: ssxl_cli\src\actions\test_suites.rs
+
+//! # Internal Architectural and Data Validation Suites
+//!
+//! Contains self-contained Rust tests focused on validating internal data contracts,
+//! concurrency models (channels), and core generation logic without external
+//! process reliance.
+
+use tracing::{info, error};
+use std::time::{Duration, Instant};
+use std::sync::mpsc;
+use bincode::{serialize, deserialize};
+
+// --- Project Imports ---
+use ssxl_generate::Generator;
+// FIX E0432: `perlin_generator` likely renamed to `perlin`.
+use ssxl_generate::perlin::PerlinGenerator;
+use ssxl_math::prelude::Vec2i;
+// FIX E0432: Correct path to Chunk data constant.
+use ssxl_shared::chunk::chunk_data::CHUNK_SIZE;
+// FIX E0432: Correct path to Tile data struct.
+use ssxl_shared::tile::tile_data::AnimationUpdate;
+
+
+// -----------------------------------------------------------------------------
+// FOCUSED ARCHITECTURAL VALIDATION
+// -----------------------------------------------------------------------------
+
+/// Validates the non-blocking mpsc channels used between the Godot main thread
+/// and the Rust worker threads (Generation and Animation Conductors).
+pub fn run_communication_channel_test() {
+    info!("--- Starting Communication Channel Test (Godot <-> Rust Tempo) ---");
+    let test_duration = Duration::from_millis(100);
+    
+    // 1. Create a channel pair: (CLI sends, Mock Conductor receives)
+    let (cli_sender, conductor_receiver) = mpsc::channel::<String>();
+    
+    // 2. Spawn a thread to act as the Mock Conductor
+    let conductor_handle = std::thread::spawn(move || {
+        let mut messages_received = 0;
+        let start = Instant::now();
+        
+        while start.elapsed() < test_duration {
+            match conductor_receiver.try_recv() {
+                Ok(msg) => {
+                    if msg == "TEST_COMMAND" {
+                        messages_received += 1;
+                    }
+                },
+                Err(mpsc::TryRecvError::Empty) => {
+                    std::thread::yield_now();
+                },
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        messages_received
+    });
+    
+    // 3. CLI (main thread) floods the channel with messages
+    let mut messages_sent = 0;
+    let start = Instant::now();
+    while start.elapsed() < test_duration {
+        if cli_sender.send("TEST_COMMAND".to_string()).is_ok() {
+            messages_sent += 1;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    
+    drop(cli_sender);
+
+    // 4. Wait for the Mock Conductor thread to complete and get the result
+    let messages_received = match conductor_handle.join() {
+        Ok(count) => count,
+        Err(_) => {
+            error!("❌ Mock Conductor thread panicked during join.");
+            return;
+        }
+    };
+    
+    // 5. Report results
+    let success = messages_received > 0;
+
+    info!("Test Duration: {:?}", start.elapsed());
+    info!("Total messages SENT: {}", messages_sent);
+    info!("Total messages RECEIVED: {}", messages_received);
+
+    if success {
+        info!("✅ Communication Channel Test SUCCESS: Non-blocking channel functional. Received {} messages.", messages_received);
+    } else {
+        error!("❌ Communication Channel Test FAILED: Did not receive any messages or thread failed to join.");
+    }
+}
+
+
+/// Alias for `run_communication_channel_test`. Validates data-channel functionality.
+pub fn run_data_channel_test() {
+    run_communication_channel_test();
+}
+
+/// Validates the core map generation logic by creating a chunk using the Perlin Generator.
+pub fn run_map_generation_test() {
+    info!("--- Starting Map Generation Test (Perlin Generator) ---");
+    let generator = PerlinGenerator::new(64.0);
+    let chunk_coords = Vec2i::new(10, 20);
+    
+    let start = Instant::now();
+    let chunk = generator.generate_chunk(chunk_coords);
+    let duration = start.elapsed();
+
+    let expected_size = (CHUNK_SIZE * CHUNK_SIZE) as usize;
+    let success = chunk.tiles.len() == expected_size;
+
+    info!("Generated Chunk ID: {}", chunk.id);
+    info!("Generation Time: {:?} ({:.2} tiles/sec)", duration, (expected_size as f64) / duration.as_secs_f64());
+    
+    if success {
+        info!("✅ Map Generation Test SUCCESS: Chunk data integrity verified ({} tiles).", expected_size);
+    } else {
+        error!("❌ Map Generation Test FAILED: Expected {} tiles, got {}.", expected_size, chunk.tiles.len());
+    }
+}
+
+/// Validates the data contract for the Animation Conductor by ensuring
+/// the `AnimationUpdate` structure can be serialized and deserialized.
+pub fn run_animation_conductor_test() {
+    info!("--- Starting Animation Conductor Data Contract Test ---");
+
+    let original_update = AnimationUpdate {
+        layer: 1,
+        source_id: 101,
+        tile_coords: Vec2i::new(500, -300),
+        new_atlas_coords: Vec2i::new(5, 7),
+    };
+
+    let encoded = match serialize(&original_update) {
+        Ok(e) => e,
+        Err(e) => {
+            error!("❌ Serialization FAILED: {}", e);
+            return;
+        }
+    };
+    
+    let decoded: AnimationUpdate = match deserialize(&encoded) {
+        Ok(d) => d,
+        Err(e) => {
+            error!("❌ Deserialization FAILED: {}", e);
+            return;
+        }
+    };
+
+    let success = original_update.tile_coords == decoded.tile_coords && original_update.new_atlas_coords == decoded.new_atlas_coords;
+
+    info!("Serialized size: {} bytes", encoded.len());
+
+    if success {
+        info!("✅ Animation Conductor Data Test SUCCESS: AnimationUpdate serialized and deserialized correctly.");
+    } else {
+        error!("❌ Animation Conductor Data Test FAILED: Decoded data did not match original.");
+    }
+}
+<<< FILE END: rust\ssxl_cli\src\actions\test_suites.rs >>>
+

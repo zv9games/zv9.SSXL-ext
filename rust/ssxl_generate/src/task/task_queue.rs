@@ -1,137 +1,130 @@
 // ssxl_generate/src/task/task_queue.rs
 
-//! Manages the asynchronous request loop for chunk generation and the core logic
-//! for handling a single chunk request (cache check, generation, and storage).
-
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle; 
-use tracing::{info, error, warn};
+use tokio::task::JoinHandle;
+
+use tracing::{info, error, warn, debug};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
+use ssxl_math::coordinate_system::ChunkKey;
+use glam::I64Vec3;
 
 use ssxl_cache::ChunkCache;
+use ssxl_shared::CHUNK_SIZE as SHARED_CHUNK_SIZE;
+
 use crate::Generator;
+use crate::conductor::conductor_state;
 
-// FIX: Corrected import path for conductor_state module.
-use crate::conductor::conductor_state; 
-
-// Corrected imports from the ssxl_shared crate
-use ssxl_shared::ChunkData; 
-use ssxl_shared::CHUNK_SIZE as SHARED_CHUNK_SIZE; 
-// FIX: Corrected import path to include the 'generation_message' submodule.
-pub use ssxl_shared::message::generation_message::{GenerationMessage, GenerationTask}; 
-
+pub use ssxl_shared::message::generation_message::{GenerationMessage, GenerationTask};
 
 type DynGenerator = Box<dyn Generator + Send + Sync>;
-
 pub const CHUNK_SIZE: i64 = SHARED_CHUNK_SIZE as i64;
 
-
-// --- 1. Single Chunk Processing Unit (FIXED for tile counting) ---
-
+/// Handles a single chunk request: cache check → generate → cache → send result
 pub fn handle_chunk_unit(
-	chunk_coords: Vec2i,
-	generator_name: &str,
-	generators: &HashMap<String, Arc<DynGenerator>>,
-	_chunk_cache: &Arc<ChunkCache>,
-	progress_sender: &mpsc::Sender<GenerationMessage>,
-	// FIX: Use the corrected, fully qualified path
-	conductor_state: &Arc<conductor_state::ConductorState>, 
+    chunk_coords: Vec2i,
+    generator_name: &str,
+    generators: &HashMap<String, Arc<DynGenerator>>,
+    chunk_cache: &Arc<ChunkCache>,
+    progress_sender: &mpsc::Sender<GenerationMessage>,
+    conductor_state: &Arc<conductor_state::ConductorState>,
 ) {
-	let chunk_data: ChunkData;
-	
-	// Using non-blocking println! to bypass logger deadlock on the tokio::task::spawn_blocking thread.
-	println!("DEBUG: Chunk Unit: Starting generation for chunk {:?} with {}.", chunk_coords, generator_name);
-	
-	let generator_arc = generators
-		.get(generator_name)
-		.expect("Generator ID must be registered in Conductor.");
-	
-	// Execute the generation (safe in sequential context)
-	chunk_data = generator_arc.generate_chunk(chunk_coords);
-	
-	// FIX: Call .len() on the `tiles` field within ChunkData, not on ChunkData itself.
-    let tile_count = chunk_data.tiles.len() as u64; 
-	conductor_state.increment_tile_count(tile_count);
-	
-	let chunk_data_arc = Arc::new(chunk_data);
-	
-	// Log success/failure of sending the message.
-	if let Err(e) = progress_sender.try_send(
-        // FIX: Changed variant name from `ChunkGenerated` to `Generated`
-		GenerationMessage::Generated(chunk_coords, chunk_data_arc)
-	) {
-		// Using eprintln! for critical debug information since tracing::warn! is blocked.
-		eprintln!("CRITICAL WARN: Chunk Unit: FAILED to send ChunkGenerated message for {:?} (Channel full or disconnected): {:?}", chunk_coords, e);
-	} else {
-		println!("DEBUG: Chunk Unit: SUCCESSFULLY sent ChunkGenerated message for {:?}.", chunk_coords);
-	}
+    let chunk_key = ChunkKey(I64Vec3 {
+        x: chunk_coords.x,
+        y: chunk_coords.y,
+        z: 0,
+    });
+
+    // 1. Cache HIT
+    if let Some(chunk_data_arc) = chunk_cache.load_chunk(&chunk_key) {
+        debug!(?chunk_coords, "Cache HIT");
+
+        let msg = GenerationMessage::Generated(chunk_coords, chunk_data_arc);
+        if progress_sender.try_send(msg).is_err() {
+            warn!(?chunk_coords, "Failed to send cached chunk (channel full/closed)");
+        }
+        return;
+    }
+
+    // 2. Cache MISS → generate
+    debug!(?chunk_coords, generator = %generator_name, "Cache MISS → generating");
+
+    let generator = generators
+        .get(generator_name)
+        .expect("Generator must exist in map");
+
+    // ChunkData is returned directly from generate_chunk()
+    let chunk_data = generator.generate_chunk(chunk_coords);
+    let tile_count = chunk_data.tiles.len() as u64;
+    conductor_state.increment_tile_count(tile_count);
+
+    let chunk_data_arc = Arc::new(chunk_data);
+
+    // 3. Save to cache
+    if chunk_cache.save_chunk(&chunk_key, chunk_data_arc.clone()).is_err() {
+        error!(?chunk_coords, "Failed to save generated chunk to cache");
+    }
+
+    // 4. Send result
+    let msg = GenerationMessage::Generated(chunk_coords, chunk_data_arc);
+    if progress_sender.try_send(msg).is_err() {
+        warn!(?chunk_coords, "Failed to send generated chunk (channel full/closed)");
+    } else {
+        debug!(?chunk_coords, "Sent newly generated chunk");
+    }
 }
 
-// --- 2. Asynchronous Request Loop (FIXED for graceful shutdown and worker call) ---
-
+/// Main async loop: receives tasks → spawns blocking generation
 pub fn start_request_loop(
-	rt_handle: Handle,
-	mut request_rx: mpsc::UnboundedReceiver<GenerationTask>,
-	progress_tx: mpsc::Sender<GenerationMessage>,
-	generators: Arc<HashMap<String, Arc<DynGenerator>>>,
-	chunk_cache: Arc<ChunkCache>,
-	// FIX: Use corrected, fully-qualified path for ConductorState
-	conductor_state: Arc<conductor_state::ConductorState>,
+    rt_handle: Handle,
+    mut request_rx: mpsc::UnboundedReceiver<GenerationTask>,
+    progress_tx: mpsc::Sender<GenerationMessage>,
+    generators: Arc<HashMap<String, Arc<DynGenerator>>>,
+    chunk_cache: Arc<ChunkCache>,
+    conductor_state: Arc<conductor_state::ConductorState>,
 ) {
-	rt_handle.spawn(async move {
-		info!("Generation Task Queue active. Listening for requests.");
-		
-        // FIX: Collect handles of all spawned blocking tasks to ensure they finish before shutdown.
+    rt_handle.spawn(async move {
+        info!("Generation Task Queue started");
+
         let mut active_tasks: Vec<JoinHandle<()>> = Vec::new();
-        
-		while let Some(task) = request_rx.recv().await {
-			if !conductor_state.as_ref().is_active() {
-				warn!("Request received while Conductor is paused or shutting down. Dropping task: {:?}", task.chunk_coords);
-				continue;
-			}
 
-			let progress_tx_clone = progress_tx.clone();
-			let generators_clone = generators.clone();
-			let chunk_cache_clone = chunk_cache.clone();
-            // NEW: Clone ConductorState to move into the spawned blocking task.
-            let conductor_state_clone = conductor_state.clone();
+        while let Some(task) = request_rx.recv().await {
+            if !conductor_state.as_ref().is_active() {
+                warn!(?task.chunk_coords, "Dropping task — Conductor not active");
+                continue;
+            }
 
-			// Spawn the blocking task for sequential chunk processing
-			let handle = tokio::task::spawn_blocking(move || { // Capture the JoinHandle
-				handle_chunk_unit(
-					task.chunk_coords,
-					&task.generator_id,
-					&generators_clone,
-					&chunk_cache_clone,
-					&progress_tx_clone,
-                    // FIX: Pass the ConductorState reference
-                    &conductor_state_clone, 
-				);
-			});
-            
+            let progress_tx = progress_tx.clone();
+            let generators = generators.clone();
+            let cache = chunk_cache.clone();
+            let state = conductor_state.clone();
+
+            let handle = tokio::task::spawn_blocking(move || {
+                handle_chunk_unit(
+                    task.chunk_coords,
+                    &task.generator_id,
+                    &generators,
+                    &cache,
+                    &progress_tx,
+                    &state,
+                );
+            });
+
             active_tasks.push(handle);
-		}
-		
-		// Loop exited (sender was dropped), signifying engine shutdown.
-		info!("Generation Task Queue shutting down. Waiting for {} in-flight tasks...", active_tasks.len());
-		
-        // FIX: Wait for all in-flight tasks to complete before signaling GenerationComplete.
+        }
+
+        info!("Request channel closed. Draining {} active tasks...", active_tasks.len());
+
         for handle in active_tasks {
-            // Await each blocking task. This is the crucial step that prevents early receiver drop.
             if let Err(e) = handle.await {
-                error!("A spawned blocking task panicked: {:?}", e);
+                error!("Generation task panicked: {:?}", e);
             }
         }
-        
-        info!("All in-flight generation tasks completed.");
-        
-		// CRITICAL FIX: Ensure the final message is sent asynchronously inside the async block.
-		if progress_tx.send(GenerationMessage::GenerationComplete).await.is_err() {
-			error!("Failed to send final GenerationComplete message. Receiver may have already closed.");
-		}
-	});
+
+        let _ = progress_tx.send(GenerationMessage::GenerationComplete).await;
+        info!("Generation Task Queue shut down cleanly");
+    });
 }

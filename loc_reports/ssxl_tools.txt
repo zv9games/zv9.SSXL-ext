@@ -1,0 +1,117 @@
+﻿>>> FILE START: rust\ssxl_tools\Cargo.toml (10 LOC) <<<
+[package]
+name = "ssxl_tools"
+edition = "2021" 
+
+[dependencies]
+# Internal dependencies (Local Crates)
+ssxl_shared = { path = "../ssxl_shared" }
+
+# External dependency (Workspace-Inherited)
+regex = { workspace = true }
+once_cell = { workspace = true }
+tracing = { workspace = true }
+<<< FILE END: rust\ssxl_tools\Cargo.toml >>>
+
+>>> FILE START: rust\ssxl_tools\src\lib.rs (86 LOC) <<<
+//! # SSXL Engine Tools (`ssxl_tools`)
+//!
+//! Provides utility functions for **configuration management**, **data validation**,
+//! and other engine-wide tooling not specific to generation or synchronization.
+
+// MINIMALIST IMPORTS: Removed regex, Lazy, Read, and ssxl_shared::SSXLData
+use tracing::{info, warn};
+use std::io;
+use std::fs::File; // Kept for configuration file existence check
+
+// --------------------------------------------------------------------------------
+// --- Configuration Constants ---
+// --------------------------------------------------------------------------------
+
+/// The default file path to check for engine configuration.
+const DEFAULT_CONFIG_PATH: &str = "./config/engine.toml";
+/// The ID of the generator used when configuration loading fails or is not specified.
+const DEFAULT_GENERATOR: &str = "cellular_automata_basic";
+/// The default Cellular Automata ruleset ID to use.
+const DEFAULT_CA_RULESET: u8 = 0;
+
+// --------------------------------------------------------------------------------
+// --- SSXL Configuration Management ---
+// --------------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+/// Configuration structure holding key engine settings, primarily for generation defaults.
+pub struct SSXLConfig {
+    /// The ID of the world generator to use when no specific one is requested.
+    default_generator_id: String,
+    /// The default ruleset ID for the Cellular Automata generator.
+    ca_default_ruleset: u8,
+}
+
+impl SSXLConfig {
+    /// Creates a new `SSXLConfig` instance populated with hardcoded default values.
+    fn new_with_defaults() -> Self {
+        SSXLConfig {
+            default_generator_id: DEFAULT_GENERATOR.to_string(),
+            ca_default_ruleset: DEFAULT_CA_RULESET,
+        }
+    }
+
+    /// Attempts to read and simulate loading engine configuration from a file path.
+    ///
+    /// The file content is not read (O(0) optimization) as it is currently simulated.
+    fn load_from_path(path: &str) -> Result<Self, io::Error> {
+        info!("SSXLConfig: Attempting to load configuration from: {}", path);
+
+        match File::open(path) {
+            Ok(_file) => {
+                // O(0) Optimization: Config parsing is simulated, eliminating O(N) file read overhead.
+                info!("SSXLConfig: Config file found. Simulating config override (No TOML parsing).");
+                Ok(SSXLConfig {
+                    default_generator_id: "perlin_basic_2d".to_string(), // Simulated override
+                    ca_default_ruleset: 1,                              // Simulated override
+                })
+            },
+            // Propagate standard I/O error to the public getter for logging.
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Returns the configured default generator ID string. (O(1) Accessor)
+    pub fn get_default_generator_id(&self) -> &str {
+        &self.default_generator_id
+    }
+
+    /// Returns the configured default Cellular Automata ruleset ID. (O(1) Accessor)
+    pub fn get_ca_default_ruleset(&self) -> u8 {
+        self.ca_default_ruleset
+    }
+}
+
+/// Attempts to load the configuration from the specified path.
+///
+/// If file loading fails, it logs a warning and returns hardcoded defaults (safe fallback).
+/// **O(0) Entropy Fix**: Returns `SSXLConfig` directly, reflecting the guaranteed success (safe fallback).
+pub fn get_config_from_path(path: Option<&str>) -> SSXLConfig {
+    let path_to_load = path.unwrap_or(DEFAULT_CONFIG_PATH);
+
+    match SSXLConfig::load_from_path(path_to_load) {
+        Ok(config) => {
+            info!("SSXLConfig loaded from path: {}", path_to_load);
+            config
+        },
+        Err(e) => {
+            // Safe fallback: Logs failure but ensures the engine initializes with defaults.
+            warn!("Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.", path_to_load, e);
+            SSXLConfig::new_with_defaults()
+        }
+    }
+}
+
+// --------------------------------------------------------------------------------
+// --- DEPRECATED/REDUNDANT CODE REMOVED ---
+// --------------------------------------------------------------------------------
+// DELETED: Static CONFIG and get_config() (Deprecated).
+// DELETED: ID_REGEX, validate_data_id, and initialize() (Redundant validation on u64).
+<<< FILE END: rust\ssxl_tools\src\lib.rs >>>
+

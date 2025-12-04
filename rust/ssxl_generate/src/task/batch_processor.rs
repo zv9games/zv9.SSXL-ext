@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 // FIX: Removed use std::panic::{self, AssertUnwindSafe, catch_unwind};
 
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 use ssxl_cache::ChunkCache;
 
 // FIX: Corrected import path for GeneratorConfig.

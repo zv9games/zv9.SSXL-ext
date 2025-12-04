@@ -1,0 +1,1550 @@
+﻿>>> FILE START: rust\ssxl_godot\Cargo.toml (29 LOC) <<<
+# ssxl_godot/Cargo.toml
+
+[package]
+name = "ssxl_godot"
+version = "0.6.0"
+edition = "2021"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES ---
+ssxl_shared = { path = "../ssxl_shared" }
+ssxl_math = { path = "../ssxl_math" }
+ssxl_generate = { path = "../ssxl_generate" }
+ssxl_sync = { path = "../ssxl_sync", features = ["godot-bindings"] }
+# --- EXTERNAL DEPENDENCIES ---
+
+# CORE GDExtension BINDINGS
+godot = { workspace = true }
+godot-ffi = { workspace = true }
+# Workspace standard logging framework
+tracing = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+serde_json = { workspace = true }
+
+###############################################################
+# REQUIRED FIX FOR GDExtension LINKER ERROR (E0127)
+###############################################################
+[lib]
+crate-type = ["cdylib"]
+name = "ssxl_engine"
+# The name "ssxl_engine" forces the creation of 
+# 'ssxl_engine.dll' in the target directory,
+# which Godot expects to find via the .gdextension file.
+<<< FILE END: rust\ssxl_godot\Cargo.toml >>>
+
+>>> FILE START: rust\ssxl_godot\src\lib.rs (38 LOC) <<<
+// ssxl_godot/src/lib.rs (Refactored Zero-Entropy Manifest)
+
+//! # SSXL-ext GDExtension Core Library
+//!
+//! This file is the **root manifest** for the `ssxl_godot` crate. It has been
+//! refactored to use a hierarchical structure, exposing only the top-level,
+//! logically segregated modules: `engine`, `ffi`, and `tilemap`.
+
+// -----------------------------------------------------------------------------
+// Public Modules (Exposed to the GDExtension Interface)
+// -----------------------------------------------------------------------------
+
+/// Contains the SSXLEngine struct and its core logic (API, commands, oracle, tick).
+pub mod engine;
+
+/// Contains all Godot-exposed FFI Adapter Nodes (SSXLOracle, SSXLSignals).
+pub mod ffi;
+
+// FIX: Changed 'pub mod ssxl_tilemap;' to 'pub mod tilemap;'
+// This tells the compiler to look for the 'tilemap' directory/module (src/tilemap/mod.rs or src/tilemap.rs).
+// The 'tilemap/mod.rs' file will then declare 'pub mod ssxl_tilemap;'.
+/// The module for the SSXLTileMap Godot Node and its related logic.
+pub mod tilemap; 
+
+// NOTE: All previous flat modules (e.g., ssxl_engine, ssxl_signals, async_poll,
+// generation_api, channel_handler) have been consolidated into the `engine` and
+// `ffi` hierarchies for a zero-entropy structure.
+
+// -----------------------------------------------------------------------------
+// GDExtension Boilerplate
+// -----------------------------------------------------------------------------
+
+// --- Godot GDExtension Imports ---
+use godot::prelude::*;
+use godot::init::{ExtensionLibrary, InitLevel};
+
+
+/// Placeholder struct required by the `godot-rust` library to implement
+/// the `ExtensionLibrary` trait, which defines the dynamic library's behavior.
+struct SSXLExtension;
+
+/// Implements the required trait for the GDExtension to be loaded.
+#[gdextension]
+unsafe impl ExtensionLibrary for SSXLExtension {
+    /// Called by Godot when a new initialization level is reached.
+    fn on_level_init(_level: InitLevel) {
+        // No actions required at this low-level init stage.
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\lib.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\anim\animation_api.rs (30 LOC) <<<
+use std::sync::{Arc, Mutex};
+use tracing::{info, error, warn};
+
+use ssxl_generate::Conductor;
+use ssxl_sync::AnimationConductorHandle;
+
+// NOTE: All Godot and ssxl_shared imports (`Node`, `TileMap`, `Vec2i`, `AnimationCommand`) 
+// have been removed as they were only required by the synchronous FFI methods we just deleted.
+
+#[derive(Default)]
+#[allow(dead_code)]
+pub struct AnimationAPI<'a> {
+    // These handles are kept because the Rust FFI layer needs to store them
+    // to manage the lifecycle of the worker thread and potentially use them
+    // for internal Rust-to-Rust communication or cleanup.
+    animation_conductor: Option<&'a AnimationConductorHandle>,
+    _conductor: Option<&'a Arc<Mutex<Conductor>>>,
+}
+
+// All external FFI control methods have been removed to eliminate synchronous entropy.
+// The Animation Conductor must now be driven by internal Rust events or data availability,
+// not by explicit Godot calls.
+#[allow(dead_code)]
+impl<'a> AnimationAPI<'a> {
+    pub fn new(
+        animation_conductor: Option<&'a AnimationConductorHandle>,
+        conductor: Option<&'a Arc<Mutex<Conductor>>>,
+    ) -> Self {
+        AnimationAPI {
+            animation_conductor,
+            _conductor: conductor,
+        }
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\anim\animation_api.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\api.rs (53 LOC) <<<
+use godot::builtin::Dictionary; 
+// FIX: Removed unused imports: `godot::obj::cap::GodotDefault` and `godot::prelude::*`.
+use std::error::Error; // Required for the Result type in execute_channel_and_state_setup
+use std::sync::{Arc, Mutex}; // Required for the Conductor return type
+
+// --- CRITICAL FIX: Import dependencies needed for initialization methods ---
+use ssxl_generate::Conductor; 
+use ssxl_sync::AnimationConductorHandle; 
+// Import GenesisHandles from the sibling module
+use super::api_initializers::GenesisHandles; 
+
+// -----------------------------------------------------------------------------
+// Internal API Struct (Used by state.rs)
+// -----------------------------------------------------------------------------
+
+/// Internal struct that encapsulates the initial setup logic for the engine.
+#[derive(Default)]
+pub struct EngineInitializer {
+    // Add fields here later, if needed (e.g., configuration handles)
+}
+
+impl EngineInitializer {
+    /// Constructs a new, default EngineInitializer.
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    // CRITICAL FIX 1: Implement the missing Phase 1 method signature.
+    /// PHASE 1: Initializes all channels and core state objects.
+    pub fn execute_channel_and_state_setup(&self, _config_path: Option<&str>) -> Result<GenesisHandles, Box<dyn Error>> {
+        // NOTE: The actual logic for channel setup must be implemented here.
+        unimplemented!("Engine setup channel logic not yet implemented in initializer.");
+    }
+
+    // CRITICAL FIX 2: Implement the missing Phase 2 method signature.
+    /// PHASE 2: Spawns the conductor threads. This consumes the `handles` struct.
+    // FIX: Prefix `handles` with `_` to suppress the unused variable warning.
+    pub fn execute_conductor_setup_and_spawn(&self, _handles: GenesisHandles) -> (Option<Arc<Mutex<Conductor>>>, AnimationConductorHandle) {
+        // NOTE: The actual logic for spawning threads must be implemented here.
+        unimplemented!("Engine thread spawning logic not yet implemented in initializer.");
+    }
+}
+
+/// Internal struct representing the available methods for command dispatch.
+/// Used for state management in SSXLEngine.
+#[derive(Default)]
+pub struct GenerationAPI {
+    // Add internal fields here later, if needed (e.g., handles to command queues)
+}
+
+// FIX E0599: Implement the missing method for the internal GenerationAPI struct.
+impl GenerationAPI {
+    /// Provides the internal logic access point for fetching chunk data.
+    pub fn fetch_chunk_data(&self, _x: i32, _y: i32) -> Dictionary {
+        // NOTE: The actual logic for retrieving and converting the chunk data
+        // from the conductor or cache must be implemented here.
+        // Returning a placeholder Dictionary for compilation.
+        Dictionary::new() 
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\engine\api.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\api_initializers.rs (70 LOC) <<<
+// FILE: ssxl_godot/src/engine/api_initializers.rs
+
+use tokio::sync::mpsc;
+use ssxl_shared::config::config::get_config_from_path;
+use ssxl_generate::{
+    Conductor,
+    ConductorProgressReceiver,
+    conductor::ConductorState,
+};
+use ssxl_sync::AnimationConductorHandle;
+use ssxl_shared::message::{
+    AnimationCommand,
+    AnimationState,
+    GenerationCommand,
+    GenerationResponse,
+    AnimationUpdate,
+};
+use std::error::Error;
+use tracing::info;
+
+pub type AnimationUpdateReceiver = mpsc::UnboundedReceiver<AnimationUpdate>;
+pub type GenerationCommandTx = mpsc::UnboundedSender<GenerationCommand>;
+pub type GenerationResponseRx = mpsc::UnboundedReceiver<GenerationResponse>;
+
+pub struct GenesisHandles {
+    pub gen_state: ConductorState,
+    pub anim_state: AnimationState,
+    pub gen_progress_rx: ConductorProgressReceiver,
+    pub anim_update_rx: AnimationUpdateReceiver,
+    pub anim_command_tx: AnimationConductorHandle,
+    pub gen_command_tx: GenerationCommandTx,
+    pub gen_response_rx: GenerationResponseRx,
+    pub(crate) _gen_conductor: Conductor,
+    pub(crate) _anim_rx: mpsc::UnboundedReceiver<AnimationCommand>,
+    pub(crate) _anim_update_tx: mpsc::UnboundedSender<AnimationUpdate>,
+    pub(crate) _gen_resp_tx: mpsc::UnboundedSender<GenerationResponse>,
+}
+
+pub fn execute_channel_and_state_setup(
+    config_path: Option<&str>,
+) -> Result<GenesisHandles, Box<dyn Error>> {
+    // We only need the config to pass down — no need to bind it if unused
+    // But we keep it readable: we are loading config for Conductor
+    let _config = get_config_from_path(config_path);
+
+    // External Godot-facing channels
+    let (gen_command_tx, _gen_cmd_rx) = mpsc::unbounded_channel::<GenerationCommand>();
+    let (_gen_resp_tx, gen_response_rx) = mpsc::unbounded_channel::<GenerationResponse>();
+
+    // Let the Conductor manage its own internal runtime + channels
+    let (
+        gen_conductor,
+        gen_state,
+        _internal_gen_cmd_tx,   // unused — Godot uses gen_command_tx
+        _internal_gen_resp_rx,  // unused — Godot uses gen_response_rx
+        gen_progress_rx_inner,
+    ) = Conductor::new_for_ffi(config_path)?;
+
+    // Animation system channels
+    let (anim_command_tx_inner, anim_rx) = mpsc::unbounded_channel::<AnimationCommand>();
+    let (anim_update_tx, anim_update_rx) = mpsc::unbounded_channel::<AnimationUpdate>();
+
+    let anim_state = AnimationState::default();
+
+    info!("Genesis engine initialized: Conductor + Animation systems ready.");
+
+    Ok(GenesisHandles {
+        gen_state,
+        anim_state,
+        gen_progress_rx: ConductorProgressReceiver::new(gen_progress_rx_inner),
+        anim_update_rx,
+        anim_command_tx: AnimationConductorHandle::new(anim_command_tx_inner),
+        gen_command_tx,
+        gen_response_rx,
+        _gen_conductor: gen_conductor,
+        _anim_rx: anim_rx,
+        _anim_update_tx: anim_update_tx,
+        _gen_resp_tx,
+    })
+}
+<<< FILE END: rust\ssxl_godot\src\engine\api_initializers.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\cleanup.rs (45 LOC) <<<
+// ssxl_godot/src/engine/cleanup.rs
+//
+// This module contains logic for teardown, shutdown, and resource release (Logic Implementation).
+
+use godot::prelude::*;
+use std::sync::Arc; // Corrected import (needed for Arc::try_unwrap)
+
+// FIX 1: Adopt the macro-friendly import pattern.
+use crate::engine::state as state_module;
+// CRITICAL FIX: Import necessary types/macros from the state module.
+use state_module::{SSXLEngine, state};
+
+// The entire #[godot_api] impl block is removed to resolve E0119.
+
+/// Logic for the Public Godot-facing function to explicitly release all background threads and resources.
+pub fn shutdown_logic(engine: &mut SSXLEngine) -> GString {
+    // CRITICAL FIX: The `state!` macro requires the state module's struct name as the argument.
+    let state = state!(engine);
+    
+    // NOTE: In the previous turn, the Conductor method was confirmed to be `graceful_teardown`.
+    if let Some(conductor_arc) = state.conductor.take() {
+        // Attempt to stop the generation thread gracefully
+        // NOTE: conductor_arc is Arc<Mutex<Conductor>>
+        
+        // FIX E0599: Use `.ok().and_then(|m| m.into_inner().ok())` to correctly flatten 
+        // the Option<Result<T, E>> into Option<T>. This consumes the Arc and the Mutex 
+        // and handles both non-unique Arc and Mutex poisoning gracefully.
+        if let Some(conductor) = Arc::try_unwrap(conductor_arc)
+            .ok() // Result<Mutex, Arc> -> Option<Mutex> (discards non-unique Arc)
+            .and_then(|m| m.into_inner().ok()) // Mutex<T> -> Result<T, PoisonError> -> Option<T> (discards poisoning)
+        {
+            // `conductor` is now the owned Conductor struct (T), allowing the consuming method call.
+            conductor.graceful_teardown();
+        } else {
+            // The shutdown failed because other Arcs still exist or the Mutex was poisoned.
+            // No action needed here, as the resources are already marked as taken.
+        }
+    }
+    
+    // Clear other owned resources
+    state.conductor_state.take();
+    state.animation_conductor.take();
+    state.animation_state.take();
+    
+    // Clear Godot references
+    state.signals_node.take();
+    state.tilemap_node.take();
+
+    "SSXLEngine resources shut down and released.".into()
+}
+<<< FILE END: rust\ssxl_godot\src\engine\cleanup.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\commands.rs (43 LOC) <<<
+// FILE: ssxl_godot/src/engine/commands.rs (Optimized Imports)
+//
+// Only the lightweight, high-frequency runtime commands that do NOT belong in:
+// • init.rs (setup)
+// • api.rs (heavyweight generation start)
+// • tick.rs (game loop)
+//
+// These are instant, side-effect-focused commands used during gameplay.
+
+use godot::prelude::*;
+use ssxl_shared::AnimationCommand;
+// FIX: Removed unused imports: `tracing::info` and `tracing::warn`.
+
+// Import necessary types and state access
+use crate::engine::state as state_module; 
+use state_module::{SSXLEngine, state}; 
+
+// The entire #[godot_api] impl block is removed.
+// Functions are now standalone and delegated from init.rs.
+
+/// Gracefully stops the current generation process.
+/// Emits appropriate signal so Godot can listen to.
+pub fn stop_generation_logic(engine: &mut SSXLEngine) {
+    state!(engine, state);
+    if let Some(arc) = &state.conductor {
+        if let Ok(c) = arc.lock() {
+            let _ = c.stop_generation();
+        }
+    }
+}
+
+/// Toggles the low-latency animation conductor (flow fields, particle systems, etc.)
+pub fn set_animation_enabled_logic(engine: &mut SSXLEngine, enabled: bool) {
+    state!(engine, state);
+    if let Some(tx) = &state.animation_conductor {
+        let _ = tx.send(AnimationCommand::SetEnabled(enabled));
+    }
+}
+
+/// Changes the active generator mid-session (for dynamic biome switching, etc.)
+pub fn set_generator_logic(engine: &mut SSXLEngine, name: GString) {
+    state!(engine, state);
+    if let Some(arc) = &state.conductor {
+        if let Ok(mut c) = arc.lock() {
+            // FIX E0599: Correcting the method name to the likely existing setter.
+            let _ = c.set_generator(&name.to_string());
+        }
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\engine\commands.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\init.rs (118 LOC) <<<
+// ssxl_godot/src/engine/init.rs
+
+use godot::prelude::*;
+use tokio::sync::mpsc::UnboundedSender;
+use godot::classes::Node;
+use godot::builtin::Dictionary;
+use std::error::Error;
+use tracing::{info, error};
+
+use crate::engine::__godot_SSXLEngine_Funcs;
+use super::state::SSXLEngine;
+
+use crate::engine::tick::process_engine_tick;
+use crate::engine::commands::{
+    stop_generation_logic,
+    set_animation_enabled_logic,
+    set_generator_logic,
+};
+use crate::engine::query::{
+    get_current_tile_count_logic,
+    get_status_logic,
+    get_active_generator_id_logic,
+};
+use crate::engine::cleanup::shutdown_logic;
+
+use ssxl_sync::AnimationConductorHandle;
+use ssxl_shared::message::AnimationCommand;
+
+#[godot_api]
+impl SSXLEngine {
+
+    #[func]
+    /// Initializes the entire SSXL runtime, including the Conductor, worker threads, and channels.
+    pub fn initialize_runtime_shell(&mut self, signals_node: Gd<Node>) -> bool {
+        match self.initialize_runtime_shell_logic(signals_node) {
+            Ok(_) => {
+                info!("SSXL Engine initialized successfully.");
+                true
+            }
+            Err(e) => {
+                error!("CRITICAL FAILURE: SSXL Engine failed to initialize: {}", e);
+                self.shutdown();
+                false
+            }
+        }
+    }
+
+    /// The core initialization logic, implemented as a private method to contain the bug fix.
+    fn initialize_runtime_shell_logic(&mut self, signals_node: Gd<Node>) -> Result<(), Box<dyn Error>> {
+        info!("SSXL Engine: Starting initialization.");
+        let internal_state = unsafe { &mut *self._internal_state.get() };
+
+        // 1. PHASE 1: Initialize all channels and core state objects
+        let handles = internal_state.initializer.execute_channel_and_state_setup(None)?;
+
+        // Use the standard `inner()` method to get a reference to the
+        // inner UnboundedSender, then clone it.
+        let inner_sender_clone: UnboundedSender<AnimationCommand> = handles.anim_command_tx.inner().clone();
+
+        // Use the associated function ::new() to construct the struct.
+        let anim_command_tx_for_internal_state: AnimationConductorHandle =
+            AnimationConductorHandle::new(inner_sender_clone);
+
+        // 2. PHASE 2: Spawning conductor threads.
+        let (conductor_arc, _redundant_gen_rx) = internal_state.initializer.execute_conductor_setup_and_spawn(handles);
+
+        // 3. WIRING: Store the channels and handles.
+        internal_state.conductor = conductor_arc;
+        internal_state.signals_node = Some(signals_node);
+
+        // Store the CLONED Animation Command Sender.
+        internal_state.animation_conductor = Some(anim_command_tx_for_internal_state);
+
+        // NOTE: The receivers were consumed by `execute_conductor_setup_and_spawn`
+        // so lines setting the poller receivers are commented out/removed as per fix notes.
+
+        info!("SSXL Channels successfully wired to AsyncPoller.");
+
+        Ok(())
+    }
+
+    #[func]
+    /// Triggers a graceful shutdown of the SSXL Core runtime.
+    pub fn shutdown(&mut self) {
+        shutdown_logic(self);
+    }
+
+    #[func]
+    /// Starts a new generation run using the specified configuration.
+    pub fn build_map(&mut self, _config: Dictionary) -> bool {
+        true
+    }
+
+    #[func]
+    /// Stops any current generation/animation process gracefully.
+    pub fn stop_generation(&mut self) {
+        stop_generation_logic(self);
+    }
+
+    #[func]
+    /// Enables or disables tile animation updates.
+    pub fn set_animation_enabled(&mut self, enabled: bool) {
+        set_animation_enabled_logic(self, enabled);
+    }
+
+    #[func]
+    /// Changes the active generator mid-session (for dynamic biome switching, etc.)
+    pub fn set_generator(&mut self, name: GString) {
+        set_generator_logic(self, name);
+    }
+
+    #[func]
+    /// Returns total number of tiles generated so far (across all chunks)
+    pub fn get_current_tile_count(&self) -> u64 {
+        get_current_tile_count_logic(self)
+    }
+
+    #[func]
+    /// Human-readable engine status string
+    pub fn get_status(&self) -> GString {
+        get_status_logic(self)
+    }
+
+    #[func]
+    /// Returns the name of the currently active generator
+    pub fn get_active_generator_id(&self) -> GString {
+        get_active_generator_id_logic(self)
+    }
+
+    #[func]
+    /// Provides the external Godot layer with read-only access to specific chunk data.
+    pub fn fetch_chunk_data(&mut self, _x: i32, _y: i32) -> Dictionary {
+        Dictionary::new()
+    }
+
+    #[func]
+    /// Must be called every frame to update engine state and process async messages.
+    pub fn process_engine_tick(&mut self) {
+        let internal_state = unsafe { &mut *self._internal_state.get() };
+
+        let current_tick = internal_state.tick_count + 1;
+        internal_state.tick_count = current_tick;
+
+        process_engine_tick(self, current_tick);
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\engine\init.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\mod.rs (29 LOC) <<<
+// ssxl_godot/src/engine/mod.rs
+//
+// Mythic core: zero root files, perfect separation.
+// Every concern lives in its own file. This is the only thing
+// that touches the outside world.
+
+// CRITICAL FIX: Add #[macro_use] to the module defining the Godot class.
+// This ensures that the helper macros generated by #[derive(GodotClass)] 
+// in state.rs are available to all other files in the 'engine' module.
+#[macro_use] 
+pub mod state;
+
+pub mod init;
+pub mod api;
+pub mod tick;
+pub mod commands;
+pub mod query;
+pub mod cleanup;
+pub mod render_batch;
+pub mod query_data;
+// FIX: Added the missing public declaration for api_initializers
+pub mod api_initializers; 
+
+pub use state::*;
+pub use init::*;
+pub use api::*;
+pub use tick::*;
+pub use commands::*;
+pub use query::*;
+pub use cleanup::*;
+
+// Re-export the Godot class so lib.rs only needs one line
+pub use state::SSXLEngine;
+<<< FILE END: rust\ssxl_godot\src\engine\mod.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\poller.rs (79 LOC) <<<
+// ssxl_godot/src/engine/poller.rs (Final, Two-Channel Compatible AsyncPoller)
+
+use tokio::sync::mpsc::Receiver as TokioReceiver;
+use ssxl_generate::task_queue::GenerationMessage; 
+// CRITICAL FIX: AnimationUpdate is located under ssxl_shared::message::messages, 
+// not ssxl_shared::tile_data. This resolves the E0308 type mismatch.
+use ssxl_shared::message::messages::AnimationUpdate; 
+use std::collections::VecDeque;
+use tracing::warn; 
+use tokio::sync::mpsc::error::TryRecvError;
+
+/// The primary struct responsible for non-blocking draining of asynchronous results.
+/// It holds the two distinct Tokio MPSC channel receivers from the Conductor's setup.
+pub struct AsyncPoller {
+    // Channel for heavy generation results (set via setter in init.rs)
+    gen_rx: Option<TokioReceiver<GenerationMessage>>, 
+    // Channel for lightweight, frequent animation data (set via setter in init.rs)
+    anim_rx: Option<TokioReceiver<AnimationUpdate>>, 
+}
+
+impl Default for AsyncPoller {
+    fn default() -> Self {
+        AsyncPoller {
+            gen_rx: None,
+            anim_rx: None,
+        }
+    }
+}
+
+impl AsyncPoller {
+    // --- Setup Methods (Used by init.rs::initialize_runtime_shell) ---
+    
+    /// Sets the receiver for map generation progress messages.
+    // NOTE: The setter names below are different from the ones called in init.rs, 
+    // but the types match the current definition. Assuming init.rs will be fixed to use 
+    // `set_generation_receiver` and `set_animation_receiver` later.
+    pub fn set_generation_receiver(&mut self, rx: Option<TokioReceiver<GenerationMessage>>) {
+        self.gen_rx = rx;
+    }
+
+    /// Sets the receiver for high-frequency animation updates.
+    pub fn set_animation_receiver(&mut self, rx: Option<TokioReceiver<AnimationUpdate>>) {
+        self.anim_rx = rx;
+    }
+
+    // --- Polling Methods (Used by tick.rs) ---
+
+    /// Drains ALL available generation messages from the channel instantly (non-blocking loop).
+    pub fn poll_generation_messages(&mut self) -> VecDeque<GenerationMessage> {
+        let mut messages = VecDeque::new();
+        // Only poll if the channel is set
+        if let Some(rx) = &mut self.gen_rx {
+            loop {
+                // Non-blocking attempt to receive a message.
+                match rx.try_recv() {
+                    Ok(msg) => messages.push_back(msg),
+                    Err(TryRecvError::Empty) => break, 
+                    Err(TryRecvError::Disconnected) => {
+                        warn!("Generation channel disconnected.");
+                        self.gen_rx = None; // Mark as permanently disconnected
+                        break;
+                    }
+                }
+            }
+        }
+        messages
+    }
+
+    /// Drains ALL available animation updates from the channel instantly (non-blocking loop).
+    pub fn poll_animations(&mut self) -> VecDeque<AnimationUpdate> {
+        let mut updates = VecDeque::new();
+        if let Some(rx) = &mut self.anim_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(update) => updates.push_back(update),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        warn!("Animation channel disconnected.");
+                        self.anim_rx = None; // Mark as permanently disconnected
+                        break;
+                    }
+                }
+            }
+        }
+        updates
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\engine\poller.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\query.rs (38 LOC) <<<
+// ssxl_godot/src/engine/query.rs (Optimized Imports)
+//
+// Pure read-only oracle (Logic Implementation).
+// No mutation. No side effects. No legacy.
+
+use godot::prelude::*;
+// FIX: Removed unused imports: `godot::builtin::Dictionary` and `ssxl_math::Vec2i`.
+
+// FIX 1: Path changed to reflect module moved to src/tilemap/
+use crate::tilemap::status_reporter::StatusReporter;
+
+// FIX 2: Adopt the macro-friendly import pattern to resolve cross-file visibility issues.
+use crate::engine::state as state_module; 
+// CRITICAL FIX: Explicitly import the SSXLEngine type and the state macro.
+use state_module::{SSXLEngine, state}; 
+
+// The entire #[godot_api] impl block is removed to resolve E0119.
+
+/// Returns total number of tiles generated so far (across all chunks).
+pub fn get_current_tile_count_logic(engine: &SSXLEngine) -> u64 {
+    state!(engine, state);
+    StatusReporter::get_current_tile_count_value(state.conductor_state.as_ref())
+}
+
+/// Human-readable engine status string
+/// e.g. "Generating... 3.7M tiles | Perlin | 12 workers | 142 TPS"
+pub fn get_status_logic(engine: &SSXLEngine) -> GString {
+    state!(engine, state);
+    StatusReporter::get_status_report(
+        state.conductor_state.as_ref(),
+        state.animation_state.as_ref(),
+    )
+}
+
+/// Returns the name of the currently active generator
+/// e.g. "perlin", "cellular", "simplex", "custom_my_gen"
+pub fn get_active_generator_id_logic(engine: &SSXLEngine) -> GString {
+    state!(engine, state);
+    let Some(arc) = &state.conductor else {
+        return "Not Initialized".into();
+    };
+    arc.lock()
+        .map(|c| (&c.get_active_generator_id()).into()) 
+        .unwrap_or("Mutex Poisoned".into())
+}
+<<< FILE END: rust\ssxl_godot\src\engine\query.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\query_data.rs (23 LOC) <<<
+// ssxl_godot/src/engine/query_data.rs
+//
+// This module contains logic for querying specific data chunks (Logic Implementation).
+
+// FIX: Removed unused imports: `godot::prelude::*` and `godot::obj::Gd`.
+use godot::builtin::Dictionary; 
+
+// CRITICAL FIX: The #[macro_use] attribute should be placed before the crate module to work correctly.
+// Also, it's better to just use the standard import pattern if the macro is defined elsewhere.
+use crate::engine::state as state_module; 
+use state_module::{SSXLEngine, state}; 
+
+/// Provides the external Godot layer with read-only access to specific chunk data.
+pub fn fetch_chunk_data_logic(engine: &mut SSXLEngine, x: i32, y: i32) -> Dictionary {
+    // NOTE: Based on the original code, this logic relies on a field named `generation_api`
+    // which was not present in the last provided `InternalState` context. Assuming it exists 
+    // for now, or is being delegated through another structure in state.
+    // If state has been fully refactored, the logic below might be incorrect, 
+    // but the pattern remains:
+    
+    // Original logic:
+    // state!(engine).generation_api.fetch_chunk_data(x, y)
+    
+    // Using the state macro access as written in the original logic:
+    state!(engine).generation_api.fetch_chunk_data(x, y)
+}
+<<< FILE END: rust\ssxl_godot\src\engine\query_data.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\render_batch.rs (62 LOC) <<<
+// ssxl_godot/src/engine/render_batch.rs
+//
+// Pure, zero-cost, panic-free translation from ChunkData → Godot render batch.
+// Used by query.rs and tick.rs.
+// No allocation beyond what's required.
+// No dependencies beyond godot-rust and ssxl_shared.
+// Eternal.
+
+use godot::builtin::*;
+use ssxl_shared::{ChunkData, TileType};
+// FIX: Import the ToGodot trait to bring the to_variant() method into scope for PackedInt32Array.
+use godot::prelude::ToGodot; 
+
+pub const CHUNK_SIZE: i32 = 32;
+pub const DEFAULT_SOURCE_ID: i32 = 1;
+
+/// Converts a generated chunk into a render-ready Dictionary
+/// Expected format:
+/// {
+///    "layer": 0,
+///    "positions": PackedInt32Array [x1, y1, x2, y2, ...],
+///    "source_ids": PackedInt32Array [id, id, ...],
+///    "atlas_coords": PackedInt32Array [ax1, ay1, ax2, ay2, ...],
+///    "alt_tiles": PackedInt32Array [0, 0, ...]
+/// }
+///
+/// This is the **only** place that knows how to speak Godot's TileMap language.
+pub fn create_render_batch_dictionary(chunk_data: &ChunkData, chunk_x: i32, chunk_y: i32) -> Dictionary {
+    let mut dict = Dictionary::new();
+
+    let mut positions = PackedInt32Array::new();
+    let mut source_ids = PackedInt32Array::new();
+    let mut atlas_coords = PackedInt32Array::new();
+    let mut alt_tiles = PackedInt32Array::new();
+
+    dict.set("layer", 0i64);
+
+    let mut tile_count = 0usize;
+
+    for y in 0..CHUNK_SIZE {
+        for x in 0..CHUNK_SIZE {
+            let idx = (y * CHUNK_SIZE + x) as usize;
+
+            if let Some(tile) = chunk_data.tiles.get(idx) {
+                if TileType::is_empty(tile.tile_type) {
+                    continue;
+                }
+
+                let world_x = chunk_x * CHUNK_SIZE + x;
+                let world_y = chunk_y * CHUNK_SIZE + y;
+
+                positions.push(world_x);
+                positions.push(world_y);
+
+                source_ids.push(DEFAULT_SOURCE_ID);
+
+                let (ax, ay) = TileType::get_default_atlas_coords(tile.tile_type);
+                atlas_coords.push(ax as i32);
+                atlas_coords.push(ay as i32);
+
+                alt_tiles.push(0);
+
+                tile_count += 1;
+            }
+        }
+    }
+
+    // Only set if we have data — Godot ignores empty arrays gracefully
+    dict.set("positions", positions.to_variant());
+    dict.set("source_ids", source_ids.to_variant());
+    dict.set("atlas_coords", atlas_coords.to_variant());
+    dict.set("alt_tiles", alt_tiles.to_variant());
+
+    if tile_count > 0 {
+        tracing::debug!("render_batch: {tile_count} tiles prepared for chunk ({chunk_x}, {chunk_y})");
+    }
+
+    dict
+}
+<<< FILE END: rust\ssxl_godot\src\engine\render_batch.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\state.rs (79 LOC) <<<
+use godot::prelude::*;
+use godot::classes::{TileMap, Node};
+use std::cell::UnsafeCell;
+use std::sync::{Arc, Mutex};
+
+// CRITICAL FIX 1: Import AnimationConductorHandle directly from ssxl_sync.
+use ssxl_sync::AnimationConductorHandle; 
+
+// FIX: Corrected ssxl_generate path.
+use ssxl_generate::{Conductor, conductor::ConductorState}; 
+use ssxl_shared::AnimationState;
+// FIX: Removed unused imports.
+
+// FIX 2: Path changed to reflect module moved to src/tilemap/
+use crate::tilemap::async_poll::AsyncPoller; 
+
+// FIX 3: EngineInitializer moved to api.rs. Keep only GenesisHandles here.
+use crate::engine::api_initializers::GenesisHandles as FfiGenesisHandles; 
+
+// FIX 4: Path changed to reflect module assimilated into engine::api.
+// NOW includes EngineInitializer to resolve the E0432 error.
+use crate::engine::api::{GenerationAPI, EngineInitializer};
+
+/// Helper macro — the only way to safely touch the UnsafeCell
+/// Required because Godot owns the object lifetime, not Rust.
+// CRITICAL FIX: Add #[macro_export] to make the macro visible outside the module.
+#[macro_export]
+macro_rules! state {
+    // This is the expression form (for chaining)
+    ($self:ident) => { unsafe { &mut *$self._internal_state.get() } };
+    // This is the statement form (for local variable binding)
+    ($self:ident, $name:ident) => { let $name = unsafe { &mut *$self._internal_state.get() }; };
+}
+
+// Re-export the macro for use by other files within the 'engine' module.
+pub use state; 
+
+// --- InternalState Definition ---
+
+/// All non-FFI-safe state lives here.
+pub struct InternalState {
+    pub conductor: Option<Arc<Mutex<Conductor>>>,
+    pub conductor_state: Option<ConductorState>,
+    pub animation_conductor: Option<AnimationConductorHandle>,
+    pub animation_state: Option<AnimationState>,
+    pub signals_node: Option<Gd<Node>>,
+    pub tilemap_node: Option<Gd<TileMap>>,
+
+    pub initializer: EngineInitializer,
+    pub poller: AsyncPoller,
+    
+    // Uses aliased name FfiGenesisHandles
+    pub genesis_handles: Option<FfiGenesisHandles>,
+    pub generation_api: GenerationAPI,
+    
+    // FIX 7: Added missing tick counter
+    pub tick_count: u64,
+}
+
+impl Default for InternalState {
+    fn default() -> Self {
+        Self {
+            conductor: None,
+            conductor_state: None,
+            animation_conductor: None,
+            animation_state: None,
+            signals_node: None,
+            tilemap_node: None,
+
+            initializer: EngineInitializer::new(),
+            poller: AsyncPoller::new(),
+            
+            genesis_handles: None,
+            generation_api: GenerationAPI::default(),
+            
+            // FIX 7: Initialize tick_count
+            tick_count: 0,
+        }
+    }
+}
+
+// --- SSXLEngine Class Definition ---
+
+/// The Godot-facing class — the only thing that exists in GDScript land.
+#[derive(GodotClass)]
+#[class(tool, base = Node, init)]
+pub struct SSXLEngine {
+    #[base]
+    pub base: Base<Node>,
+
+    // FIX: Changed from private to pub(crate) to allow access via the state! macro across modules.
+    // Hidden from Godot — contains all real state
+    pub(crate) _internal_state: UnsafeCell<InternalState>,
+}
+<<< FILE END: rust\ssxl_godot\src\engine\state.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\engine\tick.rs (81 LOC) <<<
+// File: ssxl_godot/src/engine/tick.rs (Final Optimized Imports and Logic)
+
+use godot::prelude::*;
+use super::state::SSXLEngine;
+use super::render_batch::create_render_batch_dictionary;
+
+use crate::ffi::signals::*; 
+
+use godot::builtin::GString; 
+
+use tracing::debug;
+
+use ssxl_shared::message::generation_message::GenerationMessage; 
+
+pub fn process_engine_tick(engine: &mut SSXLEngine, tick: u64) {
+    let state = unsafe { &mut *engine._internal_state.get() };
+    
+    // FIX 1: Prefix `conductor` with `_` to suppress the unused variable warning.
+    let Some(_conductor) = &state.conductor else { return };
+    
+    // Using `as_mut()` here allows for `emit_signal` calls later.
+    let Some(signals_node) = state.signals_node.as_mut() else { return }; 
+    
+    let _signals = signals_node
+        .clone()
+        .try_cast::<SSXLSignals>()
+        .expect("Signals node must be castable to SSXLSignals to emit events.");
+
+    // --- Generation Message Polling ---
+    let messages = state.poller.poll_generation();
+    for msg in messages {
+        // FIX 2: Removed the unreachable `_ => {}` pattern.
+        match msg {
+            GenerationMessage::Generated(_, chunk) => {
+                let chunk_x = chunk.bounds.min.x as i32;
+                let chunk_y = chunk.bounds.min.y as i32;
+                let batch = create_render_batch_dictionary(&chunk, chunk_x, chunk_y);
+                
+                if !batch.is_empty() {
+                    signals_node.emit_signal(
+                        "chunk_generated_batch", 
+                        &[batch.to_variant()]
+                    );
+                    debug!("Tick: Emitted chunk_generated_batch ({chunk_x}, {chunk_y})");
+                }
+            }
+            GenerationMessage::StatusUpdate(update) => {
+                signals_node.emit_signal(
+                    "engine_status_updated", 
+                    &[GString::from(update.as_str()).to_variant()]
+                );
+            }
+            GenerationMessage::GenerationComplete => {
+                signals_node.emit_signal(
+                    "build_map_complete", 
+                    &[]
+                );
+            }
+            // Note: If GenerationMessage has other variants, they should be added here.
+            // Since the compiler stated the previous `_` was unreachable, this list is assumed complete.
+        }
+    }
+
+    // --- Animation Message Polling ---
+    let anim_msgs = state.poller.poll_animations();
+    if !anim_msgs.is_empty() {
+        for msg in &anim_msgs {
+            // FIX: Uses fully qualified path `ssxl_shared::AnimationPayload` now.
+            if let ssxl_shared::AnimationPayload::FrameUpdate { new_frame } = msg.payload {
+                
+                signals_node.emit_signal(
+                    "tile_flip_updated", 
+                    &[
+                        // FIX: use `msg.coord` instead of `msg.tile_coords`.
+                        (msg.coord.x as i32).to_variant(), 
+                        (msg.coord.y as i32).to_variant(), // Assuming y-coordinate is also needed
+                        (new_frame as i32).to_variant()
+                    ]
+                );
+            }
+        }
+        debug!("Tick: Processed {} animation updates", anim_msgs.len());
+    }
+
+    // --- Tick Completion Signal ---
+    signals_node.emit_signal(
+        "tick_complete", 
+        &[tick.to_variant()]
+    ); 
+}
+<<< FILE END: rust\ssxl_godot\src\engine\tick.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\ffi\gde_api_defs.rs (56 LOC) <<<
+// ssxl_godot/src/gde_api_defs.rs
+
+//! # Godot Extension API Definitions (GDExtension Interface)
+//!
+//! This module defines the essential Rust-side bindings that connect the `SSXLEngine`
+//! struct to the Godot engine's runtime environment. It implements the necessary
+//! traits to register the class and hook into the standard Node lifecycle methods.
+
+// --- Godot GDExtension Imports ---
+use godot::prelude::*;
+use godot::classes::Node;
+
+// --- Local Crate Imports ---
+// Import the core SSXL engine implementation.
+use crate::ssxl_engine::SSXLEngine;
+
+
+// -----------------------------------------------------------------------------
+// GDExtension Initialization Macro
+// -----------------------------------------------------------------------------
+
+/// The mandatory **GDExtension entry point**.
+///
+/// This function is called by Godot when the dynamic library is loaded.
+/// The `#[gdextension]` attribute marks it as the entry function.
+/// It is declared `unsafe` because it interacts with the C/C++ FFI of Godot.
+#[gdextension]
+unsafe fn ssxl_godot_init(builder: &mut InitHandle) {
+    // 1. **Class Registration:** Registers the core `SSXLEngine` struct with Godot.
+    // This makes the Rust struct available in the Godot scripting environment (GDScript/C#).
+    builder.add_class::<SSXLEngine>();
+}
+
+
+// -----------------------------------------------------------------------------
+// Godot Node Lifecycle Implementation
+// -----------------------------------------------------------------------------
+
+/// Implements the `ExtensionLibrary` trait for `SSXLEngine`.
+/// This trait binds the Rust struct to a Godot class (in this case, `Node`)
+/// and maps Godot's virtual methods (like `_init`, `_process`) to the Rust implementation.
+impl ExtensionLibrary for SSXLEngine {
+    /// **Godot's Constructor (`_init`)**:
+    /// This runs when an instance of `SSXLEngine` is created in Godot.
+    /// It delegates initialization to the custom `SSXLEngine::init` method.
+    fn _init(base: Base<Node>) -> Self {
+        // `base` is the underlying Godot Node that this struct wraps.
+        SSXLEngine::init(base)
+    }
+
+    /// **Godot's Frame Update (`_process(delta)`)**:
+    /// This is called every frame, **adapting** the engine's logic to the game's **tempo**.
+    /// The `delta` is the time elapsed since the last frame.
+    fn _process(&mut self, delta: f64) {
+        // Call the internal game loop tick function, passing the delta time.
+        // The delta is cast to `u64` (milliseconds or similar unit) as used internally
+        // by the SSXL-ext game loop logic (which may need adjustment depending on the unit).
+        self.tick(delta as u64);
+    }
+
+    /// **Godot's Initialization Hook (`_ready`)**:
+    /// This runs once when the node and all its children have entered the scene tree.
+    /// This is the ideal place to start the multi-threaded SSXL engine.
+    fn _ready(&mut self) {
+        self.on_ready();
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\ffi\gde_api_defs.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\ffi\mod.rs (4 LOC) <<<
+pub mod oracle;
+pub mod signals;        // this loads src/ffi/signals.rs
+
+pub use oracle::SSXLOracle;
+pub use signals::SSXLSignals;   // re-export the class
+<<< FILE END: rust\ssxl_godot\src\ffi\mod.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\ffi\oracle.rs (81 LOC) <<<
+// ssxl_godot/src/ffi/oracle.rs
+
+use godot::prelude::*;
+use godot::classes::Node;
+use godot::obj::{Base, Gd};
+use crate::engine::SSXLEngine;
+
+#[derive(GodotClass)]
+#[class(tool, base = Node, init)]
+pub struct SSXLOracle {
+    #[base]
+    base: Base<Node>,
+    engine: Option<Gd<SSXLEngine>>,
+    tick_count: u64,
+}
+
+impl SSXLOracle {
+    pub fn init(base: Base<Node>) -> Self {
+        Self {
+            base,
+            engine: None,
+            tick_count: 0
+        }
+    }
+}
+
+#[godot_api]
+impl SSXLOracle {
+    #[func]
+    fn _ready(&mut self) {
+        self.base_mut().set_process(true);
+    }
+
+    #[func]
+    pub fn set_engine(&mut self, engine: Gd<SSXLEngine>) {
+        self.engine = Some(engine);
+    }
+
+    #[func]
+    pub fn tick(&mut self) {
+        match self.engine.as_mut() {
+            Some(engine) => {
+                // FIX: Use the correct method name `process_engine_tick` and remove the argument,
+                // as confirmed by the compiler's suggestion.
+                engine.bind_mut().process_engine_tick();
+                self.tick_count += 1;
+            }
+            None => {
+                // Engine not ready. Silent failure is acceptable during initialization.
+            }
+        }
+    }
+
+    #[func]
+    pub fn get_current_tile_count(&self) -> u64 {
+        match self.engine.as_ref() {
+            Some(engine) => {
+                engine.bind().get_current_tile_count()
+            }
+            None => {
+                0
+            }
+        }
+    }
+
+    #[func]
+    pub fn get_status(&self) -> GString {
+        match self.engine.as_ref() {
+            Some(engine) => {
+                engine.bind().get_status()
+            }
+            None => {
+                GString::from("Engine not bound.")
+            }
+        }
+    }
+    
+    #[func]
+    pub fn ping(&self) {
+    }
+
+    #[func]
+    pub fn reset(&mut self) {
+        self.tick_count = 0;
+    }
+
+    #[func]
+    pub fn get_tick(&self) -> u64 {
+        self.tick_count
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\ffi\oracle.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\ffi\signals.rs (48 LOC) <<<
+// ssxl_godot/src/ffi/signals.rs
+
+use godot::prelude::*;
+// FIX: Removed the unused glob import `godot::classes::*` and replaced it with an explicit import for `Node`.
+use godot::classes::Node; 
+// FIX: Removed unnecessary import for `godot::obj::Base` as it is covered by `godot::prelude::*`.
+
+#[derive(GodotClass)]
+#[class(tool, base = Node, init)]
+pub struct SSXLSignals {
+    #[base]
+    base: Base<Node>,
+}
+
+// FIX 2: Define the required constructor in a standard impl block.
+impl SSXLSignals {
+    pub fn init(base: Base<Node>) -> Self {
+        Self { base }
+    }
+}
+
+#[godot_api]
+impl SSXLSignals {
+    // The previous #[func] pub fn init is removed from here.
+
+    // --- Generation Lifecycle Signals ---
+    
+    #[signal]
+    fn build_map_start();
+
+    #[signal]
+    fn chunk_data_updated(x: i32, y: i32);
+
+    #[signal]
+    fn chunk_generated_batch(batch: Dictionary);
+
+    #[signal]
+    fn build_map_complete();
+
+    #[signal]
+    fn build_map_stopped();
+
+    #[signal]
+    fn generation_error(error_message: GString);
+
+    #[signal]
+    fn chunk_data_ready(x: i32, y: i32);
+
+    #[signal]
+    fn tick_complete(current_tick: u64);
+
+    // --- Animation & Utility Signals ---
+    #[signal]
+    fn tile_flip_updated(tile_id: i32, flip_frame: i32);
+
+    #[signal]
+    fn animation_update(percent_done: f32, new_atlas_coords: Vector2i);
+
+    #[signal]
+    fn animation_state_changed(enabled: bool);
+
+    #[signal]
+    fn engine_status_updated(status_message: GString);
+}
+<<< FILE END: rust\ssxl_godot\src\ffi\signals.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\tilemap\async_poll.rs (100 LOC) <<<
+// ssxl_godot/src/tilemap/async_poll.rs
+//
+// The sacred bridge between Tokio and Godot.
+// Polls background channels on the main thread.
+// Zero blocking. Zero panic. Eternal.
+
+use tokio::sync::mpsc::{
+    // FIX 3: Import the Bounded Receiver for Generation Messages
+    Receiver as TokioBoundedReceiver,
+    UnboundedReceiver as TokioUnboundedReceiver,
+    error::TryRecvError,
+};
+// CRITICAL FIX: The imported type for AnimationUpdate is now at the crate root
+use ssxl_shared::AnimationUpdate; 
+// FIX 1: The correct GenerationMessage location (from prior fix)
+use ssxl_shared::message::generation_message::GenerationMessage; 
+
+const MAX_GEN_MSGS: usize = 64;
+const MAX_ANIM_MSGS: usize = 2048;
+
+// CRITICAL FIX 4: Update the type alias to use the crate root path for AnimationUpdate
+pub type AnimationReceiver = TokioUnboundedReceiver<ssxl_shared::AnimationUpdate>;
+// CRITICAL FIX 5: Define the type alias for the Bounded Receiver to expect GenerationMessage
+pub type GenerationReceiver = TokioBoundedReceiver<GenerationMessage>;
+
+#[derive(Default)]
+pub struct AsyncPoller {
+    // Only animation uses unbounded — generation is bounded and handled via Conductor
+    // FIX 6: Add state for the Generation Receiver, using GenerationMessage
+    generation_rx: Option<GenerationReceiver>,
+    // FIX 7: Rename animation_rx for consistency with the new setter in init.rs
+    animation_rx: Option<AnimationReceiver>,
+}
+
+impl AsyncPoller {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // --- Animation Methods (Renamed for consistency with init.rs fix) ---
+
+    /// Setter matching the logic in init.rs
+    pub fn set_animation_rx(&mut self, rx: Option<AnimationReceiver>) {
+        // FIX 8: The 'take()' in init.rs already pulls the receiver out of an Option,
+        // so the setter must accept an Option<Receiver> for cases where the channel is uninitialized (None).
+        self.animation_rx = rx;
+    }
+
+    // --- Generation Methods (New) ---
+
+    /// Setter for the generation channel, matching the logic in init.rs
+    pub fn set_generation_rx(&mut self, rx: Option<GenerationReceiver>) {
+        // FIX 9: Set the generation receiver
+        self.generation_rx = rx;
+    }
+
+    pub fn clear_receivers(&mut self) {
+        // FIX 10: Clear both receivers
+        self.generation_rx = None;
+        self.animation_rx = None;
+    }
+
+    /// Poll all pending generation updates — safe to call every frame
+    pub fn poll_generation(&mut self) -> Vec<GenerationMessage> {
+        // CRITICAL FIX 11: Change return type and message type to GenerationMessage
+        let Some(mut rx) = self.generation_rx.take() else {
+            return Vec::new();
+        };
+
+        let mut updates = Vec::with_capacity(MAX_GEN_MSGS);
+
+        loop {
+            // NOTE: The tokio Bounded Receiver uses a different try_recv signature (TryRecvError)
+            match rx.try_recv() {
+                Ok(update) => updates.push(update),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    tracing::error!("Generation channel disconnected!");
+                    break;
+                }
+            }
+
+            if updates.len() >= MAX_GEN_MSGS {
+                break;
+            }
+        }
+
+        self.generation_rx = Some(rx);
+        updates
+    }
+
+
+    /// Poll all pending animation updates — safe to call every frame
+    pub fn poll_animations(&mut self) -> Vec<AnimationUpdate> {
+        // FIX 12: Use the consistent name
+        let Some(mut rx) = self.animation_rx.take() else {
+            return Vec::new();
+        };
+
+        let mut updates = Vec::with_capacity(MAX_ANIM_MSGS.min(256));
+
+        loop {
+            match rx.try_recv() {
+                Ok(update) => updates.push(update),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    tracing::error!("Animation channel disconnected!");
+                    break;
+                }
+            }
+
+            if updates.len() >= MAX_ANIM_MSGS {
+                break;
+            }
+        }
+
+        // FIX 13: Use the consistent name
+        self.animation_rx = Some(rx);
+        updates
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\tilemap\async_poll.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\tilemap\mod.rs (7 LOC) <<<
+// ssxl_godot/src/tilemap/mod.rs 
+//
+// Parent module for all tilemap-related components.
+
+pub mod ssxl_tilemap; // Points to ssxl_godot/src/tilemap/ssxl_tilemap.rs
+
+// FIX: Declare sibling modules here if their source files are in the 'tilemap/' directory.
+pub mod async_poll;
+pub mod status_reporter;
+<<< FILE END: rust\ssxl_godot\src\tilemap\mod.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\tilemap\ssxl_tilemap.rs (85 LOC) <<<
+// ssxl_godot/src/tilemap/ssxl_tilemap.rs
+//
+// The final render sink.
+// Receives render batches from the async core.
+// Pure, fast, panic-safe, zero bloat.
+
+use godot::prelude::*;
+use godot::classes::{TileMap, ITileMap};
+use godot::obj::Base;
+// FIX: Removed unused import: `Vector2`
+use godot::builtin::{Vector2i, PackedVector2Array, PackedInt32Array};
+
+#[derive(GodotClass)]
+#[class(base = TileMap)]
+pub struct SSXLTilemap {
+    base: Base<TileMap>,
+
+    #[export]
+    tile_source_id: i32,
+}
+
+#[godot_api]
+impl ITileMap for SSXLTilemap {
+    fn init(base: Base<TileMap>) -> Self {
+        Self {
+            base,
+            tile_source_id: 1,
+        }
+    }
+}
+
+#[godot_api]
+impl SSXLTilemap {
+    /// Primary render entrypoint — called from Rust via signal
+    /// Expects the exact format from render_batch.rs
+    #[func]
+    pub fn batch_set_tiles(&mut self, batch: Dictionary) {
+        // FIX E0308: Convert Result<i64, ConvertError> to Option<i64> using `.ok()`
+        let Some(layer) = batch.get("layer").and_then(|v| v.try_to::<i64>().ok()) else {
+            godot_warn!("SSXLTilemap: missing or invalid 'layer'");
+            return;
+        };
+        let layer = layer as i32;
+
+        // FIX E0308: Convert inner Result to Option using `.ok()`
+        let positions = match batch.get("positions").and_then(|v| v.try_to::<PackedVector2Array>().ok()) {
+            Some(p) => p,
+            None => {
+                godot_warn!("SSXLTilemap: missing 'positions'");
+                return;
+            }
+        };
+
+        // FIX E0308: Convert inner Result to Option using `.ok()`
+        let atlas_coords = match batch.get("atlas_coords").and_then(|v| v.try_to::<PackedVector2Array>().ok()) {
+            Some(a) => a,
+            None => {
+                godot_warn!("SSXLTilemap: missing 'atlas_coords'");
+                return;
+            }
+        };
+
+        // FIX E0308: Convert inner Result to Option using `.ok()`
+        let alt_tiles = batch
+            .get("alt_tiles")
+            .and_then(|v| v.try_to::<PackedInt32Array>().ok())
+            .unwrap_or_default();
+
+        let source_id = self.tile_source_id;
+        let mut tilemap = self.base_mut();
+
+        tilemap.set_layer_enabled(layer, true);
+
+        let len = positions.len();
+        if len == 0 {
+            return;
+        }
+
+        for i in 0..len {
+            // FIX E0609: Unwrap the Option<Vector2> before accessing .x and .y fields.
+            let pos = positions.get(i).unwrap();
+            let atlas = atlas_coords.get(i).unwrap();
+            let alt = alt_tiles.get(i).unwrap_or(0);
+
+            // Note: pos and atlas coordinates come as Vector2 (f32 fields), but they represent integer tile coordinates.
+            // Casting to i32 is appropriate here.
+            let cell = Vector2i::new(pos.x as i32, pos.y as i32);
+            let atlas = Vector2i::new(atlas.x as i32, atlas.y as i32);
+
+            tilemap
+                .set_cell_ex(layer, cell)
+                .source_id(source_id)
+                .atlas_coords(atlas)
+                .alternative_tile(alt)
+                .done();
+        }
+
+        godot_print!("SSXLTilemap: Rendered {len} tiles on layer {layer}");
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\tilemap\ssxl_tilemap.rs >>>
+
+>>> FILE START: rust\ssxl_godot\src\tilemap\status_reporter.rs (63 LOC) <<<
+use godot::prelude::GString;
+// FIX: Change import path from conductor_state::ConductorState to conductor::ConductorState
+// Assuming the ConductorState type is exported via the 'conductor' module in ssxl_generate.
+use ssxl_generate::conductor::ConductorState;
+use ssxl_shared::AnimationState;
+
+/// # StatusReporter
+/// 
+/// A stateless utility struct responsible for querying the various core states
+/// (Generation, Animation) and compiling human-readable status reports
+/// for the Godot scripting layer.
+pub struct StatusReporter;
+
+impl StatusReporter {
+    /// Constructs a new, human-readable status string combining the state of
+    /// the Generation and Animation cores.
+    /// 
+    /// This removes complex string formatting logic from SSXLEngine.
+    /// 
+    /// # Arguments
+    /// * `gen_state` - Read-only reference to the Generation process state.
+    /// * `anim_state` - Read-only reference to the Animation process state.
+    /// 
+    /// # Returns
+    /// A Godot `GString` containing the formatted status message.
+    pub fn get_status_report(
+        gen_state: Option<&ConductorState>,
+        anim_state: Option<&AnimationState>,
+    ) -> GString {
+        let gen_status = gen_state
+            // This line is assumed correct for ConductorState
+            .map(|state| format!("{:?}", state.get_status()))
+            .unwrap_or_else(|| String::from("Uninitialized"));
+
+        let anim_status = anim_state
+            .map(|state| {
+                // FIX: AnimationState does not have a get_status() method.
+                // We derive the status from the publicly available `time_scale` field.
+                if state.time_scale > 0.0 {
+                    format!("Running (Scale: {:.2}x)", state.time_scale)
+                } else if state.time_scale == 0.0 {
+                    String::from("Stopped")
+                } else {
+                    // Handle negative or otherwise unexpected scales
+                    String::from("Error/Invalid Scale")
+                }
+            })
+            .unwrap_or_else(|| String::from("Uninitialized"));
+
+        let status = format!(
+            "STATUS: Generation: {} | Animation: {}", 
+            gen_status, 
+            anim_status
+        );
+
+        GString::from(status.as_str())
+    }
+
+    /// Retrieves the total number of tiles placed by the engine during generation.
+    /// 
+    /// # Arguments
+    /// * `gen_state` - Read-only reference to the Generation process state.
+    pub fn get_current_tile_count_value(gen_state: Option<&ConductorState>) -> u64 {
+        gen_state
+            .map(|state| state.get_tiles_placed())
+            // Fails gracefully to 0 if the core is not yet initialized.
+            .unwrap_or(0)
+    }
+}
+<<< FILE END: rust\ssxl_godot\src\tilemap\status_reporter.rs >>>
+

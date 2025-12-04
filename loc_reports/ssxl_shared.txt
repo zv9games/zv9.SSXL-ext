@@ -1,0 +1,1157 @@
+﻿>>> FILE START: rust\ssxl_shared\cargo.toml (15 LOC) <<<
+[package]
+name = "ssxl_shared"
+version = "0.6.0" # Standardized version number
+edition = "2021"
+
+[dependencies]
+ssxl_math = { path = "../ssxl_math" }
+# Internal dependencies (Local Crates)
+serde       = { workspace = true }
+serde-big-array  = { workspace = true }
+bincode     = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+
+# External dependency (Workspace-Inherited)
+tracing     = { workspace = true }
+
+<<< FILE END: rust\ssxl_shared\cargo.toml >>>
+
+>>> FILE START: rust\ssxl_shared\src\lib.rs (54 LOC) <<<
+use serde::{Deserialize, Serialize};
+use tracing;
+
+pub mod chunk;
+pub mod tile;
+pub mod error;
+pub mod config;
+pub mod message;
+pub mod math;
+pub mod job;
+
+pub use config::config::{get_config_from_path, SSXLConfig}; // ADDED: Re-exporting Config access
+pub use ssxl_math::primitives::{ChunkId, TileCoord};
+
+pub use chunk::chunk_data::{ChunkData, CHUNK_SIZE};
+pub use tile::tile_data::TileData;
+pub use chunk::grid_bounds::GridBounds;
+pub use tile::tile_type::TileType;
+
+pub use message::messages::{
+    AnimationCommand,
+    AnimationType,
+    AnimationPayload,
+    UpdateSender,
+    AnimationConductorHandle,
+    AnimationState,
+    CommandResult,
+    AnimationUpdate,
+};
+
+pub use error::errors::{SSXLError, SSXLResult};
+pub use anyhow;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SSXLData {
+    pub id: u64,
+    pub timestamp: u64,
+    pub value: String,
+}
+
+pub fn initialize_shared_data() {
+    tracing::info!("SSXL Shared Data Primitives initialized (Priority 1 complete).");
+}
+
+pub mod prelude {
+    pub use super::chunk::chunk_data::{ChunkData, CHUNK_SIZE};
+    pub use super::tile::tile_data::TileData;
+    pub use super::chunk::grid_bounds::GridBounds;
+    pub use super::tile::tile_type::TileType;
+    
+    pub use super::{ChunkId, TileCoord};
+    
+    pub use super::error::errors::{SSXLError, SSXLResult};
+    
+    // UPDATED: Added AnimationState to the prelude
+    pub use super::message::messages::{AnimationCommand, AnimationType, AnimationState};
+    pub use super::message::messages::AnimationUpdate;
+
+    // ADDED: Adding SSXLConfig to the prelude for easy access
+    pub use super::config::config::SSXLConfig;
+}
+
+use std::sync::atomic::AtomicUsize;
+
+pub static CHUNKS_COMPLETED_COUNT: AtomicUsize = AtomicUsize::new(0);
+<<< FILE END: rust\ssxl_shared\src\lib.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\chunk\chunk_data.rs (258 LOC) <<<
+// ssxl_shared/src/chunk/chunk_data.rs
+
+//! # Chunk Data Structures (`ssxl_shared::chunk::chunk_data`)
+//!
+//! This module defines the `ChunkData` structure, which represents a single,
+//! fixed-size block of the procedural world. It includes coordinates, bounds,
+//! the array of tiles, and metadata about its generation. This is the atomic
+//! unit of data shared between generation workers and the cache/Godot runtime,
+//! forming the basis of the engine's "crypto coded memory."
+
+use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
+use std::convert::TryInto;
+// NEW: For faster assignment of large arrays (ptr::write).
+use std::ptr; 
+
+// --- FIXES APPLIED HERE ---
+use super::grid_bounds::GridBounds;
+use crate::tile::tile_data::TileData; 
+use crate::math::math_primitives; 
+
+use ssxl_math::prelude::Vec2i;
+use serde_big_array::BigArray;
+
+// --- Constants ---
+
+/// The canonical side length of a chunk (e.g., 32x32 tiles), defined as a public constant.
+pub const CHUNK_SIZE: u32 = 32;
+
+/// The total number of tiles in a single chunk (32 * 32 = 1024).
+const TILE_ARRAY_SIZE: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
+
+
+// --- Coordinate Structure ---
+
+/// Defines the **chunk-space** coordinates (e.g., Chunk [1, 5] on the world grid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ChunkCoords {
+    pub x: i64,
+    pub y: i64,
+}
+
+
+// --- Core Data Structure ---
+
+/// The central data structure for a world chunk. This is the primary payload
+/// for procedural generation tasks and caching.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkData {
+    /// A unique, deterministic identifier for this chunk.
+    pub id: u64,
+    /// The world-space bounding box of the chunk, using the half-open range convention.
+    pub bounds: GridBounds,
+    /// The fixed-size array containing all tiles within the chunk.
+    #[serde(with = "BigArray")]
+    pub tiles: [TileData; TILE_ARRAY_SIZE],
+    /// A string tag identifying the dimension or layer this chunk belongs to.
+    pub dimension_tag: String,
+    /// Timestamp indicating when the chunk was generated (serialized deterministically).
+    #[serde(with = "math_primitives::system_time_serde")]
+    pub generated_at: SystemTime,
+}
+
+
+impl ChunkData {
+    /// Re-export of the canonical chunk size as an associated constant for use in methods.
+    pub const SIZE: u32 = CHUNK_SIZE;
+
+    /// Creates a new `ChunkData` instance using explicit, pre-calculated parameters.
+    pub fn new(id: u64, bounds: GridBounds, dimension_tag: String) -> Self {
+        // Initialize the tile array with default (empty) TileData.
+        let tiles = [TileData::default(); TILE_ARRAY_SIZE];
+        ChunkData {
+            id,
+            bounds,
+            tiles,
+            dimension_tag,
+            generated_at: SystemTime::now(),
+        }
+    }
+    
+    /// Creates a new `ChunkData` instance by calculating its bounds and generating
+    /// an initial ID based solely on its chunk coordinates.
+    pub fn new_at_coords(chunk_coords: Vec2i) -> Self {
+        let chunk_size_i64 = Self::SIZE as i64;
+        
+        // 1. Calculate the world-space minimum coordinates (inclusive).
+        let min_x = chunk_coords.x * chunk_size_i64;
+        let min_y = chunk_coords.y * chunk_size_i64;
+        
+        // 2. Calculate the world-space maximum coordinates (exclusive, half-open range).
+        let max_x = min_x + chunk_size_i64;
+        let max_y = min_y + chunk_size_i64;
+
+        let bounds = GridBounds::new(min_x, min_y, max_x, max_y);
+        
+        // 3. Generate a robust, collision-resistant ID.
+        let id = ChunkData::hash_coords_2d(chunk_coords.x, chunk_coords.y);
+        
+        let tiles = [TileData::default(); TILE_ARRAY_SIZE];
+
+        ChunkData {
+            id,
+            bounds,
+            tiles,
+            dimension_tag: "Default".to_string(),
+            generated_at: SystemTime::now(),
+        }
+    }
+
+    /// Internal helper to map signed i64 to u64 for safe spatial indexing (e.g., Z-order curves).
+    /// This prevents massive u64 values for small negative i64 inputs.
+    /// Formula: (n << 1) ^ (n >> 63)
+    // OPTIMIZATION: const fn and inline hint for zero-cost hashing.
+    #[inline(always)]
+    pub const fn zigzag_encode(n: i64) -> u64 {
+        // We use the standard Zigzag formula to map all i64 values to unique u64 values,
+        // prioritizing small absolute values to the lowest u64 space.
+        ((n << 1) ^ (n >> 63)) as u64
+    }
+
+    /// Internal 2D coordinate hashing function, replacing the problematic FFI call.
+    /// Uses a **Zigzag-encoded** packing into a u64, which is fast, deterministic,
+    /// and ensures no collisions across the world origin.
+    // OPTIMIZATION: const fn and inline hint for zero-cost hashing.
+    #[inline(always)]
+    pub const fn hash_coords_2d(x: i64, y: i64) -> u64 {
+        let ux = Self::zigzag_encode(x);
+        let uy = Self::zigzag_encode(y);
+
+        // Pack the two 32-bit halves. This is standard 2D packing for chunk keys.
+        ux | (uy << 32)
+    }
+    
+    /// Internal helper to convert local tile coordinates (x, y) within the chunk
+    /// into a flat array index. Includes a bounds check, returning `None` on failure.
+    #[inline(always)]
+    fn coord_to_index_checked(x: u32, y: u32) -> Option<usize> {
+        if x < Self::SIZE && y < Self::SIZE {
+            // Index = Y * Width + X (standard row-major order)
+            Some((y * Self::SIZE + x) as usize)
+        } else {
+            None
+        }
+    }
+
+    /// Internal helper to convert local tile coordinates (x, y) within the chunk
+    /// into a flat array index, **without** bounds checking.
+    ///
+    /// # Safety
+    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
+    #[inline(always)]
+    pub const fn coord_to_index_unchecked(x: u32, y: u32) -> usize {
+        // Index = Y * Width + X (standard row-major order)
+        (y * Self::SIZE + x) as usize
+    }
+
+    /// Safely retrieves an immutable reference to a tile at the given local coordinates.
+    pub fn get_tile(&self, x: u32, y: u32) -> Option<&TileData> {
+        Self::coord_to_index_checked(x, y).map(|index| {
+            // SAFETY: index is guaranteed to be within array bounds by coord_to_index_checked
+            &self.tiles[index]
+        })
+    }
+    
+    /// **FAST PATH:** Retrieves an immutable reference to a tile at the given local coordinates,
+    /// **without bounds checking**.
+    ///
+    /// # Safety
+    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
+    // OPTIMIZATION: Fastest tile access method for performance-critical inner loops.
+    #[inline(always)]
+    pub unsafe fn get_tile_unchecked(&self, x: u32, y: u32) -> &TileData {
+        let index = Self::coord_to_index_unchecked(x, y);
+        // SAFETY: The caller guarantees the index is valid.
+        &self.tiles[index]
+    }
+    
+    /// Inserts a fully generated vector of tiles into the chunk's internal array.
+    ///
+    /// # Panics
+    /// Panics if the input vector's length does not exactly match the expected
+    /// `TILE_ARRAY_SIZE`, which is a critical **data integrity** check.
+    pub fn insert_tiles(&mut self, tiles_vec: Vec<TileData>) {
+        // Use TryInto to consume the Vec, which is more idiomatic and clear for ownership transfer.
+        match tiles_vec.try_into() {
+            Ok(arr) => {
+                // OPTIMIZATION: Use ptr::write for a non-initializing move of the array contents
+                // This is generally faster than a regular assignment for large arrays.
+                unsafe { ptr::write(&mut self.tiles, arr) };
+            }
+            Err(vec) => {
+                // Critical error: A generator produced an incomplete or oversized chunk.
+                panic!(
+                    "Tile vector size mismatch for chunk {:?}. Generator returned {} tiles, but expected {}.",
+                    self.bounds,
+                    vec.len(),
+                    TILE_ARRAY_SIZE
+                );
+            }
+        }
+    }
+    
+    /// Safely retrieves a mutable reference to a tile at the given local coordinates.
+    pub fn get_tile_mut(&mut self, x: u32, y: u32) -> Option<&mut TileData> {
+        Self::coord_to_index_checked(x, y).map(|index| {
+            // SAFETY: index is guaranteed to be within array bounds by coord_to_index_checked
+            &mut self.tiles[index]
+        })
+    }
+
+    /// **FAST PATH:** Retrieves a mutable reference to a tile at the given local coordinates,
+    /// **without bounds checking**.
+    ///
+    /// # Safety
+    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
+    // OPTIMIZATION: Fastest mutable tile access method for performance-critical inner loops.
+    #[inline(always)]
+    pub unsafe fn get_tile_mut_unchecked(&mut self, x: u32, y: u32) -> &mut TileData {
+        let index = Self::coord_to_index_unchecked(x, y);
+        // SAFETY: The caller guarantees the index is valid.
+        &mut self.tiles[index]
+    }
+}
+
+
+// --- Unit Tests ---
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Assuming TileData is available via `crate::tile::tile_data::TileData`
+    
+    #[test]
+    /// Tests the critical coordinate-to-index logic for boundaries and center.
+    fn test_coord_to_index() {
+        // Test Checked version
+        // Top-left corner
+        assert_eq!(ChunkData::coord_to_index_checked(0, 0), Some(0));
+
+        // Center (16, 16) -> 16 * 32 + 16 = 528
+        assert_eq!(ChunkData::coord_to_index_checked(16, 16), Some(528));
+
+        // Bottom-right corner (31, 31) -> 31 * 32 + 31 = 1023 (TILE_ARRAY_SIZE - 1)
+        assert_eq!(ChunkData::coord_to_index_checked(31, 31), Some(1023));
+
+        // Out of bounds checks (32 is the exclusive size limit)
+        assert_eq!(ChunkData::coord_to_index_checked(32, 0), None);
+        assert_eq!(ChunkData::coord_to_index_checked(0, 32), None);
+        assert_eq!(ChunkData::coord_to_index_checked(33, 33), None);
+        
+        // Test Unchecked version (only for known good coordinates)
+        assert_eq!(ChunkData::coord_to_index_unchecked(0, 0), 0);
+        assert_eq!(ChunkData::coord_to_index_unchecked(31, 31), 1023);
+    }
+    
+    #[test]
+    /// Tests the Zigzag encoding for correct mapping of signed to unsigned space.
+    fn test_zigzag_encode() {
+        assert_eq!(ChunkData::zigzag_encode(0), 0);
+        assert_eq!(ChunkData::zigzag_encode(-1), 1);
+        assert_eq!(ChunkData::zigzag_encode(1), 2);
+        assert_eq!(ChunkData::zigzag_encode(-2), 3);
+        assert_eq!(ChunkData::zigzag_encode(2), 4);
+    }
+
+    #[test]
+    /// Tests the new 2D hashing function for uniqueness across the origin.
+    fn test_hash_coords_2d() {
+        // Standard coordinates
+        // (1, 0) -> (Zigzag(1)=2 | Zigzag(0)=0 << 32) = 2
+        assert_eq!(ChunkData::hash_coords_2d(1, 0), 2);
+        // (0, 1) -> (Zigzag(0)=0 | Zigzag(1)=2 << 32) = 8589934592 (2 * 2^32)
+        assert_eq!(ChunkData::hash_coords_2d(0, 1), 8589934592);
+        
+        // Critical Negative Coordinate Check (was broken before)
+        // (-1, 0) -> (Zigzag(-1)=1 | Zigzag(0)=0 << 32) = 1
+        assert_eq!(ChunkData::hash_coords_2d(-1, 0), 1);
+        
+        // Collision check across the origin must pass
+        assert_ne!(ChunkData::hash_coords_2d(1, 1), ChunkData::hash_coords_2d(-1, -1));
+        
+        // Large coordinates (to ensure all 64 bits are used)
+        let big_x = i64::MAX / 2; // Large positive
+        let big_y = i64::MIN / 2; // Large negative
+        let hash1 = ChunkData::hash_coords_2d(big_x, big_y);
+        assert_ne!(hash1, 0);
+    }
+}
+<<< FILE END: rust\ssxl_shared\src\chunk\chunk_data.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\chunk\grid_bounds.rs (64 LOC) <<<
+// ssxl_shared/src/grid_bounds.rs
+
+//! # Grid Bounds Structures (`ssxl_shared::grid_bounds`)
+//!
+//! This module defines the core structures for representing 2D world-space points
+//! and rectangular bounding boxes (bounds) used throughout the SSXL-ext engine.
+
+use serde::{Deserialize, Serialize};
+
+// --- Coordinate Structure ---
+
+/// Represents a single 2D world-space coordinate point.
+///
+/// Uses `i64` to support the massive scale of the SSXL world coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Coord2D {
+    /// The X component of the coordinate.
+    pub x: i64,
+    /// The Y component of the coordinate.
+    pub y: i64,
+}
+
+// --- Bounding Box Structure ---
+
+/// Defines a rectangular region in the world by its minimum and maximum coordinate points.
+///
+/// **Convention:** `GridBounds` uses a **half-open range** (`[min, max)`), meaning
+/// the minimum coordinates are **inclusive** and the maximum coordinates are **exclusive**.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct GridBounds {
+    /// The inclusive minimum coordinate (e.g., the bottom-left point of the region).
+    pub min: Coord2D,
+    /// The exclusive maximum coordinate (one unit past the top-right point of the region).
+    pub max: Coord2D,
+}
+
+impl GridBounds {
+    /// Creates a new `GridBounds` instance from four explicit coordinate components.
+    pub fn new(min_x: i64, min_y: i64, max_x: i64, max_y: i64) -> Self {
+        GridBounds {
+            min: Coord2D { x: min_x, y: min_y },
+            max: Coord2D { x: max_x, y: max_y },
+        }
+    }
+
+    /// Calculates the size (width and height) of the bounds.
+    ///
+    /// For a half-open range, the size is simply `max - min`, which correctly
+    /// yields the number of unique integer coordinates contained within the bounds.
+    pub fn size(&self) -> Coord2D {
+        Coord2D {
+            x: self.max.x - self.min.x,
+            y: self.max.y - self.min.y,
+        }
+    }
+
+    /// Checks if a given coordinate is contained within the bounds.
+    ///
+    /// Follows the half-open range convention: `[min.x, max.x)` and `[min.y, max.y)`.
+    pub fn contains(&self, coord: Coord2D) -> bool {
+        coord.x >= self.min.x && coord.x < self.max.x &&
+        coord.y >= self.min.y && coord.y < self.max.y
+    }
+}
+
+impl Default for GridBounds {
+    /// Returns a default, zero-sized bounds at the origin (0, 0) to (0, 0).
+    fn default() -> Self {
+        GridBounds {
+            min: Coord2D { x: 0, y: 0 },
+            max: Coord2D { x: 0, y: 0 },
+        }
+    }
+}
+<<< FILE END: rust\ssxl_shared\src\chunk\grid_bounds.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\chunk\mod.rs (3 LOC) <<<
+// ssxl_shared/src/chunk/mod.rs
+
+pub mod chunk_data;
+pub mod grid_bounds;
+<<< FILE END: rust\ssxl_shared\src\chunk\mod.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\config\config.rs (71 LOC) <<<
+// FILE: ssxl_shared/src/config.rs
+
+//! # Global Configuration Constants (`ssxl_shared::config`)
+//!
+//! This module defines fundamental, immutable constants that govern the structure
+//! and scale of the SSXL procedural world. These values must be consistent
+//! across all SSXL-ext crates (math, generate, cache, godot) to ensure data
+//! integrity and system entropy is controlled.
+
+use tracing::{info, warn};
+use std::error::Error;
+use serde::{Deserialize, Serialize}; // Assume Serde is used for configuration loading
+
+// --- Config Struct Definition ---
+
+/// Structure holding all runtime configuration settings for the SSXL Engine.
+/// **NOTE:** This must be public to be used by other crates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SSXLConfig {
+    // Example field required by other code snippets (from new_with_defaults)
+    pub ca_default_ruleset: u8,
+    
+    // FIX 1: Add the required field for the default generator ID.
+    pub default_generator_id: String,
+}
+
+// --- World Geometry Constants ---
+
+/// The canonical side length of a procedural chunk in tiles.
+/// **Value:** 32 (meaning chunks are 32x32 tiles).
+pub const CHUNK_SIZE: u32 = 32;
+
+/// The total number of tiles contained within a single `ChunkData` structure.
+/// **Calculation:** CHUNK_SIZE * CHUNK_SIZE (32 * 32 = 1024).
+pub const TILE_ARRAY_SIZE: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
+
+// --- Loading Constants ---
+const DEFAULT_CONFIG_PATH: &str = "res://ssxl_config.json";
+
+impl SSXLConfig {
+    /// Creates a safe, hardcoded default configuration.
+    pub fn new_with_defaults() -> Self {
+        SSXLConfig {
+            ca_default_ruleset: 1, // Default CA ruleset ID
+            
+            // FIX 2: Initialize the new field.
+            default_generator_id: "default_noise_gen".to_string(), 
+        }
+    }
+
+    /// Internal method to attempt loading config from a file path.
+    /// Returns `Ok(Self)` or an `Err` on failure. (Placeholder implementation).
+    pub fn load_from_path(_path: &str) -> Result<Self, Box<dyn Error>> {
+        // In a real application, this would handle file I/O and deserialization.
+        // For now, we simulate success with defaults.
+        Ok(SSXLConfig::new_with_defaults())
+    }
+    
+    // FIX 3: Add the missing accessor method to resolve E0599.
+    /// Returns the configured default Generator ID.
+    pub fn default_generator_id(&self) -> String {
+        self.default_generator_id.clone()
+    }
+}
+
+
+/// Attempts to load the configuration from the specified path.
+///
+/// **FIX:** This function is defined publicly here, resolving `E0425` in `api_initializers.rs`.
+pub fn get_config_from_path(path: Option<&str>) -> SSXLConfig {
+    let path_to_load = path.unwrap_or(DEFAULT_CONFIG_PATH);
+
+    match SSXLConfig::load_from_path(path_to_load) {
+        Ok(config) => {
+            info!("SSXLConfig loaded from path: {}", path_to_load);
+            config
+        },
+        Err(e) => {
+            // Safe fallback: Logs failure but ensures the engine initializes with defaults.
+            warn!("Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.", path_to_load, e);
+            SSXLConfig::new_with_defaults()
+        }
+    }
+}
+<<< FILE END: rust\ssxl_shared\src\config\config.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\config\mod.rs (2 LOC) <<<
+// ssxl_shared/src/config/mod.rs
+
+pub mod config;
+<<< FILE END: rust\ssxl_shared\src\config\mod.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\error\errors.rs (60 LOC) <<<
+// ssxl_shared/src/errors.rs
+
+//! # SSXL Error Definitions (`ssxl_shared::errors`)
+//!
+//! This module defines the global, canonical error type for the entire SSXL-ext
+//! procedural generation engine. Centralizing error handling ensures that failures
+//! across different crates (math, generate, cache, godot) can be consistently
+//! reported, managed, and debugged, particularly across FFI boundaries.
+
+use thiserror::Error;
+
+/// A specialized `Result` type for the SSXL-ext project.
+///
+/// All function calls that can fail within the SSXL ecosystem should return this
+/// type, wrapping the concrete `SSXLError` enum.
+pub type SSXLResult<T> = Result<T, SSXLError>;
+
+/// The comprehensive enumeration of all possible errors within the SSXL-ext engine.
+#[derive(Error, Debug)]
+pub enum SSXLError {
+    /// Wrapper for standard I/O errors (e.g., file system access, network issues).
+    /// This variant automatically handles conversion from `std::io::Error`.
+    #[error("I/O Error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Errors encountered during data serialization (e.g., using Bincode or Serde).
+    /// Indicates problems with converting data to or from a byte stream.
+    #[error("Serialization/Data Error: {0}")]
+    Serialization(String),
+
+    /// Errors related to unexpected or invalid data states, such as a generator
+    /// returning a tile array of the wrong size or an invalid chunk key.
+    #[error("Data Consistency Error: {0}")]
+    DataConsistency(String),
+
+    /// Errors specific to the procedural generation pipeline (e.g., a generator
+    /// failing to find a valid output after too many iterations).
+    #[error("Generation Failure: {0}")]
+    GenerationPipeline(String),
+
+    /// Errors occurring in the Godot GDExtension bridge or FFI layer.
+    /// Crucial for debugging communication issues between Rust and the Godot runtime.
+    #[error("Interface Bridge Error: {0}")]
+    InterfaceBridge(String),
+
+    /// A critical, unexpected error indicating a bug in the core logic that
+    /// should never occur under normal execution (a **"BUG!"**).
+    #[error("Mythic Core Logic Failure (BUG!): {0}")]
+    CoreLogicBug(String),
+
+    /// Generic wrapper for errors originating from third-party libraries or crates
+    /// that are not covered by other specific variants.
+    #[error("External Crate Error: {0}")]
+    External(String),
+}
+
+
+// --- Error Conversion Implementations ---
+
+/// Implements conversion from the `bincode::Error` type into the SSXL `Serialization` error.
+impl From<bincode::Error> for SSXLError {
+    fn from(err: bincode::Error) -> Self {
+        SSXLError::Serialization(format!("Bincode failure: {}", err))
+    }
+}
+
+/// Implements conversion from the generic `anyhow::Error` type into the SSXL `External` error.
+/// This provides a convenient way to integrate external library errors into the SSXL system.
+impl From<anyhow::Error> for SSXLError {
+    fn from(err: anyhow::Error) -> Self {
+        // Use the debug message of the anyhow error to retain the source chain.
+        SSXLError::External(format!("General anyhow error: {:?}", err))
+    }
+}
+<<< FILE END: rust\ssxl_shared\src\error\errors.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\error\mod.rs (2 LOC) <<<
+// ssxl_shared/src/error/mod.rs
+
+pub mod errors;
+<<< FILE END: rust\ssxl_shared\src\error\mod.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\job\mod.rs (40 LOC) <<<
+// File: ssxl_shared/src/job/mod.rs (Optimized Imports)
+
+// FIX: Removed unused imports: `ChunkId` and `std::fmt::Display`.
+use crate::ChunkData; // Import public re-exports from lib.rs
+
+// --- The Instruction Packet ---
+pub enum SSXLJob {
+    /// Command to initialize map generation.
+    BuildMap {
+        width: u32,
+        height: u32,
+        seed: u64, // Use parsed seed
+        // FIX: Replaced unknown GString with standard String
+        generator_id: String
+    },
+    /// Command to change the active generator configuration.
+    SetGenerator {
+        // FIX: Replaced unknown GString with standard String
+        generator_id: String
+    },
+    /// Command to stop all running and pending jobs.
+    StopGeneration,
+    // ...
+}
+
+// --- The Result Packet (Sent back to the Engine::tick) ---
+// FIX: Renamed to JobResult to avoid collision with SSXLResult alias
+pub enum JobResult {
+    /// A chunk has been successfully generated and is ready for world state update.
+    ChunkGenerated {
+        // NOTE: x/y coordinates are often implicitly contained in ChunkData's bounds,
+        // but keeping them here for explicit communication.
+        x: i32,
+        y: i32,
+        // FIX: ChunkData is now imported and recognized
+        data: ChunkData
+    },
+    /// The BuildMap job is finished.
+    MapBuildComplete,
+    /// An error occurred during processing.
+    // FIX: Replaced unknown GString with standard String
+    Error(String),
+}
+<<< FILE END: rust\ssxl_shared\src\job\mod.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\math\math_primitives.rs (41 LOC) <<<
+// ssxl_shared/src/math_primitives.rs
+
+//! # Math Primitives & Serde Helpers (`ssxl_shared::math_primitives`)
+//!
+//! This module contains custom logic, primarily Serde serialization/deserialization
+//! functions, for mathematical or standard library types that require specific,
+//! deterministic formatting (e.g., `SystemTime`) for cross-platform compatibility
+//! and persistent caching.
+
+use std::time::{SystemTime, UNIX_EPOCH};
+use serde::{Serializer, Deserializer, Deserialize};
+
+
+/// Serde serialization/deserialization helper for `std::time::SystemTime`.
+///
+/// This custom serializer converts `SystemTime` to and from a `u64` representing
+/// the time in milliseconds since the Unix epoch (1970-01-01). This guarantees
+/// a **deterministic, platform-independent** representation for caching and networking.
+pub mod system_time_serde {
+    use super::*;
+
+    /// Serializes a `SystemTime` into a `u64` representing milliseconds since epoch.
+    /// This is used by Serde when writing data (e.g., saving a `ChunkData` to cache).
+    pub fn serialize<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Calculate the duration from the UNIX_EPOCH to the current time.
+        let duration = time.duration_since(UNIX_EPOCH).map_err(serde::ser::Error::custom)?;
+        // Convert the duration to milliseconds (u64) to ensure a stable format.
+        let ms = duration.as_millis() as u64;
+        // Serialize the u64 millisecond count.
+        serializer.serialize_u64(ms)
+    }
+
+    /// Deserializes a `u64` (milliseconds since epoch) back into a `SystemTime`.
+    /// This is used by Serde when reading data (e.g., loading a `ChunkData` from cache).
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Deserialize the u64 millisecond count.
+        let ms = u64::deserialize(deserializer)?;
+        // Convert the millisecond count into a Duration, then add it to UNIX_EPOCH.
+        Ok(UNIX_EPOCH + std::time::Duration::from_millis(ms))
+    }
+}
+<<< FILE END: rust\ssxl_shared\src\math\math_primitives.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\math\mod.rs (2 LOC) <<<
+// ssxl_shared/src/math/mod.rs
+
+pub mod math_primitives;
+<<< FILE END: rust\ssxl_shared\src\math\mod.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\message\generation_message.rs (37 LOC) <<<
+// ssxl_shared/src/message/generation_message.rs (Fixed Imports & Variants)
+
+//! # Generation Messaging (`ssxl_shared::message::generation_message`)
+
+use crate::chunk::chunk_data::ChunkData;
+use ssxl_math::prelude::Vec2i;
+use std::sync::Arc;
+// FIX 1: Import the serialization traits from serde.
+use serde::{Serialize, Deserialize};
+
+
+// --- Work Request Structure ---
+
+/// Defines a single unit of work (a task) to be processed by a worker thread.
+///
+/// This structure is put into the engine's `TaskQueue` by the `Conductor`.
+// FIX 2: Add Serialize and Deserialize derives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationTask {
+    /// The chunk-space coordinates of the chunk that needs to be generated.
+    pub chunk_coords: Vec2i,
+    /// The unique identifier of the generator to be used for this task (e.g., "cellular_automata").
+    pub generator_id: String,
+}
+
+
+// --- Communication Message Enumeration ---
+
+/// An enumeration of messages sent from the worker threads back to the
+/// main thread or the Conductor to signal task completion or pipeline status.
+// FIX 3: Add Serialize and Deserialize derives.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum GenerationMessage {
+    /// Signals that a chunk has been successfully generated.
+    ///
+    /// The payload includes the chunk coordinates (for tracking) and the
+    /// atomic reference-counted data.
+    Generated(Vec2i, Arc<ChunkData>),
+
+    /// Signals a change in the internal generation status or progress update.
+    StatusUpdate(String),
+
+    /// Signals that all current tasks related to a specific generation batch
+    /// or request have been finalized. Used by the `Conductor` to update
+    /// the generation state.
+    GenerationComplete,
+}
+<<< FILE END: rust\ssxl_shared\src\message\generation_message.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\message\messages.rs (60 LOC) <<<
+// FILE: ssxl_shared/src/message/messages.rs
+
+use tokio::sync::mpsc::UnboundedSender;
+use crate::{ChunkId, TileCoord};
+use serde::{Deserialize, Serialize};
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AnimationType {
+    TileFlip,
+    TweenMove,
+    PulseFade(f32),
+    CustomScripted(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AnimationPayload {
+    FrameUpdate { new_frame: u32 },
+    TweenValue { key: String, value: f32 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnimationUpdate {
+    pub coord: TileCoord,
+    pub payload: AnimationPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AnimationCommand {
+    AnimateChunkSet {
+        chunk_ids: Vec<ChunkId>,
+        anim_type: AnimationType,
+    },
+    StartTestAnimation,
+    SetTimeScale(f32),
+    SetEnabled(bool),
+    Shutdown,
+}
+
+pub type UpdateSender = UnboundedSender<AnimationUpdate>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GenerationCommand {
+    GenerateChunk { coords: TileCoord },
+    SetGenerator { id: String },
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+pub type AnimationConductorHandle = UnboundedSender<AnimationCommand>;
+
+pub type CommandResult = Result<(), String>;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct AnimationState {
+    pub time_scale: f32,
+    pub is_enabled: bool,
+}
+
+impl AnimationState {
+    pub fn set_time_scale(&mut self, scale: f32) {
+        self.time_scale = scale;
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.is_enabled = enabled;
+    }
+}
+
+pub use super::generation_message::GenerationMessage as ChunkMessage;
+<<< FILE END: rust\ssxl_shared\src\message\messages.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\message\mod.rs (15 LOC) <<<
+// FILE: ssxl_shared/src/message/mod.rs
+
+pub mod generation_message;
+pub mod messages;
+
+// FIX: Publicly re-export all necessary message and state types from the messages submodule.
+// This resolves the unresolved imports (E0432) in ssxl_godot/api_initializers.rs.
+pub use messages::{
+    // New re-exports to fix current error
+    AnimationCommand,
+    AnimationState,
+    
+    // Existing re-exports
+    AnimationUpdate,
+    GenerationCommand, 
+    GenerationResponse,
+};
+<<< FILE END: rust\ssxl_shared\src\message\mod.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\tile\mod.rs (3 LOC) <<<
+// ssxl_shared/src/tile/mod.rs
+
+pub mod tile_data;
+pub mod tile_type;
+<<< FILE END: rust\ssxl_shared\src\tile\mod.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\tile\tile_data.rs (108 LOC) <<<
+// ssxl_shared/src/tile/tile_data.rs
+
+//! # Tile Data Structures (`ssxl_shared::tile::tile_data`) 
+//!
+//! This module defines the `TileData` structure, which holds the minimal necessary
+//! information for a single tile in the procedural world. It also includes utility
+//! structures and bitmask constants (`tile_flags`) for efficient property management.
+//! The use of `Copy` and `u8` flags is key to maintaining the high-speed "Tempo"
+//! of the multi-threaded engine.
+
+use super::tile_type::TileType;
+use serde::{Deserialize, Serialize};
+
+// Re-exports a core math primitive for use in related structures (e.g., AnimationUpdate).
+use ssxl_math::prelude::Vec2i;
+
+
+// --- Core Data Structure ---
+
+/// Represents the data payload for a single tile in a chunk.
+///
+/// Marked `Copy` for high performance, as tiles are frequently cloned/copied
+/// within generation and rendering loops.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TileData {
+    /// The material or type of tile (e.g., grass, rock, empty).
+    pub tile_type: TileType,
+    
+    /// The raw noise value (e.g., Perlin, Simplex) used to determine this tile's type.
+    /// This is crucial for seamless neighbor checks and debugging the procedural generation.
+    pub noise_value: f32,
+    
+    /// A compact bitfield storing up to 8 boolean properties about the tile.
+    pub flags: u8,
+}
+
+impl Default for TileData {
+    /// Returns the default state for a tile: `TileType::Void` with zero noise and no flags set.
+    // FIX: Removed `const` keyword to resolve error E0379 and E0015.
+    fn default() -> Self {
+        TileData {
+            tile_type: TileType::default(),
+            noise_value: 0.0,
+            flags: 0,
+        }
+    }
+}
+
+
+// --- Godot FFI Message Structure ---
+
+/// Data structure used specifically for communication between the Rust engine
+/// and the Godot runtime regarding tile animations.
+///
+/// This message is typically used by a dedicated rendering or animation system.
+#[derive(Debug, Clone, Serialize, Deserialize)] 
+pub struct AnimationUpdate {
+    /// The layer or dimension the tile belongs to.
+    pub layer: i32,
+    /// The source ID of the tile map or animation source.
+    pub source_id: i32,
+    /// The world coordinates of the tile to update.
+    pub tile_coords: Vec2i,
+    /// The new coordinates within the texture atlas for the tile's animation frame.
+    pub new_atlas_coords: Vec2i,
+}
+
+
+// --- Bitwise Flag Constants ---
+
+/// Bitmasks used to set, check, or clear properties in the `TileData::flags` field.
+/// This maximizes data density by storing 8 booleans in a single byte (`u8`).
+pub mod tile_flags {
+    /// Bit 0: Is the tile physically passable by entities? (e.g., air, water surface)
+    pub const IS_TRAVERSABLE: u8 = 0b0000_0001;
+    /// Bit 1: Is the tile currently visible/rendered by the client?
+    pub const IS_RENDERED:   u8 = 0b0000_0010;
+    /// Bit 2: Has this tile been manually changed post-generation by a player/editor?
+    pub const IS_MODIFIED:   u8 = 0b0000_0100;
+    /// Bit 3: Does this tile contain a gatherable resource or item?
+    pub const HAS_RESOURCE:    u8 = 0b0000_1000;
+    // Bits 4-7 are reserved for future properties.
+}
+
+
+impl TileData {
+    /// Creates a new `TileData` instance with specified type and noise value.
+    // FIX: Removed `const` keyword.
+    pub fn new(tile_type: TileType, noise_value: f32) -> Self {
+        TileData {
+            tile_type,
+            noise_value,
+            flags: 0, // Flags are initialized to zero (all false)
+        }
+    }
+
+    /// Checks if the tile is considered a "solid" block, typically used for collision.
+    // OPTIMIZATION: Force inlining this critical method.
+    #[inline(always)]
+    pub const fn is_solid(&self) -> bool {
+        // Relies on a method in TileType to define "solidity."
+        !self.tile_type.is_empty()
+    }
+    
+    /// Sets or clears a property using a predefined **flag mask** (e.g., `tile_flags::IS_TRAVERSABLE`).
+    // OPTIMIZATION: Force inlining this critical method.
+    #[inline(always)]
+    pub fn set_flag(&mut self, flag_mask: u8, value: bool) {
+        if value {
+            // Set the bit(s) (|= is bitwise OR assignment).
+            self.flags |= flag_mask;
+        } else {
+            // Clear the bit(s) (&! is bitwise AND with the inverted mask).
+            self.flags &= !flag_mask;
+        }
+    }
+
+    /// Checks the status of a property using a predefined **flag mask**.
+    // OPTIMIZATION: Force inlining this critical method.
+    #[inline(always)]
+    pub const fn has_flag(&self, flag_mask: u8) -> bool {
+        // Returns true if any of the bits in the mask are set in self.flags.
+        (self.flags & flag_mask) != 0
+    }
+}
+<<< FILE END: rust\ssxl_shared\src\tile\tile_data.rs >>>
+
+>>> FILE START: rust\ssxl_shared\src\tile\tile_type.rs (114 LOC) <<<
+// ssxl_shared/src/tile/tile_type.rs
+
+//! # Tile Type Enumeration (`ssxl_shared::tile::tile_type`)
+//!
+//! This module defines the canonical `TileType` enum, which identifies the material
+//! or nature of a single tile. It is a fundamental data structure shared across
+//! the entire SSXL-ext engine.
+//!
+//! **Critical Feature:** The use of `#[repr(u8)]` is a **memory optimization**
+//! that guarantees the enum is stored as a single byte, drastically reducing the
+//! memory footprint of the massive `ChunkData` tile arrays.
+
+use serde::{Deserialize, Serialize};
+
+/// Enumeration of all primary tile materials available in the procedural world.
+///
+/// Ensures strict memory layout as a single byte for efficiency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)] 
+pub enum TileType {
+    /// The default, empty state (e.g., air or background).
+    Void = 0,
+    /// A fluid, typically used for rivers, oceans, or lower areas.
+    Water = 1,
+    /// Base terrain, usually flat and traversable.
+    Grass = 2,
+    /// Elevated terrain, potentially difficult to traverse.
+    Mountain = 3,
+    /// An artificial boundary used to cap chunk edges or isolate generation regions.
+    Boundary = 4,
+    /// An engineered or placed structure (e.g., a ruin, road, or wall).
+    Structure = 5,
+    /// A solid, rocky, non-soil terrain type.
+    Rock = 6,
+    /// Reserved for generator-specific customization or future expansion.
+    Custom1 = 7,
+    /// Reserved for generator-specific customization or future expansion.
+    Custom2 = 8,
+    // Maximum defined variant value is 8.
+}
+
+// Constant to define the maximum valid u8 value for TileType.
+pub const MAX_TILE_TYPE_VALUE: u8 = 8;
+
+
+impl Default for TileType {
+    /// The default state of a tile is always `TileType::Void` (empty).
+    // FIX: Removed `const` keyword to resolve error E0379.
+    fn default() -> Self {
+        TileType::Void
+    }
+}
+
+impl TileType {
+    /// Converts the `TileType` instance into its underlying `u8` representation.
+    // OPTIMIZATION: Added inline hint and const fn for zero-cost conversion.
+    #[inline(always)] 
+    pub const fn to_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Attempts to convert a raw `u8` value back into a `TileType`.
+    ///
+    /// Returns `None` if the input value does not correspond to a defined variant,
+    /// ensuring safe deserialization.
+    // OPTIMIZATION: Replaced verbose match with range check and unsafe transmute for zero-cost speed.
+    #[inline(always)]
+    pub fn from_u8(value: u8) -> Option<Self> {
+        if value <= MAX_TILE_TYPE_VALUE {
+            // SAFETY: We check that the value is within the contiguous range [0, 8]
+            // of the #[repr(u8)] enum. This is a common pattern for fast enum conversion.
+            Some(unsafe { std::mem::transmute(value) })
+        } else {
+            None
+        }
+    }
+    
+    /// Provides a simple, default unique ID for this tile type (equal to its u8 value).
+    #[inline(always)]
+    pub const fn get_default_tile_id(self) -> u16 {
+        self.to_u8() as u16
+    }
+
+    /// Provides default atlas coordinates (X, Y) for initial rendering/visual representation.
+    ///
+    /// This is a common lookup function used by the rendering component (`ssxl_godot`).
+    #[inline(always)]
+    pub const fn get_default_atlas_coords(self) -> (u16, u16) {
+        match self {
+            // All default tiles are expected to be on the first row (Y=0) of the atlas.
+            TileType::Water    => (1, 0),
+            TileType::Grass    => (2, 0),
+            TileType::Mountain => (3, 0),
+            TileType::Boundary => (4, 0),
+            TileType::Structure=> (5, 0),
+            TileType::Rock     => (6, 0),
+            // Void and unspecified types default to the origin (0, 0).
+            _ => (0, 0), 
+        }
+    }
+}
+
+
+impl TileType {
+    /// Checks if the tile type is one that a character can typically traverse (walk on).
+    #[inline(always)]
+    pub const fn is_walkable(self) -> bool {
+        matches!(self, 
+            TileType::Grass 
+            | TileType::Mountain 
+            | TileType::Structure 
+            | TileType::Rock
+        )
+    }
+
+    /// Checks if the tile type is considered a fluid (e.g., for flow/buoyancy simulation).
+    #[inline(always)]
+    pub const fn is_fluid(self) -> bool {
+        matches!(self, TileType::Water)
+    }
+
+    /// Checks if the tile is empty (the default/void state).
+    #[inline(always)]
+    pub const fn is_empty(self) -> bool {
+        matches!(self, TileType::Void)
+    }
+}
+<<< FILE END: rust\ssxl_shared\src\tile\tile_type.rs >>>
+

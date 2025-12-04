@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 // --- Imports from sibling crates/modules ---
 // NOTE: Imports from ssxl_generate removed to avoid cyclical dependency.
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 // FIX: Import ChunkData directly from the root of ssxl_shared to resolve both E0433 errors.
 use ssxl_shared::ChunkData; 
 

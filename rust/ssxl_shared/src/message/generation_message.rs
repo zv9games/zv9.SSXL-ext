@@ -1,18 +1,12 @@
 // ssxl_shared/src/message/generation_message.rs (Fixed Imports & Variants)
 
 //! # Generation Messaging (`ssxl_shared::message::generation_message`)
-//!
-//! This module defines the structures and enumerations used for communication
-//! between the main **Conductor** thread and the asynchronous **Worker Threads**
-//! (managed by the `RuntimeManager` in the `ssxl_generate` crate).
-//!
-//! These structures manage the flow of work requests (`GenerationTask`) and
-//! completed results (`GenerationMessage`).
 
-// FIX: Update the path from crate::chunk_data to the new subdirectory path.
 use crate::chunk::chunk_data::ChunkData;
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 use std::sync::Arc;
+// FIX 1: Import the serialization traits from serde.
+use serde::{Serialize, Deserialize};
 
 
 // --- Work Request Structure ---
@@ -20,7 +14,8 @@ use std::sync::Arc;
 /// Defines a single unit of work (a task) to be processed by a worker thread.
 ///
 /// This structure is put into the engine's `TaskQueue` by the `Conductor`.
-#[derive(Debug, Clone)]
+// FIX 2: Add Serialize and Deserialize derives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationTask {
     /// The chunk-space coordinates of the chunk that needs to be generated.
     pub chunk_coords: Vec2i,
@@ -33,19 +28,15 @@ pub struct GenerationTask {
 
 /// An enumeration of messages sent from the worker threads back to the
 /// main thread or the Conductor to signal task completion or pipeline status.
-#[derive(Debug)]
+// FIX 3: Add Serialize and Deserialize derives.
+#[derive(Debug, Serialize, Deserialize)]
 pub enum GenerationMessage {
-    // FIX 1: Renamed from `ChunkGenerated` to `Generated` to match the name 
-    // expected by `ssxl_godot/src/engine/tick.rs`.
-    // FIX 3: Re-introducing the `Vec2i` coordinate to match the 
-    // previous pattern expectation in `ssxl_generate/src/conductor/conductor.rs`.
     /// Signals that a chunk has been successfully generated.
     ///
     /// The payload includes the chunk coordinates (for tracking) and the
     /// atomic reference-counted data.
     Generated(Vec2i, Arc<ChunkData>),
 
-    // FIX 2: Added the missing `StatusUpdate` variant, which the Godot code requires.
     /// Signals a change in the internal generation status or progress update.
     StatusUpdate(String),
 

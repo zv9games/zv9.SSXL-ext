@@ -1,26 +1,18 @@
 // ssxl_generate/src/conductor/sync.rs
 
-//! Defines public type aliases for synchronization primitives used to communicate
-//! with the Conductor from external systems (like FFI wrappers).
-//!
-//! This module simplifies the public API by wrapping complex Tokio channel types.
-
-use tokio::sync::mpsc;
-// FIX: The path must now go through the 'task' module.
-use crate::task::task_queue::GenerationMessage; 
-// FIX: The path must now go through the 'task' module.
+// FIX: Removed unused import `self` from tokio::sync::mpsc
+use tokio::sync::mpsc::{Receiver, UnboundedSender};
+use crate::task::task_queue::GenerationMessage;
 use crate::task::task_queue::GenerationTask;
 
-// --- Public Synchronization Type Aliases ---
+pub type ConductorRequestSender = UnboundedSender<GenerationTask>;
 
-/// An unbounded sender for posting new chunk generation requests to the Conductor's task queue.
-///
-/// This is the primary input channel for the SSXL generation engine, allowing users to
-/// queue up work (`GenerationTask`) without blocking.
-pub type ConductorRequestSender = mpsc::UnboundedSender<GenerationTask>;
+pub struct ConductorProgressReceiver {
+    pub rx: Receiver<GenerationMessage>,
+}
 
-/// The receiver for all progress updates and completion messages from the Conductor.
-///
-/// This channel delivers structured updates (`GenerationMessage`) such as `ChunkGenerated`
-/// and `GenerationComplete` back to the external caller.
-pub type ConductorProgressReceiver = mpsc::Receiver<GenerationMessage>;
+impl ConductorProgressReceiver {
+    pub fn new(rx: Receiver<GenerationMessage>) -> Self {
+        ConductorProgressReceiver { rx }
+    }
+}

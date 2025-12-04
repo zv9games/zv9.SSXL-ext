@@ -1,0 +1,75 @@
+﻿>>> FILE START: rust\ssxl_config\src\config.rs (33 LOC) <<<
+// ssxl_config/src/config.rs (Final O(1) State)
+
+use serde::Deserialize;
+use std::sync::OnceLock;
+// Assumes 'info!' and 'warn!' are globally available macros or imports.
+
+// --- CONFIG STRUCTS (Zero Entropy Mapping) ---
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct SSXLConfig {
+    pub generation: GenerationConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct GenerationConfig {
+    pub default_generator_id: String,
+    pub ca_default_ruleset: u8, // Maps to 1
+}
+
+// --- O(1) STATE INJECTION ---
+
+static SSXL_CONFIG_STATE: OnceLock<SSXLConfig> = OnceLock::new();
+
+/// O(1) Accessor: Returns the global config.
+#[inline(always)]
+pub fn config() -> &'static SSXLConfig {
+    // Guarantees O(1) read time after initialization.
+    SSXL_CONFIG_STATE.get().expect("SSXLConfig uninitialized: Call init_config() first.")
+}
+
+impl SSXLConfig {
+    /// O(1) Accessor: Returns the configured default Cellular Automata ruleset ID.
+    #[inline(always)]
+    pub fn get_ca_default_ruleset(&self) -> u8 {
+        self.generation.ca_default_ruleset
+    }
+
+    // ... (Implement load_from_path and new_with_defaults here)
+    // ... (The previous load logic should be moved into an associated function)
+}
+
+// --- INITIALIZATION (O(N) One-Time Cost) ---
+// (Move the rest of the 'init_config' function logic here)
+<<< FILE END: rust\ssxl_config\src\config.rs >>>
+
+>>> FILE START: rust\ssxl_config\src\engine.toml (13 LOC) <<<
+# config/engine.toml
+
+# --- Core Engine Settings ---
+[engine]
+# Enables/disables advanced logging features (e.g., debug tracing)
+# logging_level = "info" # Example setting not in SSXLConfig, but common
+
+# --- Generation Defaults ---
+[generation]
+# The generator ID to use when no specific generator is requested by the FFI/CLI.
+# Options include "perlin_basic_2d", "cellular_automata_basic", etc.
+default_generator_id = "perlin_basic_2d"
+
+# The specific ruleset ID to use for the Cellular Automata generator (if selected).
+# 0: Basic Cave, 1: Maze/Dungeon, etc.
+ca_default_ruleset = 1
+<<< FILE END: rust\ssxl_config\src\engine.toml >>>
+
+>>> FILE START: rust\ssxl_config\src\lib.rs (6 LOC) <<<
+// ssxl_config/src/lib.rs
+pub mod config;
+
+// Re-export for simplified access
+pub use config::config; 
+pub use config::init_config; 
+pub use config::SSXLConfig;
+<<< FILE END: rust\ssxl_config\src\lib.rs >>>
+

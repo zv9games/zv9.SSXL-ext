@@ -9,6 +9,7 @@ pub mod message;
 pub mod math;
 pub mod job;
 
+pub use config::config::{get_config_from_path, SSXLConfig}; // ADDED: Re-exporting Config access
 pub use ssxl_math::primitives::{ChunkId, TileCoord};
 
 pub use chunk::chunk_data::{ChunkData, CHUNK_SIZE};
@@ -51,8 +52,12 @@ pub mod prelude {
     
     pub use super::error::errors::{SSXLError, SSXLResult};
     
-    pub use super::message::messages::{AnimationCommand, AnimationType};
+    // UPDATED: Added AnimationState to the prelude
+    pub use super::message::messages::{AnimationCommand, AnimationType, AnimationState};
     pub use super::message::messages::AnimationUpdate;
+
+    // ADDED: Adding SSXLConfig to the prelude for easy access
+    pub use super::config::config::SSXLConfig;
 }
 
 use std::sync::atomic::AtomicUsize;

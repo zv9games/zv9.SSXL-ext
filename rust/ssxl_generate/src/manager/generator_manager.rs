@@ -9,7 +9,7 @@ use tracing::{info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 // FIX: Import ChunkData directly from the ssxl_shared crate root.
 use ssxl_shared::ChunkData;
 

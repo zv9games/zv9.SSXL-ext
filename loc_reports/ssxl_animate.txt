@@ -1,0 +1,325 @@
+﻿>>> FILE START: rust\ssxl_animate\Cargo.toml (21 LOC) <<<
+# ssxl_animate/Cargo.toml
+
+[package]
+name = "ssxl_animate"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES ---
+ssxl_shared = { path = "../ssxl_shared" }
+ssxl_math = { path = "../ssxl_math" }
+
+# --- EXTERNAL DEPENDENCIES ---
+
+# CORE GDExtension BINDINGS
+godot = { workspace = true }
+godot-ffi = { workspace = true }
+# Workspace standard logging framework
+tracing = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+async-trait = { workspace = true }
+
+# customs
+rayon = { workspace = true }
+parking_lot = { workspace = true }
+
+
+
+
+<<< FILE END: rust\ssxl_animate\Cargo.toml >>>
+
+>>> FILE START: rust\ssxl_animate\src\animation_logic.rs (36 LOC) <<<
+// ssxl_animate/src/animation_logic.rs (O(1) Zero-Entropy)
+
+use ssxl_shared::{
+    AnimationType,
+    AnimationUpdate,
+    ChunkData,
+    ChunkId,
+    TileCoord,
+    AnimationPayload, // Added: Ensure payload is in scope
+};
+
+/// Executes animation logic for all tiles within a single chunk.
+/// FIX: Returns a zero-allocation Iterator to enforce Zero-Entropy / O(1) mechanism.
+pub fn execute_for_chunk(
+    chunk_id: ChunkId,
+    chunk_data: &ChunkData,
+    anim_type: AnimationType,
+) -> impl Iterator<Item = AnimationUpdate> + '_ {
+    chunk_data.tiles.iter().enumerate().filter_map(move |(index, _tile)| {
+        let coord = TileCoord {
+            x: (chunk_id.x * 16) + (index % 16) as i64,
+            y: (chunk_id.y * 16) + (index / 16) as i64,
+        };
+
+        let (source_id_u32, _new_atlas_coords_i32) = match anim_type {
+            AnimationType::TileFlip => {
+                let new_frame = (coord.x.wrapping_add(coord.y) % 4) as u32;
+                (new_frame, 0)
+            }
+            AnimationType::PulseFade(_intensity) => (0, 0),
+            AnimationType::TweenMove | AnimationType::CustomScripted(_) => return None,
+        };
+
+        let payload = AnimationPayload::FrameUpdate {
+            new_frame: source_id_u32,
+        };
+
+        // O(1) yield: No heap allocation
+        Some(AnimationUpdate { coord, payload })
+    })
+}
+<<< FILE END: rust\ssxl_animate\src\animation_logic.rs >>>
+
+>>> FILE START: rust\ssxl_animate\src\conductor.rs (78 LOC) <<<
+// rust/ssxl_animate/src/conductor.rs (Optimized: Zero Entropy Command Flow)
+
+use crate::{ConductorBehavior, AnimationCommand, CommandResult, AnimationState, UpdateSender};
+use crate::worker::process_command_parallel; 
+use async_trait::async_trait;
+use tokio::sync::mpsc::UnboundedReceiver;
+use godot::prelude::godot_print; 
+
+/// The core, single-threaded struct responsible for managing all animation workers.
+pub struct AnimationConductor {
+    // The Receiver side of the command channel
+    command_rx: UnboundedReceiver<AnimationCommand>,
+    // This Sender is USED to pass to the worker.
+    update_tx: UpdateSender, 
+    state: AnimationState,
+}
+
+impl AnimationConductor {
+    pub fn new(
+        command_rx: UnboundedReceiver<AnimationCommand>,
+        update_tx: UpdateSender,
+        initial_state: AnimationState,
+    ) -> Self {
+        AnimationConductor {
+            command_rx,
+            update_tx,
+            state: initial_state,
+        }
+    }
+
+    // DELETED: fn stop_animation(&mut self) -> CommandResult 
+    // RATIONALE: Redundant state modification API. All state changes MUST flow through 
+    // the AnimationCommand::SetEnabled(false) in the process_command match arm 
+    // for guaranteed sequential processing (Zero Entropy).
+}
+
+#[async_trait]
+impl ConductorBehavior for AnimationConductor {
+    async fn start_loop(&mut self) {
+        // The main event loop for the Conductor. This loop manages the **tempo**.
+        while let Some(command) = self.command_rx.recv().await {
+            let _ = self.process_command(command);
+        }
+    }
+
+    /// Processes a command, delegating heavy computation to the worker pool.
+    /// This function MUST return quickly to keep the Conductor's tempo fast.
+    fn process_command(&mut self, command: AnimationCommand) -> CommandResult {
+        match command {
+            // ----------------------------------------------------
+            // 1. Delegate High-Performance Work
+            // ----------------------------------------------------
+            AnimationCommand::AnimateChunkSet { .. } | AnimationCommand::StartTestAnimation => {
+                // CRITICAL OPTIMIZATION: Delegate work and clone the sender for the worker
+                process_command_parallel(command, self.update_tx.clone());
+                Ok(())
+            }
+            // ----------------------------------------------------
+            // 2. Local State Management (Zero-Entropy Control)
+            // ----------------------------------------------------
+            AnimationCommand::SetTimeScale(scale) => {
+                self.state.set_time_scale(scale); 
+                Ok(())
+            }
+            AnimationCommand::SetEnabled(enabled) => {
+                // SINGLE ENTRY POINT for state control.
+                self.state.set_enabled(enabled);
+                godot_print!("Animation Conductor: is_enabled set to {}", enabled);
+                Ok(())
+            }
+            // ----------------------------------------------------
+            // 3. System Commands
+            // ----------------------------------------------------
+            AnimationCommand::Shutdown => {
+                // Close the receiver, which will gracefully exit the start_loop
+                self.command_rx.close();
+                Ok(())
+            }
+        }
+    }
+
+    fn get_state(&self) -> AnimationState {
+        self.state.clone()
+    }
+}
+<<< FILE END: rust\ssxl_animate\src\conductor.rs >>>
+
+>>> FILE START: rust\ssxl_animate\src\lib.rs (60 LOC) <<<
+//! # ssxl_animate
+//!
+//! This crate contains the **Animation Conductor** and associated logic responsible for
+//! managing all real-time visual updates, tweens, and complex tile animations for the
+//! SSXL-ext engine. It operates asynchronously, feeding updates back to the Godot
+//! main thread via non-blocking communication channels.
+
+// --- Standard Library & External Crates ---
+use tracing::info;
+use std::sync::{Arc, Mutex};
+use async_trait::async_trait;
+use tokio::sync::mpsc; // CRITICAL: Used for the asynchronous, non-blocking channel
+
+// --- SSXL Internal Crates (Contracts and Types) ---
+// FIX: All contracts, including the FFI handles, are now imported from ssxl_shared.
+use ssxl_shared::{
+    AnimationCommand,
+    UpdateSender,
+    // Removed unused import: AnimationType,
+    AnimationConductorHandle, // Now resolved from ssxl_shared/src/lib.rs re-export
+    AnimationState,           // Now resolved from ssxl_shared/src/lib.rs re-export
+    CommandResult,            // Now resolved from ssxl_shared/src/lib.rs re-export
+};
+
+// --- Internal Modules ---
+pub mod conductor;
+mod worker;
+mod animation_logic;
+
+
+// -----------------------------------------------------------------------------
+// Core Public API
+// -----------------------------------------------------------------------------
+
+pub use conductor::AnimationConductor;
+
+/// Defines the primary trait for the Animation Conductor.
+/// This trait enforces the necessary async structure for the runtime.
+#[async_trait]
+pub trait ConductorBehavior: Send + Sync + 'static {
+    async fn start_loop(&mut self);
+
+    fn process_command(&mut self, command: AnimationCommand) -> CommandResult;
+
+    fn get_state(&self) -> AnimationState;
+}
+
+/// Initializes and returns the necessary components for the Animation Conductor.
+///
+/// Returns: (Command Handle, Arc<Mutex<Conductor>>)
+/// The Handle is sent to the Godot FFI layer (`ssxl_sync`) to send commands.
+pub fn initialize_animation_conductor(
+    update_tx: UpdateSender,
+    initial_state: AnimationState,
+) -> (AnimationConductorHandle, Arc<Mutex<AnimationConductor>>) {
+    info!("ssxl_animate: Initializing Animation Conductor circuit.");
+    
+    // Wire the command channel: The primary control line
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    
+    let handle: AnimationConductorHandle = command_tx; 
+
+    // Create the core conductor structure which owns the Receiver (command_rx).
+    let conductor = AnimationConductor::new(
+        command_rx, 
+        update_tx,
+        initial_state,
+    );
+
+    // Conductor is wrapped in Arc<Mutex> for safe shutdown/runtime management.
+    (handle, Arc::new(Mutex::new(conductor)))
+}
+<<< FILE END: rust\ssxl_animate\src\lib.rs >>>
+
+>>> FILE START: rust\ssxl_animate\src\worker.rs (74 LOC) <<<
+// ssxl_animate/src/worker.rs (Fixed: E0061 and Optimized Imports)
+
+use rayon::prelude::*;
+use tracing::info;
+
+// FIX: Added necessary ChunkData/TileData types for the mock data structure.
+use ssxl_shared::{
+    AnimationCommand, 
+    ChunkId, 
+    UpdateSender,
+    ChunkData,       // REQUIRED for mock structure
+    TileData         // REQUIRED for mock structure array
+};
+use ssxl_shared::message::messages::AnimationUpdate as ChannelUpdate;
+
+use crate::animation_logic;
+
+// --- FIX: MOCK DATA ACCESSOR (TEMPORARY HIGH-EFFICIENCY HACK) ---
+// This placeholder simulates a FAST, non-blocking cache lookup for ChunkData.
+// In a final production build, this MUST be replaced by a call to the 
+// high-performance, thread-safe ssxl_cache API.
+fn get_chunk_data_mock(_chunk_id: ChunkId) -> ChunkData {
+    ChunkData { 
+        id: 0, 
+        bounds: Default::default(), 
+        tiles: [TileData::default(); 1024], // Fills array with default tile data
+        dimension_tag: "Mock".into(),
+        generated_at: std::time::SystemTime::now(),
+    }
+}
+// ---------------------------------------------------------------
+
+/// Initializes the global Rayon thread pool for maximal data parallelism.
+#[allow(dead_code)]
+pub fn initialize_worker_pool(count: usize) {
+    if rayon::ThreadPoolBuilder::new()
+        .num_threads(count)
+        .build_global()
+        .is_ok()
+    {
+        info!("Animation worker pool (Rayon) initialized with {} threads.", count);
+    } else {
+        info!("Animation worker pool (Rayon) found or failed to initialize.");
+    }
+}
+
+/// Executes the animation command in parallel, delegating work immediately off
+/// the Conductor's async thread to the Rayon pool.
+pub fn process_command_parallel( 
+    command: AnimationCommand, 
+    update_tx: UpdateSender
+) {
+    if let AnimationCommand::AnimateChunkSet { chunk_ids, anim_type } = command {
+        
+        // CRITICAL: Keep this `std::thread::spawn` to run Rayon OFF the async Conductor thread.
+        std::thread::spawn(move || {
+            chunk_ids.par_iter().for_each(|&chunk_id: &ChunkId| {
+                
+                // FIX E0061: Retrieve data locally to satisfy execute_for_chunk's 3-argument signature.
+                let chunk_data = get_chunk_data_mock(chunk_id);
+                
+                let tile_updates = 
+                    animation_logic::execute_for_chunk(
+                        chunk_id, 
+                        &chunk_data, // ARGUMENT SUPPLIED: Pass reference to chunk_data
+                        anim_type.clone()
+                    );
+                
+                for update in tile_updates {
+                    let converted_update = ChannelUpdate {
+                        coord: update.coord,
+                        payload: update.payload,
+                    };
+
+                    let _ = update_tx.send(converted_update).ok(); 
+                }
+            });
+
+            info!("Finished parallel processing for chunk set.");
+        });
+    }
+}
+<<< FILE END: rust\ssxl_animate\src\worker.rs >>>
+

@@ -8,7 +8,7 @@
 // FIX: Import ChunkData directly from the ssxl_shared crate root.
 use ssxl_shared::ChunkData;
 
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 
 /// The fundamental trait for all world generation algorithms in the SSXL Engine.
 ///

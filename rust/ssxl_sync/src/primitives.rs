@@ -1,7 +1,13 @@
+// ssxl_sync/src/primitives.rs
+
 use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use tracing::info;
+// DELETE: tracing::info removed (placeholder worker function removed)
+
+// --------------------------------------------------------------------------------
+// --- Thread-Safe Resource Management (AtomicResource) ---
+// --------------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct AtomicResource<T> {
@@ -15,12 +21,12 @@ impl<T> AtomicResource<T> {
         }
     }
 
-    #[inline]
+    #[inline(always)] // O(1) Accessor: Force inlining
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
         self.data.read()
     }
 
-    #[inline]
+    #[inline(always)] // O(1) Mutator: Force inlining
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
         self.data.write()
     }
@@ -32,10 +38,13 @@ impl<T: Default> Default for AtomicResource<T> {
     }
 }
 
-pub fn create_sync_channel() -> (Sender<String>, Receiver<String>) {
+// --------------------------------------------------------------------------------
+// --- Synchronization Primitives (Channels) ---
+// --------------------------------------------------------------------------------
+
+/// Creates an unbounded, multi-producer, single-consumer channel.
+/// Generic over message type `M` (Zero Entropy).
+pub fn create_unbounded_channel<M>() -> (Sender<M>, Receiver<M>) {
     unbounded()
 }
-
-pub fn start_sync_worker() {
-    info!("SSXL Synchronization Worker placeholder started.");
-}
+// DELETE: start_sync_worker placeholder removed (non-primitive code).

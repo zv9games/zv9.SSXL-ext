@@ -6,7 +6,7 @@
 //! mapping noise values to different TileTypes based on a fixed threshold.
 
 use crate::Generator;
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 
 // FIX: Import all components directly from the ssxl_shared crate root.
 use ssxl_shared::{

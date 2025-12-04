@@ -1,17 +1,6 @@
-// ssxl_math/src/lib.rs
+// File: ssxl_math/src/lib.rs
 
-//! # SSXL Math Crate (`ssxl_math`)
-//!
-//! This crate contains the core mathematical utilities, data structures, and coordinate
-//! system logic required by the SSXL-ext procedural generation engine.
-//!
-//! Key functionalities include:
-//! - **Coordinate System:** Defining world and chunk positions (`ChunkKey`, `WorldPos`).
-//! - **Hashing:** Deterministic generation of unique chunk and content identifiers.
-//! - **Primitives:** Shared types and result wrappers (`SSXLResult`, `Vec2i`).
-
-// --- Module Declarations ---
-
+// --- 1. Module Declarations (CRITICAL: MUST be at the root) ---
 /// Defines the global and local coordinate system structures (`ChunkKey`, `WorldPos`).
 pub mod coordinate_system;
 
@@ -24,41 +13,55 @@ pub mod hashing;
 /// Core mathematical primitives, custom types, and error handling results.
 pub mod primitives;
 
-// --- Public Re-exports (The Main Crate API) ---
+// --------------------------------------------------------------------------------
 
-// Re-export key coordinate types for direct use by other SSXL-ext crates.
-pub use coordinate_system::{ChunkKey, TileOffset, WorldPos};
+// --- 2. Cold Quantum Fast Implementation (FTL, Safety-Optimized) ---
 
-// Re-export core functions and utilities.
-pub use crate::generation_utils::process_data;
+/// FTL Inverse Square Root: **O(1)** Approximation for vector normalization.
+///
+#[inline(always)]
+pub fn q_rsqrt(number: f32) -> f32 {
+    // O(1) Safety Guard: Prevents NaN/UB when magnitude is zero or negative.
+    if number <= 0.0 { 
+        return 0.0;
+    }
 
-// Re-export essential primitives and type aliases.
-pub use crate::primitives::Vec2i;
-pub use crate::primitives::SSXLData;
-pub use crate::primitives::SSXLResult;
-pub use crate::primitives::TileCoord; // ⭐ FIXED: Changed 'crate primitives' to 'crate::primitives'
+    const THREEHALFS: f32 = 1.5;
+    let x2 = number * 0.5;
+    let y = number;
+    
+    // Use u32 for bitwise operation.
+    let i = y.to_bits();
+    let j_bits = 0x5f3759df_u32.wrapping_sub(i >> 1);
 
-// --- Prelude for Internal Engine Use ---
+    let mut y = f32::from_bits(j_bits);
+    
+    // Single Newton's iteration.
+    y = y * (THREEHALFS - (x2 * y * y));
+    y
+}
+
+/// Computes the normalized (unit) vector of a 3D float vector.
+pub fn normalize_vector_3d(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let mag_sq = x * x + y * y + z * z;
+    let inv_mag = q_rsqrt(mag_sq); 
+    
+    (x * inv_mag, y * inv_mag, z * inv_mag)
+}
+
+// --------------------------------------------------------------------------------
+
+// --- 3. Prelude for Internal Engine Use (Minimalist API) ---
 
 /// A convenience module that re-exports all essential types and traits
 /// from the `ssxl_math` crate.
-///
-/// Crates in the SSXL-ext project are encouraged to use `use ssxl_math::prelude::*`
-/// to easily import the most commonly needed math components. This adheres to the
-/// common Rust practice for making libraries ergonomic.
 pub mod prelude {
+    // Use 'super::' consistently to access items defined in the parent scope (lib.rs).
     pub use super::coordinate_system::*;
     pub use super::generation_utils::*;
     pub use super::hashing::*;
     pub use super::primitives::*;
-}
-
-// --- Initialization Function ---
-
-/// Initializes the SSXL Math system.
-///
-/// Currently, this only logs an informational message. It acts as a potential
-/// future hook for any necessary global math configuration or setup checks.
-pub fn initialize_math_system() {
-    tracing::info!("SSXL Math system initialized and ready.");
+    
+    pub use super::q_rsqrt;
+    pub use super::normalize_vector_3d;
 }

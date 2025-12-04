@@ -40,7 +40,7 @@ pub fn print_module_tree() {
                             let prefix = if file_name == "lib.rs" || file_name == "main.rs" {
                                 "├── [CORE] "
                             } else {
-                                "│   └── "
+                                "│   └── "
                             };
                             
                             if let Ok(relative_path) = path.strip_prefix(&crate_path) {
@@ -62,21 +62,22 @@ pub fn print_module_tree() {
 
 
 pub fn print_godot_api_surface() {
-	// --- STRATEGIC UPDATE: INCLUDE FFI CORE ---
-	let godot_api_files: [&str; 4] = [
-        "ssxl_godot/src/ssxl_engine.rs",
-        "ssxl_godot/src/ssxl_oracle.rs",
-        "ssxl_godot/src/ssxl_signals.rs",
-        "ssxl_engine_ffi/src/lib.rs", // CRITICAL: Captures C-Bindings
+	// --- STRATEGIC UPDATE: Include the new aggregated API file from the 'engine' module. ---
+	let godot_api_files: [&str; 4] = [ 
+        // 🎯 FIX: The new main file containing all #[func] methods.
+        "ssxl_godot/src/engine/init.rs",
+        // Retaining the two GDExtension helper classes (Oracle, Signals)
+        "ssxl_godot/src/ffi/oracle.rs",      
+        "ssxl_godot/src/ffi/signals.rs",
+        // Retaining the FFI Core library
+        "ssxl_engine_ffi/src/lib.rs", 
     ];
 
     println!("🧪 API scan triggered (targeting {} files in ssxl_godot/src/ and FFI core)...", godot_api_files.len());
     
 	// --- MASTER REGEX FOR ALL CALLABLE METHODS (FIXED ESCAPING) ---
     let method_regex = Regex::new(
-        // FIX: Removed the erroneous backslashes around the "C" literal (i.e., \"C\" -> "C")
-        // and using a robust raw string literal r#""# to prevent any further escaping issues.
-        r#"(?s)(?:\s*#\[func\].*?|#\[no_mangle\].*?pub\s+extern\s+"C"\s*)\s*(?:pub\s+fn|fn)\s+(\w+)\s*(\([^\{]*)\s*(?:->\s*([^\{]*))?"#
+        r#"(?s)(?:\s*#\[func\].*?|#\[no_mangle\].*?pub\s+extern\s+"C"\s*)\s*(?:pub\s+fn|fn)\s+(\w+)\s*(\([^\{;]*)\s*(?:->\s*([^\{]*))?"#
     ).unwrap();
 
 	// Signal regex remains robust for line-based #[signal] definitions
@@ -147,7 +148,7 @@ pub fn print_godot_api_surface() {
     
     println!("\n✅ Callable Methods ({} total):", api_methods.len());
     if api_methods.is_empty() {
-        warn!("  No callable methods found in targeted files (check FFI core!).");
+        warn!(" No callable methods found in targeted files (check FFI core!).");
     } else {
         for (name, args, return_type, source_file) in &api_methods {
             // Highlighting the low-level FFI entry points for clarity
@@ -156,16 +157,16 @@ pub fn print_godot_api_surface() {
             } else {
                 "[GDExt]"
             };
-            println!("  > func {}({}) -> {} {} [{}]", name, args, return_type, marker, source_file);
+            println!(" > func {}({}) -> {} {} [{}]", name, args, return_type, marker, source_file);
         }
     }
 
     println!("\n⭐ Registered Signal Broadcasts ({} total):", api_signals.len());
     if api_signals.is_empty() {
-        warn!("  No #[signal] broadcasts found in targeted files.");
+        warn!(" No #[signal] broadcasts found in targeted files.");
     } else {
         for (name, args, source_file) in &api_signals {
-            println!("  > signal {}({}) [{}]", name, args, source_file);
+            println!(" > signal {}({}) [{}]", name, args, source_file);
         }
     }
 	println!("--------------------------------------------------");

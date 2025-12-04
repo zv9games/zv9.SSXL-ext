@@ -15,7 +15,7 @@ use bincode::{serialize, deserialize};
 use ssxl_generate::Generator;
 // FIX E0432: `perlin_generator` likely renamed to `perlin`.
 use ssxl_generate::perlin::PerlinGenerator;
-use ssxl_math::Vec2i;
+use ssxl_math::prelude::Vec2i;
 // FIX E0432: Correct path to Chunk data constant.
 use ssxl_shared::chunk::chunk_data::CHUNK_SIZE;
 // FIX E0432: Correct path to Tile data struct.

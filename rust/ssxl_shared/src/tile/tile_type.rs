@@ -1,6 +1,6 @@
-// ssxl_shared/src/tile_type.rs
+// ssxl_shared/src/tile/tile_type.rs
 
-//! # Tile Type Enumeration (`ssxl_shared::tile_type`)
+//! # Tile Type Enumeration (`ssxl_shared::tile::tile_type`)
 //!
 //! This module defines the canonical `TileType` enum, which identifies the material
 //! or nature of a single tile. It is a fundamental data structure shared across
@@ -36,11 +36,16 @@ pub enum TileType {
     Custom1 = 7,
     /// Reserved for generator-specific customization or future expansion.
     Custom2 = 8,
+    // Maximum defined variant value is 8.
 }
+
+// Constant to define the maximum valid u8 value for TileType.
+pub const MAX_TILE_TYPE_VALUE: u8 = 8;
 
 
 impl Default for TileType {
     /// The default state of a tile is always `TileType::Void` (empty).
+    // FIX: Removed `const` keyword to resolve error E0379.
     fn default() -> Self {
         TileType::Void
     }
@@ -48,7 +53,8 @@ impl Default for TileType {
 
 impl TileType {
     /// Converts the `TileType` instance into its underlying `u8` representation.
-    #[inline] 
+    // OPTIMIZATION: Added inline hint and const fn for zero-cost conversion.
+    #[inline(always)] 
     pub const fn to_u8(self) -> u8 {
         self as u8
     }
@@ -57,22 +63,20 @@ impl TileType {
     ///
     /// Returns `None` if the input value does not correspond to a defined variant,
     /// ensuring safe deserialization.
+    // OPTIMIZATION: Replaced verbose match with range check and unsafe transmute for zero-cost speed.
+    #[inline(always)]
     pub fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(TileType::Void),
-            1 => Some(TileType::Water),
-            2 => Some(TileType::Grass),
-            3 => Some(TileType::Mountain),
-            4 => Some(TileType::Boundary),
-            5 => Some(TileType::Structure),
-            6 => Some(TileType::Rock),
-            7 => Some(TileType::Custom1),
-            8 => Some(TileType::Custom2),
-            _ => None,
+        if value <= MAX_TILE_TYPE_VALUE {
+            // SAFETY: We check that the value is within the contiguous range [0, 8]
+            // of the #[repr(u8)] enum. This is a common pattern for fast enum conversion.
+            Some(unsafe { std::mem::transmute(value) })
+        } else {
+            None
         }
     }
     
     /// Provides a simple, default unique ID for this tile type (equal to its u8 value).
+    #[inline(always)]
     pub const fn get_default_tile_id(self) -> u16 {
         self.to_u8() as u16
     }
@@ -80,6 +84,7 @@ impl TileType {
     /// Provides default atlas coordinates (X, Y) for initial rendering/visual representation.
     ///
     /// This is a common lookup function used by the rendering component (`ssxl_godot`).
+    #[inline(always)]
     pub const fn get_default_atlas_coords(self) -> (u16, u16) {
         match self {
             // All default tiles are expected to be on the first row (Y=0) of the atlas.
@@ -98,6 +103,7 @@ impl TileType {
 
 impl TileType {
     /// Checks if the tile type is one that a character can typically traverse (walk on).
+    #[inline(always)]
     pub const fn is_walkable(self) -> bool {
         matches!(self, 
             TileType::Grass 
@@ -108,11 +114,13 @@ impl TileType {
     }
 
     /// Checks if the tile type is considered a fluid (e.g., for flow/buoyancy simulation).
+    #[inline(always)]
     pub const fn is_fluid(self) -> bool {
         matches!(self, TileType::Water)
     }
 
     /// Checks if the tile is empty (the default/void state).
+    #[inline(always)]
     pub const fn is_empty(self) -> bool {
         matches!(self, TileType::Void)
     }

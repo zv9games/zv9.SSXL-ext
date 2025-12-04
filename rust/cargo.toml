@@ -31,7 +31,7 @@ rust-version = "1.75" # Set a standard base Rust version
 # ------------------------------------------------------------------
 # CORE UTILITIES & DATA MANAGEMENT
 # ------------------------------------------------------------------
-serde               = { version = "1.0", features = ["derive"] }
+serde               = { version = "1.0", features = ["derive", "rc"] }
 serde_json          = "1.0"
 serde-big-array = "0.4.1"
 bincode             = "1.3"
@@ -79,6 +79,7 @@ godot = { path = "../../zv9.gdext/godot", features = ["serde"] }
 godot-ffi = { path = "../../zv9.gdext/godot-ffi", features = ["api-custom"] }
 fastrand = "2.0"
 num_cpus = "1.17.0"
+lru = "0.12"
 
 [workspace.lints.rust]
 unsafe_code      = "deny"
