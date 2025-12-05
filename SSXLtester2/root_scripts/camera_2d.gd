@@ -1,21 +1,29 @@
+# camera.gd
 extends Camera2D
+class_name SSXLCameraDriver
 
-@export var zoom_factor: float = 1.25  # 25% zoom per wheel notch
-@export var min_zoom: float = 0.005    # <<< FIX: Lowered to allow massive zoom-out
-@export var max_zoom: float = 64.0
+const CHUNK_SIZE := 32
+const VIEW_RADIUS := 3
+var last_chunk_key := Vector2i(-999, -999)
 
-func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
-		var pivot := global_position  # zoom toward mouse cursor
-		
-		match event.button_index:
-			MOUSE_BUTTON_WHEEL_UP:
-				zoom *= zoom_factor
-			MOUSE_BUTTON_WHEEL_DOWN:
-				zoom /= zoom_factor
-		
-		# Clamping now allows for far greater zoom-out
-		zoom = Vector2.ONE * clamp(zoom.x, min_zoom, max_zoom)
-		
-		# Keep mouse-pointed world position fixed
-		global_position = pivot + (global_position - pivot) * (zoom.x / (zoom.x / zoom_factor if event.button_index == MOUSE_BUTTON_WHEEL_UP else zoom.x * zoom_factor))
+func _physics_process(delta):
+	# 🧭 O(1) current chunk key check
+	var current_chunk_key = world_to_chunk(global_position)
+	
+	if current_chunk_key != last_chunk_key:
+		last_chunk_key = current_chunk_key
+		request_chunks_around(current_chunk_key)
+
+# 🗺️ O(R^2) dispatch (R=VIEW_RADIUS)
+func request_chunks_around(center_key: Vector2i):
+	var signals = get_node("/root/SSXLSignals")
+	
+	for x in range(-VIEW_RADIUS, VIEW_RADIUS + 1):
+		for y in range(-VIEW_RADIUS, VIEW_RADIUS + 1):
+			var key_to_request = center_key + Vector2i(x, y)
+			# O(1) signal dispatch
+			signals.chunk_request.emit(key_to_request)
+
+# 📐 O(1) coordinate conversion
+func world_to_chunk(world_pos: Vector2) -> Vector2i:
+	return Vector2i(floor(world_pos.x / CHUNK_SIZE), floor(world_pos.y / CHUNK_SIZE))

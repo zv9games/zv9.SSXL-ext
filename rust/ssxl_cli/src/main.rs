@@ -4,15 +4,15 @@
 //! initialization, logging, the main menu loop, and delegates tasks to action modules
 //! for testing, benchmarking, and external tool execution.
 
-mod actions;               // Core functions for tests, benchmarks, and Godot interaction.
-mod cli_util_inspect;      // Utilities for scanning the codebase and API surface.
+mod actions; // Core functions for tests, benchmarks, and Godot interaction.
+mod cli_util_inspect; // Utilities for scanning the codebase and API surface.
 
 // FIX: Change to `pub mod` so its types (CliAction, CliMenu) are accessible
 // by other modules in the crate (like actions/testing.rs).
-pub mod cli_util_menu;     // Menu structure and display logic.
+pub mod cli_util_menu; // Menu structure and display logic.
 
-mod cli_util_bench;        // Functions for running generation tests and benchmarks.
-mod cli_util_loc;          // <--- CHANGE 1: Declare the new LOC utility module.
+mod cli_util_bench; // Functions for running generation tests and benchmarks.
+mod cli_util_loc; // Declares the new LOC utility module.
 
 use std::collections::HashSet;
 use std::thread;
@@ -24,8 +24,9 @@ use tracing::{info, error};
 use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 
 use crate::cli_util_menu::{build_menu, print_menu};
-use ssxl_engine_ffi::ssxl_initialize_engine; // External FFI function to bootstrap the engine core.
-use crate::cli_util_loc::scan_and_report_loc; // <--- CHANGE 2: Update the import path and function name.
+// FIX: Changed ssxl_initialize_engine to the correct FFI name: ssxl_start_runtime
+use ssxl_engine_ffi::ssxl_start_runtime; // External FFI function to bootstrap the engine core.
+use crate::cli_util_loc::scan_and_report_loc; // Imports the LOC function.
 use crate::actions::copy_dll_to_tester_project_at_boot; // Action to ensure the latest DLL is in the Godot project.
 
 
@@ -51,7 +52,8 @@ fn init_logging_and_engine() {
 
     // 2. Initialize the Rust Core via FFI
     // Calls the external C-compatible function to boot the engine's core state and runtime.
-    if ssxl_initialize_engine() {
+    // FIX: Using the correct FFI function name: ssxl_start_runtime()
+    if ssxl_start_runtime() {
         info!("Engine FFI core initialized.");
     } else {
         // We log the failure but allow the CLI to continue for non-engine tasks (like LOC scan).
@@ -71,19 +73,34 @@ fn main() {
     // Perform initial setup: logging, FFI, and DLL copy.
     init_logging_and_engine();
     
+    // --- FFI Linkage Fix for MSVC (LNK2019) ---
+    // The linker is aggressively discarding the ssxl_godot library (which implements 
+    // ssxl_set_cell and ssxl_notify_tilemap_update) because ssxl_cli doesn't 
+    // appear to call it directly. This symbolic reference forces the linker to include it.
+    extern "C" {
+        // Declare the unresolved FFI functions provided by ssxl_godot
+        fn ssxl_set_cell(x: i32, y: i32, tile_id: i32);
+        fn ssxl_notify_tilemap_update();
+    }
+
+    // WARNING FIX: Removed unnecessary `unsafe` blocks. Pointer coercion is safe.
+    // Create an unused symbolic reference to the function pointers.
+    let _ = ssxl_set_cell as *const ();
+    let _ = ssxl_notify_tilemap_update as *const ();
+    // ---------------------------------------------
+    
     // Run a Lines of Code (LOC) scan on the codebase at startup.
-    // Note: The scan function no longer takes an argument.
-    scan_and_report_loc(); // <--- CHANGE 3: Update function call and remove unnecessary argument.
+    scan_and_report_loc();
     
     // Print welcome ASCII art.
     println!(
         r#"
-                 (__)                      
-                 (oo)
-           /------\/
-          / |    ||
-         * ||----||
-            ~~    ~~
+              (__)      
+              (oo)
+        /------\/
+        / |    ||
+        * ||----||
+          ~~    ~~
 SSXL-ext Engine Console Initialized
 "#
     );

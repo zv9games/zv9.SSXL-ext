@@ -1,5 +1,6 @@
 [package]
 name = "ssxl_tools"
+version = "0.9.1"
 edition = "2021" 
 
 [dependencies]

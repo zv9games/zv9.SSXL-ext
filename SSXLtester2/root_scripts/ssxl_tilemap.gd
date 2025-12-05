@@ -1,39 +1,29 @@
-# SSXLTilemap.gd (Attach this to your SSXLTilemap node)
+# tilemap.gd
 extends TileMap
+class_name SSXLTilemap
 
-# --- Configuration Export Variables ---
+const TILESET_ID := 1
+const CHUNK_SIZE := 32
+const TILE_LAYER := 0
 
-# MODIFIED: Maximum range set to 10000
-@export_range(32, 10000, 64)
-var map_width: int = 256
-# MODIFIED: Maximum range set to 10000
-@export_range(32, 10000, 64)
-var map_height: int = 256
+var loaded_chunks := {}
 
-@export_enum("perlin_basic_2d:0", "other_generator:1")
-var generator_name: String = "perlin_basic_2d"
+func _ready():
+	# Connect to the FFI response
+	get_node("/root/SSXLSignals").chunk_loaded.connect(self._on_chunk_loaded)
 
-# Use an arbitrary string for the seed
-@export
-var map_seed: String = "42_island_demo" 
+# 🧱 O(N) application of tile data (N = tiles in chunk)
+func _on_chunk_loaded(key: Vector2i, data: Dictionary):
+	if loaded_chunks.has(key): return
 
-# The "pattern" setting: This controls the scale of the Perlin noise in Rust.
-# A larger number results in smoother, larger islands.
-@export_range(50.0, 500.0, 10.0)
-var perlin_scale: float = 128.0
-
-# NEW: Tile Overrides Dictionary (coordinate Vector2i -> tile_id int)
-@export var tile_overrides: Dictionary = {}
-
-
-# --- Function to retrieve all settings as a Dictionary ---
-
-func get_generation_config() -> Dictionary:
-	return {
-		"width": map_width,
-		"height": map_height,
-		"seed": map_seed,
-		"generator": generator_name,
-		"scale": perlin_scale,
-		"tile_overrides": tile_overrides # <--- ADDED: Pass the overrides dictionary
-	}
+	loaded_chunks[key] = true
+	var map_origin = key * CHUNK_SIZE
+	var tiles: Array = data.tiles
+	
+	# Batch update loop
+	for tile in tiles:
+		var cell_pos = Vector2i(map_origin.x + tile.local_x, map_origin.y + tile.local_y)
+		var tile_id = tile.id
+		
+		# O(1) TileMap call (repeated N times)
+		set_cell(TILE_LAYER, cell_pos, TILESET_ID, Vector2i(tile_id, 0))

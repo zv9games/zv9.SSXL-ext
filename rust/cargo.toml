@@ -80,6 +80,19 @@ godot-ffi = { path = "../../zv9.gdext/godot-ffi", features = ["api-custom"] }
 fastrand = "2.0"
 num_cpus = "1.17.0"
 lru = "0.12"
+cc = "1.0"
+
+# ------------------------------------------------------------------
+# INTERNAL CRATES (Workspace Members defined as Dependencies)
+# ------------------------------------------------------------------
+ssxl_shared = { path = "ssxl_shared" }
+ssxl_math = { path = "ssxl_math" }
+ssxl_sync = { path = "ssxl_sync" }
+ssxl_generate = { path = "ssxl_generate" }
+ssxl_cache = { path = "ssxl_cache" }
+ssxl_engine_ffi = { path = "ssxl_engine_ffi" }
+ssxl_tools = { path = "ssxl_tools" }
+ssxl_animate = { path = "ssxl_animate" }
 
 [workspace.lints.rust]
 unsafe_code      = "deny"

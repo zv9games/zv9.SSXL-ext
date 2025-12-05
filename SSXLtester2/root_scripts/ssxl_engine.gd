@@ -1,22 +1,31 @@
-# ssxl_chunk.gd
+# engine.gd
 extends Node
 
-# The reference to the Rust GDExtension class
-var engine_ref: Node = null 
+const BUFFER_SIZE := 2 * 1024 * 1024 
+var ffi: Node = self # Assumes this Node IS the GDExtension interface
 
-# Fired by main.gd to establish the communication link
-func set_engine_reference(engine: Node) -> void:
-	engine_ref = engine
-	print("SSXLChunk: FFI engine reference set.")
+func _ready():
+	# 🚀 O(1) start of Rust Parallel Backbone
+	if not ffi.call("ssxl_start_runtime", BUFFER_SIZE):
+		push_error("SSXL FFI start failed.")
 
-# This is the function main.gd was calling (The PULL request)
-func get_chunk_data(x: int, y: int) -> Dictionary:
-	if not engine_ref:
-		push_error("SSXLChunk: Engine reference is null. Cannot fetch data.")
-		# FIX: Return an empty Dictionary ({}) instead of null to satisfy the return type.
-		return {}
+func _process(delta):
+	# ♻️ O(1) non-blocking poll for results
+	var result_bytes = ffi.call("ssxl_poll_result")
+	
+	if result_bytes.size() > 0:
+		# ⚠️ O(N) Bincode decode (unavoidable deserialization)
+		var msg = Bincode.decode(result_bytes) 
+		var key = Vector2i(msg.key_x, msg.key_y)
+		# O(1) signal dispatch
+		get_node("/root/SSXLSignals").chunk_loaded.emit(key, msg)
 
-	# --- 🎯 THE FIX: Use the dynamic 'call()' method on the FFI object. ---
-	# This avoids potential issues with Godot's FFI caching/binding when directly calling a method.
-	# The string "fetch_chunk_data" MUST match the exact name registered in the Rust GDExtension.
-	return engine_ref.call("fetch_chunk_data", x, y)
+func request_chunk(chunk_key: Vector2i):
+	# 📡 O(1) request to the Rust Conductor
+	ffi.call("ssxl_request_chunk", chunk_key.x, chunk_key.y)
+
+func _notification(what):
+	if what in [NOTIFICATION_WM_CLOSE_REQUEST, NOTIFICATION_EXIT_TREE]:
+		# 🛑 O(1) graceful shutdown
+		if ffi and ffi.is_open():
+			ffi.call("ssxl_shutdown_runtime")

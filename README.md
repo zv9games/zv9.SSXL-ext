@@ -81,12 +81,16 @@ class_name SSXL9NoobBible
 # WHAT ACTUALLY CHANGED (Marketing → English)
 # ──────────────────────────────────────────────────────────────────────────────
 var marketing_to_english = {
-	"Conductor Genesis"          : "We finally built the one true boss object that owns everything and never crashes",
-	"Asynchronous Tempo"         : "Heavy math is now 100% off the main thread – Godot never waits even 1 ms",
+	"Conductor Genesis"          : "We finally built the one true boss object that owns everything 
+									and never crashes",
+	"Asynchronous Tempo"         : "Heavy math is now 100% off the main thread – Godot never waits 
+									even 1 ms",
 	"Bulldozer Parallelism"      : "Rayon now splits one chunk job across ALL your CPU cores at once",
 	"Crypto-coded memory"        : "We fixed every memory leak. No more random crashes after 30 minutes",
-	"Thread-safe caching"        : "Fly back to old areas → chunks instantly re-appear instead of regenerating",
-	"Direct Engine Integration"  : "Coming in 9.1: Rust will write straight to your TileMap (no GDScript middleman)"
+	"Thread-safe caching"        : "Fly back to old areas → chunks instantly re-appear instead of 
+									regenerating",
+	"Direct Engine Integration"  : "Coming in 9.1: Rust will write straight to your TileMap 
+									(no GDScript middleman)"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
