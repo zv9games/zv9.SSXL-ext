@@ -1,31 +1,46 @@
-# engine.gd
-extends Node
+extends SSXLEngine # CRITICAL: Ensure this extends SSXLEngine
 
-const BUFFER_SIZE := 2 * 1024 * 1024 
-var ffi: Node = self # Assumes this Node IS the GDExtension interface
+# This script is attached to the SSXLEngine node, which is the custom GDExtension class.
+
+# ============================================================================
+# 1. LIFECYCLE CHECK
+# ============================================================================
 
 func _ready():
-	# 🚀 O(1) start of Rust Parallel Backbone
-	if not ffi.call("ssxl_start_runtime", BUFFER_SIZE):
-		push_error("SSXL FFI start failed.")
+	# get_status() works because the script extends SSXLEngine.
+	print("⚙️ [SSXLEngine] Core status on ready: %s" % get_status())
+	if get_status() == "Uninitialized":
+		push_error("SSXLEngine is uninitialized! Ensure main.gd called initialize_runtime_shell().")
 
-func _process(delta):
-	# ♻️ O(1) non-blocking poll for results
-	var result_bytes = ffi.call("ssxl_poll_result")
+
+# ============================================================================
+# 2. PUBLIC API WRAPPERS (Passthrough to Native Methods)
+# ============================================================================
+
+func set_active_generator(name: String):
+	"""Sets the generator ID the engine should use for new map requests."""
+	set_generator(name)
+
+func force_stop():
+	"""Immediately halts any current map generation process."""
+	stop_generation()
+	print("⚠️ [SSXLEngine] Generation halted by user request.")
+
+func get_chunk_data(x: int, y: int) -> Dictionary:
+	"""Retrieves chunk data from the native cache."""
+	return fetch_chunk_data(x, y)
+
+func get_tile_count() -> int:
+	"""Returns the total number of tiles currently placed on the TileMap."""
+	return get_current_tile_count() as int
+
+# FIX APPLIED HERE: Use call() to dynamically invoke the FFI CORE method.
+func is_engine_active() -> bool:
+	"""Checks if the core FFI engine thread is active (using dynamic call)."""
+	# func is_active() -> bool) [FFI CORE]
+	var result = call("is_active")
+	if typeof(result) == TYPE_BOOL:
+		return result
 	
-	if result_bytes.size() > 0:
-		# ⚠️ O(N) Bincode decode (unavoidable deserialization)
-		var msg = Bincode.decode(result_bytes) 
-		var key = Vector2i(msg.key_x, msg.key_y)
-		# O(1) signal dispatch
-		get_node("/root/SSXLSignals").chunk_loaded.emit(key, msg)
-
-func request_chunk(chunk_key: Vector2i):
-	# 📡 O(1) request to the Rust Conductor
-	ffi.call("ssxl_request_chunk", chunk_key.x, chunk_key.y)
-
-func _notification(what):
-	if what in [NOTIFICATION_WM_CLOSE_REQUEST, NOTIFICATION_EXIT_TREE]:
-		# 🛑 O(1) graceful shutdown
-		if ffi and ffi.is_open():
-			ffi.call("ssxl_shutdown_runtime")
+	# Fallback if the function is missing or returns null/void.
+	return false

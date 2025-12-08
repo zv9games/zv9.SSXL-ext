@@ -1,251 +1,261 @@
-﻿>>> FILE START: rust\ssxl_engine_ffi\Cargo.toml (19 LOC) <<<
+﻿>>> FILE START: rust\ssxl_engine_ffi\Cargo.toml (17 LOC) <<<
 [package]
 name = "ssxl_engine_ffi"
-version = "0.6.0"
+version = "0.9.1"
 edition = "2021"
 
 
 [dependencies]
 # --- INTERNAL DEPENDENCIES (Core Logic) ---
-# FFI needs access to all the core data and logic it is bridging.
 ssxl_shared   = { path = "../ssxl_shared" }
 ssxl_math     = { path = "../ssxl_math" }
-ssxl_godot	  = { path = "../ssxl_godot" }
 ssxl_generate = { path = "../ssxl_generate" }
+godot              = { workspace = true }
+godot-ffi          = { workspace = true }
 
 # --- EXTERNAL DEPENDENCIES ---
-# The standard C library definitions for safe FFI (e.g., c_char, c_void)
-libc               = "0.2" 
-# Workspace standard logging framework
 tracing            = { workspace = true } 
 tokio 			   = { workspace = true }
-bincode            = { workspace = true }
-serde              = { workspace = true }
+once_cell          = { workspace = true }
+
+[features]
+godot = []
 <<< FILE END: rust\ssxl_engine_ffi\Cargo.toml >>>
 
->>> FILE START: rust\ssxl_engine_ffi\src\lib.rs (192 LOC) <<<
-// ssxl_engine_ffi/src/lib.rs
+>>> FILE START: rust\ssxl_engine_ffi\src\lib.rs (200 LOC) <<<
+// -----------------------------------------------------------------------------
+// Feature Flags
+// -----------------------------------------------------------------------------
+// Enables nightly Rust feature `int_roundings`, which provides integer division
+// methods like `div_ceil` (rounding up division results).
+#![feature(int_roundings)]
 
-use std::os::raw::c_char;
-use std::sync::OnceLock;
-use std::sync::atomic::Ordering;
-use std::sync::Mutex;
-use std::panic;
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
 
-use bincode;
+use godot::{
+    prelude::*,                         // Core Godot prelude: macros, traits, and types for GDExtension.
+    classes::{Node, TileMap, INode},    // Godot classes: Node (base scene object), TileMap (grid-based map), INode trait.
+    obj::{Base, Gd},                    // Base: wrapper for Godot objects, Gd: smart pointer for Godot-managed objects.
+};
 
-use ssxl_generate::{Conductor, start_runtime_placeholder, ConductorProgressReceiver};
-use tokio::sync::mpsc::error::TryRecvError;
-use ssxl_shared::{initialize_shared_data, CHUNKS_COMPLETED_COUNT};
+use std::sync::Arc;                     // Arc: atomic reference-counted pointer for shared ownership.
+use tokio::sync::mpsc::{                // Tokio channels for async communication.
+    channel,                            // Bounded channel.
+    Receiver,                           // Receiver side of a channel.
+    UnboundedSender,                    // Unbounded sender side of a channel.
+    unbounded_channel,                  // Unbounded channel constructor.
+    error::TryRecvError                 // Error type for non-blocking receive attempts.
+};
+use tracing::{info, error, Level, span}; // Structured logging utilities.
 
+use ssxl_generate::Conductor;           // Conductor: orchestrates generation tasks.
+use ssxl_generate::conductor::ConductorState; // ConductorState: tracks conductor’s internal state.
+use ssxl_generate::task::task_queue::{GenerationMessage, GenerationTask}; 
+// GenerationMessage: messages from generation tasks (updates, completion).
+// GenerationTask: represents a single generation job.
 
-use tracing::{info, error};
+use ssxl_math::prelude::Vec2i;          // Vec2i: integer 2D vector type.
+use ssxl_shared::{initialize_shared_data, CHUNK_SIZE}; 
+// initialize_shared_data: sets up shared resources.
+// CHUNK_SIZE: constant defining chunk dimensions (e.g., 16x16 tiles).
 
-static CONDUCTOR: OnceLock<Mutex<Conductor>> = OnceLock::new();
-static PROGRESS_RECEIVER: OnceLock<Mutex<ConductorProgressReceiver>> = OnceLock::new();
+// -----------------------------------------------------------------------------
+// Helper: Dummy Engine State
+// -----------------------------------------------------------------------------
+// Provides a fallback SSXLEngine when the Conductor fails to start.
+// Creates dummy channels and a default ConductorState.
+fn create_dummy_engine_state(base: Base<Node>) -> SSXLEngine {
+    let (dummy_tx, _) = unbounded_channel(); // Dummy sender.
+    let (_, dummy_rx) = channel(1);          // Dummy receiver.
 
-// ------------------------------------------------------------------
+    SSXLEngine {
+        base,
+        conductor: None,                     // No conductor available.
+        state: ConductorState::new(String::new()), // Default empty state.
+        request_sender: dummy_tx,
+        progress_rx: dummy_rx,
+        tilemap: None,
+    }
+}
 
-#[no_mangle]
-pub extern "C" fn ssxl_start_runtime() -> bool {
-    // Panic guard applied to maintain FFI boundary stability
-    match panic::catch_unwind(|| {
-        initialize_shared_data();
+// -----------------------------------------------------------------------------
+// Struct: SSXLEngine
+// -----------------------------------------------------------------------------
+// Represents the Godot-facing engine node.
+// Manages conductor, communication channels, tilemap, and state.
+#[derive(GodotClass)]
+#[class(base = Node)]
+pub struct SSXLEngine {
+    base: Base<Node>,                        // Base Godot node.
 
-        if CONDUCTOR.get().is_some() {
-            info!("FFI Bridge: Runtime already running.");
-            return true;
-        }
+    conductor: Option<Conductor>,            // Optional conductor instance.
+    request_sender: UnboundedSender<GenerationTask>, // Channel to send generation tasks.
+    progress_rx: Receiver<GenerationMessage>,        // Channel to receive progress updates.
 
+    tilemap: Option<Gd<TileMap>>,            // Optional TileMap reference for rendering.
+    state: ConductorState,                   // Current conductor state.
+}
+
+// -----------------------------------------------------------------------------
+// Implementation: INode Trait
+// -----------------------------------------------------------------------------
+// Defines lifecycle methods for SSXLEngine as a Godot node.
+#[godot_api]
+impl INode for SSXLEngine {
+    // Initialization: called when the node is created.
+    fn init(base: Base<Node>) -> Self {
+        let _span = span!(Level::INFO, "SSXLEngine::init").entered(); // Start tracing span.
+
+        initialize_shared_data(); // Prepare shared resources.
+
+        // Attempt to start conductor.
         match Conductor::new(None) {
-            Ok((conductor, _state, _request_sender, progress_receiver)) => {
-                
-                // 1. Store Conductor
-                if CONDUCTOR.set(Mutex::new(conductor)).is_err() {
-                    error!("FFI Bridge: Conductor::set() failed (Possible race condition).");
-                    return false;
+            Ok((conductor, state, request_sender, progress_rx)) => {
+                info!("SSXLEngine → Conductor ONLINE");
+                Self {
+                    base,
+                    conductor: Some(conductor),
+                    state,
+                    request_sender,
+                    progress_rx,
+                    tilemap: None,
                 }
-                
-                // 2. Store the Channel Receiver, keeping the channel open.
-                // FIX E0308: Use ConductorProgressReceiver::new() to wrap the raw receiver.
-                let progress_receiver_ffi = ConductorProgressReceiver::new(progress_receiver);
-                
-                if PROGRESS_RECEIVER.set(Mutex::new(progress_receiver_ffi)).is_err() {
-                    error!("FFI Bridge: PROGRESS_RECEIVER::set() failed (Possible race condition).");
-                    return false;
-                }
-                
-                info!("FFI Bridge: Conductor Runtime started successfully.");
-                true
             }
             Err(e) => {
-                tracing::error!("FFI Bridge: Failed to initialize Conductor: {:?}", e);
-                false
+                error!("Failed to start Conductor: {:?}", e);
+                create_dummy_engine_state(base) // Fallback to dummy state.
             }
         }
-    }) {
-        Ok(result) => result,
-        Err(_) => {
-            error!("FFI BRIDGE FATAL: A panic occurred inside ssxl_start_runtime. Preventing crash.");
-            false
-        }
     }
-}
 
-// ------------------------------------------------------------------
-
-#[no_mangle]
-pub extern "C" fn ssxl_poll_progress_message(
-    buffer: *mut c_char,
-    buffer_len: usize,
-) -> isize {
-    let receiver_mutex = match PROGRESS_RECEIVER.get() {
-        Some(m) => m,
-        None => return -1, // Runtime not initialized
-    };
-
-    let mut receiver_guard = match receiver_mutex.lock() {
-        Ok(guard) => guard,
-        Err(_) => return -2, // Lock failed
-    };
-    
-    // FIX E0599: Access the inner receiver using `.rx` to call `try_recv()`.
-    match receiver_guard.rx.try_recv() {
-        Ok(message) => {
-            
-            let bytes = match bincode::serialize(&message) {
-                Ok(b) => b,
+    // Process loop: runs every frame.
+    fn process(&mut self, _delta: f64) {
+        loop {
+            // Try to receive a progress message without blocking.
+            let message = match self.progress_rx.try_recv() {
+                Ok(msg) => msg,
+                Err(TryRecvError::Empty) => break, // No messages → exit loop.
                 Err(e) => {
-                    error!("FFI Bridge: Bincode serialization failed: {:?}", e);
-                    return -4; // Serialization failure
+                    error!("Progress channel error: {:?}", e);
+                    break;
                 }
             };
-            
-            let write_len = bytes.len().min(buffer_len);
 
-            if write_len == 0 {
-                return -5; // Empty message or zero buffer length
+            // Handle different message types.
+            match message {
+                GenerationMessage::Generated(key, chunk_data) => {
+                    // Ensure tilemap exists.
+                    let Some(tilemap) = self.tilemap.as_mut() else { continue; };
+
+                    // Compute chunk origin in world coordinates.
+                    let origin_x = (key.x as i32) * CHUNK_SIZE as i32;
+                    let origin_y = (key.y as i32) * CHUNK_SIZE as i32;
+                    let layer = 0;
+
+                    // Extract tiles from Arc (consume or clone).
+                    let tiles = Arc::try_unwrap(chunk_data)
+                        .unwrap_or_else(|arc| (*arc).clone())
+                        .tiles;
+
+                    // Iterate over tiles and place them in the TileMap.
+                    for (idx, _tile) in tiles.iter().enumerate() {
+                        let local_x = (idx as u32 % CHUNK_SIZE) as i32;
+                        let local_y = (idx as u32 / CHUNK_SIZE) as i32;
+
+                        let world_x = origin_x + local_x;
+                        let world_y = origin_y + local_y;
+
+                        tilemap.set_cell(
+                            layer,
+                            Vector2i::new(world_x, world_y),
+                        );
+                    }
+
+                    // Emit signal to Godot: chunk applied.
+                    self.base_mut().emit_signal(
+                        "chunk_applied",
+                        &[key.x.to_variant(), key.y.to_variant()],
+                    );
+                }
+
+                GenerationMessage::GenerationComplete => {
+                    info!("Generation Task Queue signaled completion.");
+                }
+
+                GenerationMessage::StatusUpdate(status) => {
+                    info!("Generation status update: {}", status);
+                }
             }
+        }
+    }
 
-            unsafe {
-                // Copy the raw binary data.
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, write_len);
+    // Exit tree: called when node is removed from scene.
+    fn exit_tree(&mut self) {
+        if let Some(conductor) = self.conductor.take() {
+            conductor.signal_shutdown_graceful(); // Gracefully shut down conductor.
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Public Godot-exposed Methods
+// -----------------------------------------------------------------------------
+// These methods can be called from Godot scripts.
+#[godot_api]
+impl SSXLEngine {
+    // Assign a TileMap to the engine.
+    #[func]
+    pub fn set_tilemap(&mut self, tilemap: Gd<TileMap>) {
+        self.tilemap = Some(tilemap);
+    }
+
+    // Build a map of given width/height using specified generator.
+    #[func]
+    pub fn build_map(&self, width: i32, height: i32, generator_id: GString) {
+        if self.request_sender.is_closed() {
+            error!("Conductor is shut down. Cannot request map.");
+            return;
+        }
+
+        // Compute number of chunks needed (ceil division).
+        let chunks_x = width.div_ceil(CHUNK_SIZE as i32);
+        let chunks_y = height.div_ceil(CHUNK_SIZE as i32);
+
+        // Send generation tasks for each chunk.
+        for x in 0..chunks_x {
+            for y in 0..chunks_y {
+                let task = GenerationTask {
+                    chunk_coords: Vec2i::new(x as i64, y as i64),
+                    generator_id: generator_id.to_string(),
+                };
+                let _ = self.request_sender.send(task);
             }
-            // Return the written length (positive)
-            write_len as isize
         }
-        Err(TryRecvError::Empty) => {
-            0 // Return 0 to signal no message was received this tick
-        }
-        Err(TryRecvError::Disconnected) => {
-            error!("FFI Bridge: Progress channel disconnected. Clearing static.");
-            
-            unsafe {
-                let ptr = &PROGRESS_RECEIVER as *const _ as *mut OnceLock<Mutex<ConductorProgressReceiver>>;
-                (*ptr).take();
-            }
-            -3 // Return a negative error code for permanent failure
-        }
-    }
-}
 
-// ------------------------------------------------------------------
-
-#[no_mangle]
-pub extern "C" fn ssxl_shutdown_runtime() {
-    // Panic guard applied to maintain FFI boundary stability
-    match panic::catch_unwind(|| {
-        // 1. Signal graceful shutdown to the Conductor thread
-        if let Some(mutex) = CONDUCTOR.get() {
-            if let Ok(conductor) = mutex.lock() {
-                conductor.signal_shutdown_graceful();
-                info!("FFI Bridge: Conductor Runtime signalled for shutdown.");
-            } else {
-                error!("FFI Bridge: Failed to acquire lock for shutdown (Possible poisoned lock).");
-            }
-        }
-        
-        // 2. Explicitly drop the receiver side (closes the channel for the workers)
-        unsafe {
-            let ptr = &PROGRESS_RECEIVER as *const _ as *mut OnceLock<Mutex<ConductorProgressReceiver>>;
-            (*ptr).take();
-        }
-        info!("FFI Bridge: Progress Receiver dropped.");
-    }) {
-        Ok(_) => {},
-        Err(_) => {
-            error!("FFI BRIDGE FATAL: Panic during ssxl_shutdown_runtime.");
-        }
-    }
-}
-
-// ------------------------------------------------------------------
-
-#[no_mangle]
-pub extern "C" fn ssxl_is_runtime_ready() -> bool {
-    CONDUCTOR.get().is_some()
-}
-
-#[no_mangle]
-pub extern "C" fn ssxl_is_receiver_ready() -> bool {
-    PROGRESS_RECEIVER.get().is_some()
-}
-
-#[no_mangle]
-pub extern "C" fn ssxl_initialize_engine() -> bool {
-    ssxl_start_runtime()
-}
-
-// ------------------------------------------------------------------
-
-#[no_mangle]
-pub extern "C" fn ssxl_trigger_runtime_test() {
-    match panic::catch_unwind(|| {
-        info!("FFI Bridge: Received command to trigger Conductor structural test.");
-        start_runtime_placeholder();
-        info!("FFI Bridge: Conductor test sequence complete.");
-    }) {
-        Ok(_) => {},
-        Err(_) => {
-            error!("FFI BRIDGE FATAL: Panic during runtime test. Check start_runtime_placeholder.");
-        }
-    }
-}
-
-// ------------------------------------------------------------------
-
-#[no_mangle]
-pub extern "C" fn ssxl_write_status(
-    buffer: *mut c_char,
-    buffer_len: usize,
-    id: u32,
-) -> isize {
-    let status = format!(
-        "Engine status for id {}: Runtime Running: {}",
-        id,
-        CONDUCTOR.get().is_some()
-    );
-
-    if buffer.is_null() || buffer_len == 0 {
-        return -1;
+        info!("Sent {} generation tasks.", chunks_x * chunks_y);
     }
 
-    let bytes = status.as_bytes();
-    let write_len = bytes.len().min(buffer_len.saturating_sub(1));
-
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, write_len);
-        *buffer.add(write_len) = 0;
+    // Check if conductor is active.
+    #[func]
+    pub fn is_active(&self) -> bool {
+        self.state.is_active()
     }
 
-    write_len as isize
+    // Signal emitted when a chunk is applied to the TileMap.
+    #[signal]
+    fn chunk_applied(key_x: i64, key_y: i64);
 }
 
-// ------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// GDExtension Entry Point
+// -----------------------------------------------------------------------------
+// Registers SSXLEngine as a Godot extension library.
+struct SSXLExtension;
 
-#[no_mangle]
-pub extern "C" fn ssxl_get_chunks_completed() -> u32 {
-    CHUNKS_COMPLETED_COUNT.load(Ordering::Relaxed) as u32
-}
+#[gdextension]
+unsafe impl ExtensionLibrary for SSXLExtension {}
+
 <<< FILE END: rust\ssxl_engine_ffi\src\lib.rs >>>
 

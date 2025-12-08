@@ -1,7 +1,7 @@
 ﻿>>> FILE START: rust\ssxl_shared\cargo.toml (15 LOC) <<<
 [package]
 name = "ssxl_shared"
-version = "0.6.0" # Standardized version number
+version = "0.9.1"
 edition = "2021"
 
 [dependencies]
@@ -19,7 +19,7 @@ tracing     = { workspace = true }
 
 <<< FILE END: rust\ssxl_shared\cargo.toml >>>
 
->>> FILE START: rust\ssxl_shared\src\lib.rs (54 LOC) <<<
+>>> FILE START: rust\ssxl_shared\src\lib.rs (67 LOC) <<<
 use serde::{Deserialize, Serialize};
 use tracing;
 
@@ -52,6 +52,21 @@ pub use message::messages::{
 
 pub use error::errors::{SSXLError, SSXLResult};
 pub use anyhow;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// FFI Export Function for CLI (ssxl_start_runtime)
+// ──────────────────────────────────────────────────────────────────────────────
+/// Initializes the core engine runtime (primarily for the CLI) and returns a success status.
+#[no_mangle]
+pub extern "C" fn ssxl_start_runtime() -> bool {
+    initialize_shared_data();
+    tracing::info!("FFI Function `ssxl_start_runtime` called and shared initialization completed.");
+    true 
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Shared Data Structures
+// ──────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SSXLData {
@@ -87,24 +102,12 @@ use std::sync::atomic::AtomicUsize;
 pub static CHUNKS_COMPLETED_COUNT: AtomicUsize = AtomicUsize::new(0);
 <<< FILE END: rust\ssxl_shared\src\lib.rs >>>
 
->>> FILE START: rust\ssxl_shared\src\chunk\chunk_data.rs (258 LOC) <<<
-// ssxl_shared/src/chunk/chunk_data.rs
-
-//! # Chunk Data Structures (`ssxl_shared::chunk::chunk_data`)
-//!
-//! This module defines the `ChunkData` structure, which represents a single,
-//! fixed-size block of the procedural world. It includes coordinates, bounds,
-//! the array of tiles, and metadata about its generation. This is the atomic
-//! unit of data shared between generation workers and the cache/Godot runtime,
-//! forming the basis of the engine's "crypto coded memory."
-
+>>> FILE START: rust\ssxl_shared\src\chunk\chunk_data.rs (223 LOC) <<<
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::convert::TryInto;
-// NEW: For faster assignment of large arrays (ptr::write).
 use std::ptr; 
 
-// --- FIXES APPLIED HERE ---
 use super::grid_bounds::GridBounds;
 use crate::tile::tile_data::TileData; 
 use crate::math::math_primitives; 
@@ -112,53 +115,30 @@ use crate::math::math_primitives;
 use ssxl_math::prelude::Vec2i;
 use serde_big_array::BigArray;
 
-// --- Constants ---
-
-/// The canonical side length of a chunk (e.g., 32x32 tiles), defined as a public constant.
 pub const CHUNK_SIZE: u32 = 32;
-
-/// The total number of tiles in a single chunk (32 * 32 = 1024).
 const TILE_ARRAY_SIZE: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
 
-
-// --- Coordinate Structure ---
-
-/// Defines the **chunk-space** coordinates (e.g., Chunk [1, 5] on the world grid).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ChunkCoords {
     pub x: i64,
     pub y: i64,
 }
 
-
-// --- Core Data Structure ---
-
-/// The central data structure for a world chunk. This is the primary payload
-/// for procedural generation tasks and caching.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkData {
-    /// A unique, deterministic identifier for this chunk.
     pub id: u64,
-    /// The world-space bounding box of the chunk, using the half-open range convention.
     pub bounds: GridBounds,
-    /// The fixed-size array containing all tiles within the chunk.
     #[serde(with = "BigArray")]
     pub tiles: [TileData; TILE_ARRAY_SIZE],
-    /// A string tag identifying the dimension or layer this chunk belongs to.
     pub dimension_tag: String,
-    /// Timestamp indicating when the chunk was generated (serialized deterministically).
     #[serde(with = "math_primitives::system_time_serde")]
     pub generated_at: SystemTime,
 }
 
-
 impl ChunkData {
-    /// Re-export of the canonical chunk size as an associated constant for use in methods.
     pub const SIZE: u32 = CHUNK_SIZE;
 
-    /// Creates a new `ChunkData` instance using explicit, pre-calculated parameters.
     pub fn new(id: u64, bounds: GridBounds, dimension_tag: String) -> Self {
-        // Initialize the tile array with default (empty) TileData.
         let tiles = [TileData::default(); TILE_ARRAY_SIZE];
         ChunkData {
             id,
@@ -169,22 +149,17 @@ impl ChunkData {
         }
     }
     
-    /// Creates a new `ChunkData` instance by calculating its bounds and generating
-    /// an initial ID based solely on its chunk coordinates.
     pub fn new_at_coords(chunk_coords: Vec2i) -> Self {
         let chunk_size_i64 = Self::SIZE as i64;
         
-        // 1. Calculate the world-space minimum coordinates (inclusive).
         let min_x = chunk_coords.x * chunk_size_i64;
         let min_y = chunk_coords.y * chunk_size_i64;
         
-        // 2. Calculate the world-space maximum coordinates (exclusive, half-open range).
         let max_x = min_x + chunk_size_i64;
         let max_y = min_y + chunk_size_i64;
 
         let bounds = GridBounds::new(min_x, min_y, max_x, max_y);
         
-        // 3. Generate a robust, collision-resistant ID.
         let id = ChunkData::hash_coords_2d(chunk_coords.x, chunk_coords.y);
         
         let tiles = [TileData::default(); TILE_ARRAY_SIZE];
@@ -198,89 +173,50 @@ impl ChunkData {
         }
     }
 
-    /// Internal helper to map signed i64 to u64 for safe spatial indexing (e.g., Z-order curves).
-    /// This prevents massive u64 values for small negative i64 inputs.
-    /// Formula: (n << 1) ^ (n >> 63)
-    // OPTIMIZATION: const fn and inline hint for zero-cost hashing.
     #[inline(always)]
     pub const fn zigzag_encode(n: i64) -> u64 {
-        // We use the standard Zigzag formula to map all i64 values to unique u64 values,
-        // prioritizing small absolute values to the lowest u64 space.
         ((n << 1) ^ (n >> 63)) as u64
     }
 
-    /// Internal 2D coordinate hashing function, replacing the problematic FFI call.
-    /// Uses a **Zigzag-encoded** packing into a u64, which is fast, deterministic,
-    /// and ensures no collisions across the world origin.
-    // OPTIMIZATION: const fn and inline hint for zero-cost hashing.
     #[inline(always)]
     pub const fn hash_coords_2d(x: i64, y: i64) -> u64 {
         let ux = Self::zigzag_encode(x);
         let uy = Self::zigzag_encode(y);
-
-        // Pack the two 32-bit halves. This is standard 2D packing for chunk keys.
         ux | (uy << 32)
     }
     
-    /// Internal helper to convert local tile coordinates (x, y) within the chunk
-    /// into a flat array index. Includes a bounds check, returning `None` on failure.
     #[inline(always)]
     fn coord_to_index_checked(x: u32, y: u32) -> Option<usize> {
         if x < Self::SIZE && y < Self::SIZE {
-            // Index = Y * Width + X (standard row-major order)
             Some((y * Self::SIZE + x) as usize)
         } else {
             None
         }
     }
 
-    /// Internal helper to convert local tile coordinates (x, y) within the chunk
-    /// into a flat array index, **without** bounds checking.
-    ///
-    /// # Safety
-    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
     #[inline(always)]
     pub const fn coord_to_index_unchecked(x: u32, y: u32) -> usize {
-        // Index = Y * Width + X (standard row-major order)
         (y * Self::SIZE + x) as usize
     }
 
-    /// Safely retrieves an immutable reference to a tile at the given local coordinates.
     pub fn get_tile(&self, x: u32, y: u32) -> Option<&TileData> {
         Self::coord_to_index_checked(x, y).map(|index| {
-            // SAFETY: index is guaranteed to be within array bounds by coord_to_index_checked
             &self.tiles[index]
         })
     }
     
-    /// **FAST PATH:** Retrieves an immutable reference to a tile at the given local coordinates,
-    /// **without bounds checking**.
-    ///
-    /// # Safety
-    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
-    // OPTIMIZATION: Fastest tile access method for performance-critical inner loops.
     #[inline(always)]
     pub unsafe fn get_tile_unchecked(&self, x: u32, y: u32) -> &TileData {
         let index = Self::coord_to_index_unchecked(x, y);
-        // SAFETY: The caller guarantees the index is valid.
         &self.tiles[index]
     }
     
-    /// Inserts a fully generated vector of tiles into the chunk's internal array.
-    ///
-    /// # Panics
-    /// Panics if the input vector's length does not exactly match the expected
-    /// `TILE_ARRAY_SIZE`, which is a critical **data integrity** check.
     pub fn insert_tiles(&mut self, tiles_vec: Vec<TileData>) {
-        // Use TryInto to consume the Vec, which is more idiomatic and clear for ownership transfer.
         match tiles_vec.try_into() {
             Ok(arr) => {
-                // OPTIMIZATION: Use ptr::write for a non-initializing move of the array contents
-                // This is generally faster than a regular assignment for large arrays.
                 unsafe { ptr::write(&mut self.tiles, arr) };
             }
             Err(vec) => {
-                // Critical error: A generator produced an incomplete or oversized chunk.
                 panic!(
                     "Tile vector size mismatch for chunk {:?}. Generator returned {} tiles, but expected {}.",
                     self.bounds,
@@ -291,62 +227,37 @@ impl ChunkData {
         }
     }
     
-    /// Safely retrieves a mutable reference to a tile at the given local coordinates.
     pub fn get_tile_mut(&mut self, x: u32, y: u32) -> Option<&mut TileData> {
         Self::coord_to_index_checked(x, y).map(|index| {
-            // SAFETY: index is guaranteed to be within array bounds by coord_to_index_checked
             &mut self.tiles[index]
         })
     }
 
-    /// **FAST PATH:** Retrieves a mutable reference to a tile at the given local coordinates,
-    /// **without bounds checking**.
-    ///
-    /// # Safety
-    /// The caller **must** ensure that `x` and `y` are within the range `[0, CHUNK_SIZE - 1]`.
-    // OPTIMIZATION: Fastest mutable tile access method for performance-critical inner loops.
     #[inline(always)]
     pub unsafe fn get_tile_mut_unchecked(&mut self, x: u32, y: u32) -> &mut TileData {
         let index = Self::coord_to_index_unchecked(x, y);
-        // SAFETY: The caller guarantees the index is valid.
         &mut self.tiles[index]
     }
 }
 
-
-// --- Unit Tests ---
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Assuming TileData is available via `crate::tile::tile_data::TileData`
     
     #[test]
-    /// Tests the critical coordinate-to-index logic for boundaries and center.
     fn test_coord_to_index() {
-        // Test Checked version
-        // Top-left corner
         assert_eq!(ChunkData::coord_to_index_checked(0, 0), Some(0));
-
-        // Center (16, 16) -> 16 * 32 + 16 = 528
         assert_eq!(ChunkData::coord_to_index_checked(16, 16), Some(528));
-
-        // Bottom-right corner (31, 31) -> 31 * 32 + 31 = 1023 (TILE_ARRAY_SIZE - 1)
         assert_eq!(ChunkData::coord_to_index_checked(31, 31), Some(1023));
-
-        // Out of bounds checks (32 is the exclusive size limit)
         assert_eq!(ChunkData::coord_to_index_checked(32, 0), None);
         assert_eq!(ChunkData::coord_to_index_checked(0, 32), None);
         assert_eq!(ChunkData::coord_to_index_checked(33, 33), None);
         
-        // Test Unchecked version (only for known good coordinates)
         assert_eq!(ChunkData::coord_to_index_unchecked(0, 0), 0);
         assert_eq!(ChunkData::coord_to_index_unchecked(31, 31), 1023);
     }
     
     #[test]
-    /// Tests the Zigzag encoding for correct mapping of signed to unsigned space.
     fn test_zigzag_encode() {
         assert_eq!(ChunkData::zigzag_encode(0), 0);
         assert_eq!(ChunkData::zigzag_encode(-1), 1);
@@ -356,69 +267,138 @@ mod tests {
     }
 
     #[test]
-    /// Tests the new 2D hashing function for uniqueness across the origin.
     fn test_hash_coords_2d() {
-        // Standard coordinates
-        // (1, 0) -> (Zigzag(1)=2 | Zigzag(0)=0 << 32) = 2
         assert_eq!(ChunkData::hash_coords_2d(1, 0), 2);
-        // (0, 1) -> (Zigzag(0)=0 | Zigzag(1)=2 << 32) = 8589934592 (2 * 2^32)
         assert_eq!(ChunkData::hash_coords_2d(0, 1), 8589934592);
-        
-        // Critical Negative Coordinate Check (was broken before)
-        // (-1, 0) -> (Zigzag(-1)=1 | Zigzag(0)=0 << 32) = 1
         assert_eq!(ChunkData::hash_coords_2d(-1, 0), 1);
-        
-        // Collision check across the origin must pass
         assert_ne!(ChunkData::hash_coords_2d(1, 1), ChunkData::hash_coords_2d(-1, -1));
         
-        // Large coordinates (to ensure all 64 bits are used)
-        let big_x = i64::MAX / 2; // Large positive
-        let big_y = i64::MIN / 2; // Large negative
+        let big_x = i64::MAX / 2;
+        let big_y = i64::MIN / 2;
         let hash1 = ChunkData::hash_coords_2d(big_x, big_y);
         assert_ne!(hash1, 0);
     }
 }
+
+// -----------------------------------------------------------------------------
+// Chunk Data Module Overview
+// -----------------------------------------------------------------------------
+// This module defines the core data structures and utilities for handling
+// fixed-size chunks in the SSXL engine. Each chunk is a 32x32 block of tiles,
+// with metadata for bounds, dimension tags, and generation timestamps.
+//
+// Key Components:
+// - ChunkCoords: Represents chunk-space coordinates (grid position).
+// - ChunkData: Central struct holding ID, bounds, tiles, dimension tag, and timestamp.
+// - Constants: CHUNK_SIZE (32) and TILE_ARRAY_SIZE (1024).
+//
+// -----------------------------------------------------------------------------
+// Constructors
+// -----------------------------------------------------------------------------
+// - new: Creates a ChunkData with explicit parameters (id, bounds, dimension_tag).
+// - new_at_coords: Creates a ChunkData at given coordinates, auto-calculating bounds
+//   and generating a unique ID via hash_coords_2d.
+//
+// -----------------------------------------------------------------------------
+// Hashing & Encoding
+// -----------------------------------------------------------------------------
+// - zigzag_encode: Maps signed i64 to unsigned u64, ensuring small negatives map
+//   to small positive values.
+// - hash_coords_2d: Packs Zigzag-encoded x and y into a single u64 for unique,
+//   deterministic chunk IDs.
+//
+// -----------------------------------------------------------------------------
+// Tile Indexing
+// -----------------------------------------------------------------------------
+// - coord_to_index_checked: Converts local (x,y) to array index with bounds check.
+// - coord_to_index_unchecked: Converts local (x,y) to array index without bounds check.
+//   Caller must guarantee safety.
+//
+// -----------------------------------------------------------------------------
+// Tile Access
+// -----------------------------------------------------------------------------
+// - get_tile: Safe immutable tile access with bounds check.
+// - get_tile_unchecked: Unsafe fast immutable tile access (no bounds check).
+// - get_tile_mut: Safe mutable tile access with bounds check.
+// - get_tile_mut_unchecked: Unsafe fast mutable tile access (no bounds check).
+//
+// -----------------------------------------------------------------------------
+// Tile Insertion
+// -----------------------------------------------------------------------------
+// - insert_tiles: Replaces the chunk’s tile array with a vector of TileData.
+//   Panics if vector length != TILE_ARRAY_SIZE. Uses ptr::write for optimized assignment.
+//
+// -----------------------------------------------------------------------------
+// Unit Tests
+// -----------------------------------------------------------------------------
+// - test_coord_to_index: Validates index conversion for boundaries and center.
+// - test_zigzag_encode: Ensures correct mapping of signed to unsigned values.
+// - test_hash_coords_2d: Validates uniqueness, determinism, and negative coordinate handling.
+//
+// -----------------------------------------------------------------------------
+// Summary
+// -----------------------------------------------------------------------------
+// ChunkData is the atomic unit of world generation and caching. It provides
+// safe and unsafe paths for tile access, robust hashing for IDs, and efficient
+// memory handling for tile arrays. This ensures deterministic, high-performance
+// chunk management across the engine.
+// -----------------------------------------------------------------------------
+
 <<< FILE END: rust\ssxl_shared\src\chunk\chunk_data.rs >>>
 
->>> FILE START: rust\ssxl_shared\src\chunk\grid_bounds.rs (64 LOC) <<<
-// ssxl_shared/src/grid_bounds.rs
-
-//! # Grid Bounds Structures (`ssxl_shared::grid_bounds`)
-//!
-//! This module defines the core structures for representing 2D world-space points
-//! and rectangular bounding boxes (bounds) used throughout the SSXL-ext engine.
-
-use serde::{Deserialize, Serialize};
-
-// --- Coordinate Structure ---
-
-/// Represents a single 2D world-space coordinate point.
-///
-/// Uses `i64` to support the massive scale of the SSXL world coordinates.
+>>> FILE START: rust\ssxl_shared\src\chunk\grid_bounds.rs (101 LOC) <<<
+// -----------------------------------------------------------------------------
+// Grid Bounds Module Overview
+// -----------------------------------------------------------------------------
+// This module defines the fundamental 2D coordinate and bounding box structures
+// used throughout the SSXL engine. These are essential for representing world-space
+// positions and rectangular regions (chunks, tiles, or arbitrary areas).
+//
+// Key Components:
+// - Coord2D: A single point in 2D world space.
+// - GridBounds: A rectangular bounding box defined by min and max coordinates.
+// -----------------------------------------------------------------------------
+//
+// Coord2D
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Represents a single 2D coordinate in world space.
+//   - Uses i64 to support extremely large coordinate ranges (beyond i32 limits).
+// Derives:
+//   - Debug, Clone, Copy: for easy inspection and duplication.
+//   - PartialEq, Eq, PartialOrd, Ord, Hash: for comparisons and use in collections.
+//   - Serialize, Deserialize: for persistence and networking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Coord2D {
-    /// The X component of the coordinate.
-    pub x: i64,
-    /// The Y component of the coordinate.
-    pub y: i64,
+    pub x: i64, // X component of the coordinate
+    pub y: i64, // Y component of the coordinate
 }
 
-// --- Bounding Box Structure ---
-
-/// Defines a rectangular region in the world by its minimum and maximum coordinate points.
-///
-/// **Convention:** `GridBounds` uses a **half-open range** (`[min, max)`), meaning
-/// the minimum coordinates are **inclusive** and the maximum coordinates are **exclusive**.
+// -----------------------------------------------------------------------------
+// GridBounds
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Represents a rectangular region in 2D world space.
+//   - Defined by inclusive minimum (min) and exclusive maximum (max) coordinates.
+// Convention:
+//   - Half-open range: [min, max)
+//     * min is inclusive
+//     * max is exclusive
+//   - This ensures correct size calculation and avoids off-by-one errors.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct GridBounds {
-    /// The inclusive minimum coordinate (e.g., the bottom-left point of the region).
-    pub min: Coord2D,
-    /// The exclusive maximum coordinate (one unit past the top-right point of the region).
-    pub max: Coord2D,
+    pub min: Coord2D, // Inclusive minimum coordinate (bottom-left corner)
+    pub max: Coord2D, // Exclusive maximum coordinate (one past top-right corner)
 }
 
 impl GridBounds {
-    /// Creates a new `GridBounds` instance from four explicit coordinate components.
+    // -------------------------------------------------------------------------
+    // Constructor: new
+    // -------------------------------------------------------------------------
+    // Creates a new GridBounds from explicit min and max coordinates.
+    // Arguments:
+    //   - min_x, min_y: inclusive minimum coordinates
+    //   - max_x, max_y: exclusive maximum coordinates
     pub fn new(min_x: i64, min_y: i64, max_x: i64, max_y: i64) -> Self {
         GridBounds {
             min: Coord2D { x: min_x, y: min_y },
@@ -426,10 +406,15 @@ impl GridBounds {
         }
     }
 
-    /// Calculates the size (width and height) of the bounds.
-    ///
-    /// For a half-open range, the size is simply `max - min`, which correctly
-    /// yields the number of unique integer coordinates contained within the bounds.
+    // -------------------------------------------------------------------------
+    // Method: size
+    // -------------------------------------------------------------------------
+    // Calculates the width and height of the bounds.
+    // Formula:
+    //   size.x = max.x - min.x
+    //   size.y = max.y - min.y
+    // Works correctly with half-open ranges, yielding the number of integer
+    // coordinates contained within the bounds.
     pub fn size(&self) -> Coord2D {
         Coord2D {
             x: self.max.x - self.min.x,
@@ -437,17 +422,30 @@ impl GridBounds {
         }
     }
 
-    /// Checks if a given coordinate is contained within the bounds.
-    ///
-    /// Follows the half-open range convention: `[min.x, max.x)` and `[min.y, max.y)`.
+    // -------------------------------------------------------------------------
+    // Method: contains
+    // -------------------------------------------------------------------------
+    // Checks if a given coordinate lies within the bounds.
+    // Follows half-open range convention:
+    //   - min.x <= coord.x < max.x
+    //   - min.y <= coord.y < max.y
+    // Returns:
+    //   - true if inside bounds
+    //   - false otherwise
     pub fn contains(&self, coord: Coord2D) -> bool {
         coord.x >= self.min.x && coord.x < self.max.x &&
         coord.y >= self.min.y && coord.y < self.max.y
     }
 }
 
+// -----------------------------------------------------------------------------
+// Default Implementation
+// -----------------------------------------------------------------------------
+// Provides a default GridBounds instance.
+//   - min = (0,0)
+//   - max = (0,0)
+// Represents a zero-sized bounds at the origin.
 impl Default for GridBounds {
-    /// Returns a default, zero-sized bounds at the origin (0, 0) to (0, 0).
     fn default() -> Self {
         GridBounds {
             min: Coord2D { x: 0, y: 0 },
@@ -455,85 +453,170 @@ impl Default for GridBounds {
         }
     }
 }
+
 <<< FILE END: rust\ssxl_shared\src\chunk\grid_bounds.rs >>>
 
->>> FILE START: rust\ssxl_shared\src\chunk\mod.rs (3 LOC) <<<
-// ssxl_shared/src/chunk/mod.rs
+>>> FILE START: rust\ssxl_shared\src\chunk\mod.rs (45 LOC) <<<
+// -----------------------------------------------------------------------------
+// Chunk Module Overview
+// -----------------------------------------------------------------------------
+// This file serves as the **module root** for all chunk-related functionality
+// in the `ssxl_shared` crate. It organizes and exposes submodules that define
+// the data structures and utilities for handling chunks in the SSXL engine.
+//
+// Why this matters:
+//   - Rust modules are hierarchical. Declaring `pub mod ...` here tells the compiler
+//     to look for corresponding files (or directories) and include them as part of
+//     the `chunk` namespace.
+//   - By centralizing these declarations, we ensure that all chunk-related logic
+//     is grouped together and can be accessed via `ssxl_shared::chunk::...`.
+// -----------------------------------------------------------------------------
 
+// -----------------------------------------------------------------------------
+// Submodule: chunk_data
+// -----------------------------------------------------------------------------
+// Contains the **ChunkData** struct, which represents a single chunk of the world.
+// Responsibilities:
+//   - Stores chunk ID, bounds, tiles, dimension tag, and timestamp.
+//   - Provides methods for tile access, insertion, and coordinate hashing.
+//   - Acts as the atomic unit of procedural generation and caching.
+// Usage:
+//   - Accessed via `ssxl_shared::chunk::chunk_data::ChunkData`.
 pub mod chunk_data;
+
+// -----------------------------------------------------------------------------
+// Submodule: grid_bounds
+// -----------------------------------------------------------------------------
+// Contains the **GridBounds** struct and supporting types (Coord2D).
+// Responsibilities:
+//   - Defines rectangular bounding boxes in world space.
+//   - Provides utilities for size calculation and containment checks.
+//   - Used by ChunkData to represent the spatial extent of a chunk.
+// Usage:
+//   - Accessed via `ssxl_shared::chunk::grid_bounds::GridBounds`.
 pub mod grid_bounds;
+
+// -----------------------------------------------------------------------------
+// Summary
+// -----------------------------------------------------------------------------
+// Together, `chunk_data` and `grid_bounds` form the foundation of chunk management:
+//   - `chunk_data` handles the contents and metadata of a chunk.
+//   - `grid_bounds` defines the spatial boundaries of a chunk.
+// This modular design keeps responsibilities clear and makes the engine easier
+// to maintain, extend, and test.
+// -----------------------------------------------------------------------------
+
 <<< FILE END: rust\ssxl_shared\src\chunk\mod.rs >>>
 
->>> FILE START: rust\ssxl_shared\src\config\config.rs (71 LOC) <<<
-// FILE: ssxl_shared/src/config.rs
+>>> FILE START: rust\ssxl_shared\src\config\config.rs (119 LOC) <<<
+// -----------------------------------------------------------------------------
+// Global Configuration Module Overview
+// -----------------------------------------------------------------------------
+// This module defines the configuration structure and constants that govern
+// the SSXL engine’s behavior. It ensures consistent values across crates
+// (math, generate, cache, godot) and provides safe defaults when loading fails.
+//
+// Key Components:
+// - SSXLConfig: Struct holding runtime configuration settings.
+// - CHUNK_SIZE / TILE_ARRAY_SIZE: Constants defining chunk geometry.
+// - DEFAULT_CONFIG_PATH: Default path for configuration file.
+// - new_with_defaults: Provides safe fallback values.
+// - load_from_path: Attempts to load configuration (placeholder implementation).
+// - default_generator_id: Accessor for generator ID.
+// - get_config_from_path: Public function to load configuration safely.
+// -----------------------------------------------------------------------------
 
-//! # Global Configuration Constants (`ssxl_shared::config`)
-//!
-//! This module defines fundamental, immutable constants that govern the structure
-//! and scale of the SSXL procedural world. These values must be consistent
-//! across all SSXL-ext crates (math, generate, cache, godot) to ensure data
-//! integrity and system entropy is controlled.
-
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
+// tracing::{info, warn}
+//   - Logging macros for runtime diagnostics (info-level success, warn-level failure).
+// std::error::Error
+//   - Trait object used for error handling in load_from_path.
+// serde::{Deserialize, Serialize}
+//   - Enables serialization/deserialization of SSXLConfig for persistence and loading.
 use tracing::{info, warn};
 use std::error::Error;
-use serde::{Deserialize, Serialize}; // Assume Serde is used for configuration loading
+use serde::{Deserialize, Serialize};
 
-// --- Config Struct Definition ---
-
-/// Structure holding all runtime configuration settings for the SSXL Engine.
-/// **NOTE:** This must be public to be used by other crates.
+// -----------------------------------------------------------------------------
+// Struct: SSXLConfig
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Holds runtime configuration settings for the SSXL engine.
+// Fields:
+//   - ca_default_ruleset: Default ruleset ID for cellular automata generation.
+//   - default_generator_id: Identifier for the default generator used in world creation.
+// Derives:
+//   - Debug, Clone: For inspection and duplication.
+//   - Serialize, Deserialize: For persistence and loading from config files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SSXLConfig {
-    // Example field required by other code snippets (from new_with_defaults)
     pub ca_default_ruleset: u8,
-    
-    // FIX 1: Add the required field for the default generator ID.
     pub default_generator_id: String,
 }
 
-// --- World Geometry Constants ---
-
-/// The canonical side length of a procedural chunk in tiles.
-/// **Value:** 32 (meaning chunks are 32x32 tiles).
+// -----------------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------------
+// CHUNK_SIZE
+//   - Canonical side length of a chunk in tiles (32).
+// TILE_ARRAY_SIZE
+//   - Total number of tiles in a chunk (32 * 32 = 1024).
+// DEFAULT_CONFIG_PATH
+//   - Default file path for configuration JSON.
 pub const CHUNK_SIZE: u32 = 32;
-
-/// The total number of tiles contained within a single `ChunkData` structure.
-/// **Calculation:** CHUNK_SIZE * CHUNK_SIZE (32 * 32 = 1024).
 pub const TILE_ARRAY_SIZE: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
-
-// --- Loading Constants ---
 const DEFAULT_CONFIG_PATH: &str = "res://ssxl_config.json";
 
+// -----------------------------------------------------------------------------
+// Implementation: SSXLConfig
+// -----------------------------------------------------------------------------
 impl SSXLConfig {
-    /// Creates a safe, hardcoded default configuration.
+    // -------------------------------------------------------------------------
+    // Method: new_with_defaults
+    // -------------------------------------------------------------------------
+    // Provides a safe, hardcoded default configuration.
+    // Ensures engine can initialize even if config file is missing or invalid.
     pub fn new_with_defaults() -> Self {
         SSXLConfig {
-            ca_default_ruleset: 1, // Default CA ruleset ID
-            
-            // FIX 2: Initialize the new field.
-            default_generator_id: "default_noise_gen".to_string(), 
+            ca_default_ruleset: 1,
+            default_generator_id: "default_noise_gen".to_string(),
         }
     }
 
-    /// Internal method to attempt loading config from a file path.
-    /// Returns `Ok(Self)` or an `Err` on failure. (Placeholder implementation).
+    // -------------------------------------------------------------------------
+    // Method: load_from_path
+    // -------------------------------------------------------------------------
+    // Attempts to load configuration from a file path.
+    // Currently a placeholder: always returns defaults.
+    // Returns:
+    //   - Ok(Self) on success
+    //   - Err(Box<dyn Error>) on failure
     pub fn load_from_path(_path: &str) -> Result<Self, Box<dyn Error>> {
-        // In a real application, this would handle file I/O and deserialization.
-        // For now, we simulate success with defaults.
         Ok(SSXLConfig::new_with_defaults())
     }
     
-    // FIX 3: Add the missing accessor method to resolve E0599.
-    /// Returns the configured default Generator ID.
+    // -------------------------------------------------------------------------
+    // Method: default_generator_id
+    // -------------------------------------------------------------------------
+    // Accessor for the default generator ID.
+    // Returns a clone of the string to avoid ownership issues.
     pub fn default_generator_id(&self) -> String {
         self.default_generator_id.clone()
     }
 }
 
-
-/// Attempts to load the configuration from the specified path.
-///
-/// **FIX:** This function is defined publicly here, resolving `E0425` in `api_initializers.rs`.
+// -----------------------------------------------------------------------------
+// Function: get_config_from_path
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Public entry point for loading configuration.
+//   - Attempts to load from provided path or falls back to DEFAULT_CONFIG_PATH.
+// Behavior:
+//   - On success: logs info and returns loaded config.
+//   - On failure: logs warning and returns safe defaults.
+// Ensures engine always initializes with valid configuration.
 pub fn get_config_from_path(path: Option<&str>) -> SSXLConfig {
     let path_to_load = path.unwrap_or(DEFAULT_CONFIG_PATH);
 
@@ -543,12 +626,16 @@ pub fn get_config_from_path(path: Option<&str>) -> SSXLConfig {
             config
         },
         Err(e) => {
-            // Safe fallback: Logs failure but ensures the engine initializes with defaults.
-            warn!("Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.", path_to_load, e);
+            warn!(
+                "Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.",
+                path_to_load,
+                e
+            );
             SSXLConfig::new_with_defaults()
         }
     }
 }
+
 <<< FILE END: rust\ssxl_shared\src\config\config.rs >>>
 
 >>> FILE START: rust\ssxl_shared\src\config\mod.rs (2 LOC) <<<

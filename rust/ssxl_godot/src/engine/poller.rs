@@ -1,20 +1,68 @@
-// ssxl_godot/src/engine/poller.rs (Final, Two-Channel Compatible AsyncPoller)
+// ============================================================================
+// 🎼 AsyncPoller (`crate::engine::async_poller`)
+// ----------------------------------------------------------------------------
+// This module defines the `AsyncPoller` struct, which is responsible for
+// non-blocking draining of asynchronous channels in the SSXL engine. It
+// provides a unified interface for collecting both generation results and
+// animation updates without stalling the runtime.
+//
+// Purpose:
+//   • Manage asynchronous communication between engine subsystems.
+//   • Provide non-blocking polling for generation messages and animation updates.
+//   • Handle channel disconnections gracefully by disabling receivers.
+//   • Collect messages into `VecDeque` for batch processing.
+//
+// Key Components:
+//   • AsyncPoller (struct)
+//       - Holds two optional channel receivers:
+//           • gen_rx: receives heavy generation results (chunks, progress).
+//           • anim_rx: receives lightweight animation updates (flow fields, particles).
+//       - Both receivers are wrapped in `Option<T>` to allow flexible initialization
+//         and safe disabling when channels disconnect.
+//
+//   • Default Implementation
+//       - Provides an empty `AsyncPoller` with no channels set.
+//       - Useful for initializing before wiring channels during runtime setup.
+//
+//   • Methods
+//       - set_generation_receiver
+//           • Assigns the receiver for generation messages.
+//           • Called during initialization when channels are created.
+//       - set_animation_receiver
+//           • Assigns the receiver for animation updates.
+//           • Called during initialization when channels are created.
+//       - poll_generation_messages
+//           • Drains all available generation messages using `try_recv()`.
+//           • Collects messages into a `VecDeque` for batch processing.
+//           • If channel disconnects, logs a warning and disables receiver.
+//       - poll_animations
+//           • Drains all available animation updates using `try_recv()`.
+//           • Collects updates into a `VecDeque` for batch processing.
+//           • If channel disconnects, logs a warning and disables receiver.
+//
+// Design Choices:
+//   • Non-blocking polling ensures the engine remains responsive.
+//   • `VecDeque` provides efficient push/pop operations for batch collection.
+//   • Logging (`warn!`) provides visibility into unexpected channel disconnections.
+//   • Optional receivers (`Option<T>`) allow safe handling of missing or disconnected channels.
+//
+// Educational Note:
+//   • This module demonstrates how Rust’s async channels can be integrated into
+//     a polling system that avoids blocking the runtime. By combining `try_recv()`,
+//     structured logging, and safe handling of disconnections, `AsyncPoller` provides
+//     a robust foundation for managing asynchronous communication in game engines.
+// ============================================================================
+
 
 use tokio::sync::mpsc::Receiver as TokioReceiver;
 use ssxl_generate::task_queue::GenerationMessage; 
-// CRITICAL FIX: AnimationUpdate is located under ssxl_shared::message::messages, 
-// not ssxl_shared::tile_data. This resolves the E0308 type mismatch.
 use ssxl_shared::message::messages::AnimationUpdate; 
 use std::collections::VecDeque;
 use tracing::warn; 
 use tokio::sync::mpsc::error::TryRecvError;
 
-/// The primary struct responsible for non-blocking draining of asynchronous results.
-/// It holds the two distinct Tokio MPSC channel receivers from the Conductor's setup.
 pub struct AsyncPoller {
-    // Channel for heavy generation results (set via setter in init.rs)
     gen_rx: Option<TokioReceiver<GenerationMessage>>, 
-    // Channel for lightweight, frequent animation data (set via setter in init.rs)
     anim_rx: Option<TokioReceiver<AnimationUpdate>>, 
 }
 
@@ -28,36 +76,24 @@ impl Default for AsyncPoller {
 }
 
 impl AsyncPoller {
-    // --- Setup Methods (Used by init.rs::initialize_runtime_shell) ---
-    
-    /// Sets the receiver for map generation progress messages.
-    // NOTE: The setter names below are different from the ones called in init.rs, 
-    // but the types match the current definition. Assuming init.rs will be fixed to use 
-    // `set_generation_receiver` and `set_animation_receiver` later.
     pub fn set_generation_receiver(&mut self, rx: Option<TokioReceiver<GenerationMessage>>) {
         self.gen_rx = rx;
     }
 
-    /// Sets the receiver for high-frequency animation updates.
     pub fn set_animation_receiver(&mut self, rx: Option<TokioReceiver<AnimationUpdate>>) {
         self.anim_rx = rx;
     }
 
-    // --- Polling Methods (Used by tick.rs) ---
-
-    /// Drains ALL available generation messages from the channel instantly (non-blocking loop).
     pub fn poll_generation_messages(&mut self) -> VecDeque<GenerationMessage> {
         let mut messages = VecDeque::new();
-        // Only poll if the channel is set
         if let Some(rx) = &mut self.gen_rx {
             loop {
-                // Non-blocking attempt to receive a message.
                 match rx.try_recv() {
                     Ok(msg) => messages.push_back(msg),
                     Err(TryRecvError::Empty) => break, 
                     Err(TryRecvError::Disconnected) => {
                         warn!("Generation channel disconnected.");
-                        self.gen_rx = None; // Mark as permanently disconnected
+                        self.gen_rx = None;
                         break;
                     }
                 }
@@ -66,7 +102,6 @@ impl AsyncPoller {
         messages
     }
 
-    /// Drains ALL available animation updates from the channel instantly (non-blocking loop).
     pub fn poll_animations(&mut self) -> VecDeque<AnimationUpdate> {
         let mut updates = VecDeque::new();
         if let Some(rx) = &mut self.anim_rx {
@@ -76,7 +111,7 @@ impl AsyncPoller {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         warn!("Animation channel disconnected.");
-                        self.anim_rx = None; // Mark as permanently disconnected
+                        self.anim_rx = None;
                         break;
                     }
                 }

@@ -1,69 +1,70 @@
-// ssxl_math/src/generation_utils.rs
+// ============================================================================
+// 🎲 Utility Functions (`crate::utils::probability`)
+// ----------------------------------------------------------------------------
+// This module provides lightweight utility functions for probabilistic rolls
+// and generic data processing. These helpers are designed to support procedural
+// generation and quick uniqueness checks in the SSXL engine.
+//
+// Purpose:
+//   • `generate_percent_roll`: perform probabilistic chance rolls for events.
+//   • `process_data`: derive a simple aggregate identifier from SSXLData objects.
+//
+// Key Functions:
+//   • generate_percent_roll(target_percent: u8) -> u32
+//       - Performs a probabilistic roll against a given percentage chance.
+//       - Arguments:
+//           • target_percent: u8 (0–100), representing the probability of success.
+//       - Behavior:
+//           • Generates a random integer between 0 and 99 inclusive.
+//           • Compares it against target_percent.
+//           • Returns 0 if success (random < target_percent).
+//           • Returns 1 if failure (random >= target_percent).
+//       - Example:
+//           • generate_percent_roll(25) → 25% chance of returning 0 (success).
+//
+//   • process_data(data: &impl SSXLData) -> u64
+//       - Processes an object implementing the `SSXLData` trait.
+//       - Arguments:
+//           • data: reference to any object implementing SSXLData.
+//       - Behavior:
+//           • Calls `get_id()` to retrieve the object’s unique identifier.
+//           • Calls `get_value_len()` to retrieve the length of its payload.
+//           • Adds them together to produce a u64 aggregate value.
+//       - Returns:
+//           • u64 representing the combined identifier + payload length.
+//       - Use Cases:
+//           • Lightweight hashing.
+//           • Quick uniqueness checks.
+//           • Simple aggregate identifiers.
+//
+// Design Choices:
+//   • Using `rand::Rng` ensures efficient and flexible random number generation.
+//   • Returning `u32` for rolls keeps results lightweight and script-friendly.
+//   • Trait-based `process_data` allows generic handling of any SSXLData object.
+//   • Separation of probability and data utilities keeps the module cohesive.
+//
+// Educational Note:
+//   • These functions demonstrate how small, focused utilities can support
+//     larger systems. By abstracting probability rolls and data aggregation,
+//     the engine gains reusable building blocks for procedural generation,
+//     resource spawning, and uniqueness validation.
+// ============================================================================
 
-//! # Generation Utilities
-//!
-//! Provides common mathematical and random-sampling utilities used throughout the
-//! procedural generation pipeline (e.g., `ssxl_generate` crate).
-//!
-//! Functions here are designed for rapid, stateless generation logic, such as
-//! calculating percentage chance rolls and generating unique identifiers for data structures.
 
 use crate::primitives::SSXLData;
 use rand::Rng;
 
-// -----------------------------------------------------------------------------
-// Randomness and Chance Utilities
-// -----------------------------------------------------------------------------
-
-/// Rolls a chance check against a given percentage.
-///
-/// This function is vital for injecting controlled **randomness** and **balance**
-/// into the generation process (e.g., probability of a resource spawning, or a
-/// cellular automata rule firing).
-///
-/// # Arguments
-/// * `target_percent` - The probability of success, expressed as a whole percentage (0-100).
-///
-/// # Returns
-/// * `0`: Success (The random number was less than `target_percent`).
-/// * `1`: Failure (The random number was greater than or equal to `target_percent`).
-///
-/// # Example
-/// A 25% chance of spawning:
-/// ```ignore
-/// if generate_percent_roll(25) == 0 {
-///     // spawn item
-/// }
-/// ```
 pub fn generate_percent_roll(target_percent: u8) -> u32 {
-    // Generate a random value in the inclusive range [0, 99], which is a 0-100 scale.
     let rand_val = rand::thread_rng().gen_range(0..100) as u8;
 
-    // Success occurs if the random value falls within the target range.
     if rand_val < target_percent {
-        0 // Success / Hit
+        0
     } else {
-        1 // Failure / Miss
+        1
     }
 }
 
-// -----------------------------------------------------------------------------
-// Data Processing Utilities
-// -----------------------------------------------------------------------------
-
-/// Processes an object implementing the `SSXLData` trait to derive a simple aggregate identifier.
-///
-/// This is a basic utility that combines the object's unique ID with its data payload size.
-/// It is often used for creating quick, unique signatures or simple hashing/checksums
-/// for data chunks across worker threads.
-///
-/// # Arguments
-/// * `data` - A reference to any structure that implements the `SSXLData` trait.
-///
-/// # Returns
-/// * `u64` - The sum of the data's ID and the length of its associated value.
 pub fn process_data(data: &impl SSXLData) -> u64 {
-    // Combine the inherent ID (u64) with the value length (u64 after casting).
     let processed_value = data.get_id() + data.get_value_len() as u64;
     processed_value
 }

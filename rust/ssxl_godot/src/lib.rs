@@ -1,48 +1,62 @@
-// ssxl_godot/src/lib.rs (Refactored Zero-Entropy Manifest)
+// ============================================================================
+// 🚀 SSXL Godot Crate Root (`lib.rs`)
+// ----------------------------------------------------------------------------
+// This file serves as the entry point for the `ssxl_godot` crate. It defines
+// the top-level module structure and provides the GDExtension boilerplate
+// required for Godot to load this Rust library.
+//
+// Purpose:
+//   • Declare the public modules that make up the SSXL engine integration.
+//   • Provide the mandatory `ExtensionLibrary` implementation for Godot.
+//   • Act as the root manifest tying together engine, FFI, and tilemap logic.
+//
+// Module Structure:
+//   • engine
+//       - Core engine logic (SSXLEngine, conductor, tick loop, APIs).
+//   • ffi
+//       - Godot-facing FFI adapter nodes (SSXLOracle, SSXLSignals).
+//       - Bridges Rust logic with Godot signals and scripting.
+//   • tilemap
+//       - TileMap integration (SSXLTilemap, async_poll, status_reporter).
+//       - Handles rendering, async updates, and status reporting.
+//
+// Godot Integration:
+//   • Uses `godot::prelude::*` for macros, traits, and types that enable
+//     Rust ↔ Godot interoperability (e.g., #[gdextension], Gd<T>, GodotClass).
+//   • Imports `ExtensionLibrary` and `InitLevel` to define the extension’s
+//     lifecycle behavior.
+//
+// SSXLExtension (struct):
+//   • Placeholder struct representing the extension library itself.
+//   • Contains no fields because all logic is delegated to modules.
+//
+// ExtensionLibrary Implementation:
+//   • #[gdextension] marks this as the entrypoint for Godot’s GDExtension system.
+//   • unsafe impl ExtensionLibrary for SSXLExtension:
+//       - Required by godot-rust to hook into Godot’s lifecycle.
+//       - on_level_init(_level): called when Godot reaches a new initialization
+//         stage (Core, Scene, Editor, etc.).
+//       - Currently does nothing, but can be extended to register classes,
+//         initialize resources, or set up global state.
+//
+// Educational Note:
+//   • This file demonstrates how Rust crates integrate with Godot via
+//     GDExtension. By separating engine, FFI, and tilemap into modules,
+//     the design remains modular and maintainable, while the extension
+//     entrypoint ensures Godot can load and interact with the library.
+// ============================================================================
 
-//! # SSXL-ext GDExtension Core Library
-//!
-//! This file is the **root manifest** for the `ssxl_godot` crate. It has been
-//! refactored to use a hierarchical structure, exposing only the top-level,
-//! logically segregated modules: `engine`, `ffi`, and `tilemap`.
-
-// -----------------------------------------------------------------------------
-// Public Modules (Exposed to the GDExtension Interface)
-// -----------------------------------------------------------------------------
-
-/// Contains the SSXLEngine struct and its core logic (API, commands, oracle, tick).
+#![feature(int_roundings)]
 pub mod engine;
-/// Contains all Godot-exposed FFI Adapter Nodes (SSXLOracle, SSXLSignals).
 pub mod ffi;
-
-// FIX: Changed 'pub mod ssxl_tilemap;' to 'pub mod tilemap;'
-// This tells the compiler to look for the 'tilemap' directory/module (src/tilemap/mod.rs or src/tilemap.rs).
-// The 'tilemap/mod.rs' file will then declare 'pub mod ssxl_tilemap;'.
-/// The module for the SSXLTileMap Godot Node and its related logic.
 pub mod tilemap; 
 
-// NOTE: All previous flat modules (e.g., ssxl_engine, ssxl_signals, async_poll,
-// generation_api, channel_handler) have been consolidated into the `engine` and
-// `ffi` hierarchies for a zero-entropy structure.
-
-// -----------------------------------------------------------------------------
-// GDExtension Boilerplate
-// -----------------------------------------------------------------------------
-
-// --- Godot GDExtension Imports ---
 use godot::prelude::*;
 use godot::init::{ExtensionLibrary, InitLevel};
 
-
-/// Placeholder struct required by the `godot-rust` library to implement
-/// the `ExtensionLibrary` trait, which defines the dynamic library's behavior.
 struct SSXLExtension;
 
-/// Implements the required trait for the GDExtension to be loaded.
 #[gdextension]
 unsafe impl ExtensionLibrary for SSXLExtension {
-    /// Called by Godot when a new initialization level is reached.
-    fn on_level_init(_level: InitLevel) {
-        // No actions required at this low-level init stage.
-    }
+    fn on_level_init(_level: InitLevel) {}
 }

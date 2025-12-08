@@ -1,75 +1,102 @@
-// ssxl_sync/src/animation_conductor.rs (Type Resolution Fix)
+// ============================================================================
+// 🎬 Animation Conductor (FFI Worker Wrapper)
+// File: ssxl_sync/src/animation_conductor.rs
+// ----------------------------------------------------------------------------
+// This module defines the SSXL Animation Conductor, which is responsible for
+// coordinating animation logic in a background thread. It acts as the bridge
+// between the Godot runtime (via FFI) and the Rust engine’s animation system.
+//
+// Key responsibilities:
+//   • Set up non-blocking channels for communication between Godot and Rust.
+//   • Maintain initial animation state for the worker thread.
+//   • Spawn the heavy background worker (`CoreAnimationWorker`) defined in
+//     the `ssxl_animate` crate.
+//   • Resolve type mismatches by aliasing the exact nested types required.
+//
+// Educational notes:
+//   • Rust’s `tokio::sync::mpsc` channels are used for async, multi-producer,
+//     single-consumer communication. Here, they connect Godot commands to the
+//     worker and worker updates back to Godot.
+//   • Aliasing `AnimationUpdate` ensures type signatures match exactly across
+//     crate boundaries, fixing compiler errors like E0308.
+//   • Splitting into two stages (FAST setup vs HEAVY spawn) separates lightweight
+//     channel creation from expensive thread spawning.
+// ============================================================================
 
 use ssxl_shared::{
-    AnimationConductorHandle,
-    AnimationState,
-    AnimationCommand, 
+    AnimationConductorHandle, // Public handle for sending commands to the conductor
+    AnimationState,           // Global animation state struct
+    AnimationCommand,         // Enum of animation commands (start, stop, etc.)
 };
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tracing::info;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender}; // Async channels
+use tracing::info; // Structured logging
 
-// FIX: Import the exact nested type required by the CoreAnimationWorker's signature 
-// and alias it as `AnimationUpdate`. This resolves the E0308 type mismatch.
+// FIX: Import the exact nested type required by CoreAnimationWorker.
+// Aliased as `AnimationUpdate` to resolve type mismatch errors (E0308).
 use ssxl_shared::message::messages::AnimationUpdate as AnimationUpdate; 
 
-// NOTE: We rely on the core worker being defined as `conductor::AnimationConductor` within ssxl_animate.
+// NOTE: The core worker implementation lives in the `ssxl_animate` crate.
+// We alias it here for clarity and to emphasize the separation of concerns.
 use ssxl_animate::conductor::AnimationConductor as CoreAnimationWorker;
 
 // -----------------------------------------------------------------------------
-// 1. Internal Setup Struct (for passing state between FFI stages)
+// 1. Internal Setup Struct
 // -----------------------------------------------------------------------------
-
-/// Holds all the necessary internal channels and initial state required to spawn the
-/// heavy, background Animation Conductor thread.
+// This struct holds the internal channels and initial state required to spawn
+// the background worker. It is not exposed directly to FFI consumers; instead,
+// it is used internally during setup.
+// -----------------------------------------------------------------------------
 pub struct AnimationConductorInternalSetup {
-    pub initial_state: AnimationState,
-    /// The receiver for Godot commands, which the worker thread will consume.
-    pub command_receiver: UnboundedReceiver<AnimationCommand>,
-    
-    /// The sender for updates, which the worker thread will use.
-    // This field now holds the correctly nested type due to the aliased import above.
-    pub update_sender: UnboundedSender<AnimationUpdate>,
+    pub initial_state: AnimationState,                  // Starting animation state
+    pub command_receiver: UnboundedReceiver<AnimationCommand>, // Commands from Godot
+    pub update_sender: UnboundedSender<AnimationUpdate>,       // Updates back to Godot
 }
 
 // -----------------------------------------------------------------------------
-// 2. The Public Conductor Struct (The FFI-facing worker wrapper)
+// 2. Public Conductor Struct
 // -----------------------------------------------------------------------------
-
-/// The SSXL Animation Conductor. This struct is responsible for executing the
-/// animation logic in a background thread.
+// This is the FFI-facing wrapper. It exposes safe methods for setting up
+// channels and spawning the background worker thread.
+// -----------------------------------------------------------------------------
 pub struct AnimationConductor {}
 
 impl AnimationConductor {
     // -------------------------------------------------------------------------
-    // Stage 1: FAST Channel and State Setup (Non-blocking)
+    // Stage 1: FAST Channel and State Setup
     // -------------------------------------------------------------------------
-    
-    /// Creates all the necessary MPSC channels and the initial `AnimationState`.
-    /// 
-    /// # Returns
-    /// A tuple containing:
-    /// 1. `AnimationConductorInternalSetup`: The struct holding internal handles for spawning.
-    /// 2. `AnimationConductorHandle`: The public command sender handle exposed to Godot's FFI layer.
-    /// 3. `UnboundedReceiver<AnimationUpdate>`: The public update receiver handle exposed to Godot's Poller.
-    pub fn setup_channels_and_state() -> (AnimationConductorInternalSetup, AnimationConductorHandle, UnboundedReceiver<AnimationUpdate>) {
+    // Creates the necessary channels and initializes the animation state.
+    // This stage is lightweight and non-blocking.
+    //
+    // Returns:
+    //   1. AnimationConductorInternalSetup: internal handles for spawning.
+    //   2. AnimationConductorHandle: public command sender for Godot.
+    //   3. UnboundedReceiver<AnimationUpdate>: public update receiver for Godot.
+    // -------------------------------------------------------------------------
+    pub fn setup_channels_and_state() -> (
+        AnimationConductorInternalSetup,
+        AnimationConductorHandle,
+        UnboundedReceiver<AnimationUpdate>,
+    ) {
         info!("Animation Conductor: Starting FAST Channel and State Setup.");
 
-        // Channels for commands from Godot to the worker.
+        // Channel for commands: Godot → worker
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AnimationCommand>();
         
-        // Channels for updates from the worker to Godot (Poller).
-        // This channel uses the correctly aliased type.
+        // Channel for updates: worker → Godot
         let (update_tx, update_rx) = mpsc::unbounded_channel::<AnimationUpdate>();
         
+        // Initialize animation state to defaults
         let initial_state = AnimationState::default();
 
+        // Bundle internal setup handles
         let internal_setup = AnimationConductorInternalSetup {
             initial_state,
             command_receiver: command_rx,
             update_sender: update_tx,
         };
         
-        let public_command_handle = command_tx;
+        // Public handle for sending commands into the conductor
+        let public_command_handle: AnimationConductorHandle = command_tx;
 
         (internal_setup, public_command_handle, update_rx)
     }
@@ -77,19 +104,20 @@ impl AnimationConductor {
     // -------------------------------------------------------------------------
     // Stage 2: HEAVY Thread Spawn
     // -------------------------------------------------------------------------
-
-    /// Consumes the setup handles and spawns the core animation worker thread.
-    /// 
-    /// # Arguments
-    /// * `setup`: The internal channels and initial state from the setup stage.
-    /// 
-    /// # Returns
-    /// A new `AnimationConductor` instance representing the running worker.
+    // Consumes the setup handles and spawns the background worker thread.
+    // This stage is heavier because it involves thread creation and worker
+    // initialization.
+    //
+    // Arguments:
+    //   • setup: internal channels and initial state from Stage 1.
+    //
+    // Returns:
+    //   • AnimationConductor: opaque public handle representing the running worker.
+    // -------------------------------------------------------------------------
     pub fn new(setup: AnimationConductorInternalSetup) -> Self {
         info!("Animation Conductor: Spawning background worker thread.");
 
-        // This call is now correct because `setup.update_sender` holds the 
-        // type the `CoreAnimationWorker::new` function requires.
+        // Spawn the core worker with the correct channel types and initial state.
         let _core_worker = CoreAnimationWorker::new(
             setup.command_receiver,
             setup.update_sender,
@@ -98,7 +126,7 @@ impl AnimationConductor {
         
         info!("Animation Conductor: Worker thread started successfully.");
 
-        // Return the opaque public handle struct
+        // Return the public wrapper
         AnimationConductor {} 
     }
 }

@@ -1,14 +1,76 @@
-// ssxl_generate/src/perlin/perlin_generator.rs
+// ============================================================================
+// 🎼 Perlin Noise Generator (`crate::perlin::perlin_generator`)
+// ----------------------------------------------------------------------------
+// This module implements a procedural terrain generator based on Perlin noise.
+// It conforms to the `Generator` trait, making it interchangeable with other
+// generation algorithms in the SSXL engine.
+//
+// Purpose:
+//   • Provide deterministic terrain generation using Perlin noise fields.
+//   • Translate continuous noise values into discrete tile types (Water, Grass, Mountain).
+//   • Ensure reproducibility by seeding the noise function.
+//   • Integrate seamlessly with the Conductor and GeneratorManager systems.
+//
+// Key Components:
+//   • PerlinGenerator (struct)
+//       - Fields:
+//           • perlin: Perlin noise object seeded for deterministic output.
+//           • scale: scaling factor applied to coordinates before sampling noise.
+//       - Larger scale → smoother, larger terrain features.
+//       - Smaller scale → finer detail and variation.
+//
+//   • new (constructor)
+//       - Creates a new PerlinGenerator with a given scale.
+//       - Uses a hardcoded DEFAULT_SEED for reproducibility.
+//       - Ensures consistent terrain generation across runs.
+//
+//   • id (trait method)
+//       - Returns a unique identifier string ("perlin_basic_2d").
+//       - Used by Conductor and GeneratorManager to select this generator.
+//
+//   • generate_chunk (trait method)
+//       - Generates a single chunk of terrain using Perlin noise.
+//       - Steps:
+//           1. Compute chunk size in tiles.
+//           2. Calculate world coordinates for chunk origin.
+//           3. Create unique chunk ID by packing coordinates into u64.
+//           4. Define spatial bounds for the chunk.
+//           5. Initialize ChunkData container.
+//           6. Pre-allocate vector for TileData entries.
+//           7. Iterate over each tile in the chunk:
+//                a. Compute world coordinates.
+//                b. Sample Perlin noise at scaled coordinates.
+//                c. Normalize noise value from [-1, 1] → [0, 1].
+//                d. Threshold into TileType (Water, Grass, Mountain).
+//                e. Create TileData with type + raw noise metadata.
+//                f. Push into tile vector.
+//           8. Insert generated tiles into ChunkData.
+//           9. Log completion message with chunk coordinates and tile count.
+//          10. Return fully populated ChunkData.
+//
+// Workflow:
+//   1. Conductor requests chunk generation via GeneratorManager.
+//   2. PerlinGenerator samples noise field at scaled coordinates.
+//   3. Noise values are normalized and mapped to discrete tile types.
+//   4. ChunkData is populated with TileData entries.
+//   5. Completed chunk is cached and returned for use in the world grid.
+//
+// Design Choices:
+//   • Deterministic seed ensures reproducibility across runs.
+//   • Scaling factor allows tuning of terrain smoothness vs. detail.
+//   • Thresholds map continuous noise into meaningful terrain categories.
+//   • Logging provides visibility into generation process.
+//
+// Educational Note:
+//   • This module demonstrates how continuous mathematical noise functions
+//     can be transformed into discrete, game-ready terrain data.
+//   • By combining Perlin noise with clear thresholds, it produces varied yet
+//     deterministic landscapes suitable for procedural world generation.
+// ============================================================================
 
-//! Implements the Generator trait using the Perlin noise function.
-//!
-//! This provides the engine's primary continuous, organic generation layer,
-//! mapping noise values to different TileTypes based on a fixed threshold.
 
 use crate::Generator;
 use ssxl_math::prelude::Vec2i;
-
-// FIX: Import all components directly from the ssxl_shared crate root.
 use ssxl_shared::{
     ChunkData,
     CHUNK_SIZE,
@@ -16,28 +78,16 @@ use ssxl_shared::{
     TileData,
     TileType,
 };
-
 use noise::{NoiseFn, Perlin};
 use tracing::info;
 
-// --- 1. Generator Structure ---
-
-/// A generator that uses the Perlin noise algorithm to create deterministic terrain.
 pub struct PerlinGenerator {
-    /// The noise object instance, which is thread-safe and deterministic based on its seed.
     perlin: Perlin,
-    /// The scaling factor applied to world coordinates before generating noise.
-    /// A smaller scale results in larger, smoother features.
     scale: f64,
 }
 
 impl PerlinGenerator {
-    /// Creates a new PerlinGenerator instance.
-    ///
-    /// # Arguments
-    /// * `scale`: The frequency/scale of the noise (e.g., 64.0).
     pub fn new(scale: f64) -> Self {
-        // NOTE: Default seed is currently hardcoded for deterministic, repeatable generation.
         const DEFAULT_SEED: u32 = 42;
         
         PerlinGenerator {
@@ -47,29 +97,19 @@ impl PerlinGenerator {
     }
 }
 
-// --- 2. Generator Trait Implementation ---
-
 impl Generator for PerlinGenerator {
-    /// Returns the unique identifier for this generator.
     fn id(&self) -> &str {
         "perlin_basic_2d"
     }
 
-    /// Generates a single chunk based on the Perlin noise field.
-    ///
-    /// The logic is: 1) Convert chunk coordinates to world tile coordinates,
-    /// 2) Sample the Perlin function, 3) Map the noise value to a `TileType`.
     fn generate_chunk(&self, chunk_coords: Vec2i) -> ChunkData {
         let chunk_tile_size = CHUNK_SIZE as i64;
 
-        // Calculate the world coordinate of the chunk's bottom-left corner.
         let world_start_x = chunk_coords.x * chunk_tile_size;
         let world_start_y = chunk_coords.y * chunk_tile_size;
 
-        // Create a unique Chunk ID by packing the 2D coordinates into a 64-bit integer.
         let chunk_id = (chunk_coords.x as u64) | ((chunk_coords.y as u64) << 32);
 
-        // Define the world bounds covered by this chunk.
         let bounds = GridBounds::new(
             world_start_x,
             world_start_y,
@@ -81,22 +121,17 @@ impl Generator for PerlinGenerator {
 
         let mut chunk_data = ChunkData::new(chunk_id, bounds, dimension_name);
 
-        // Pre-allocate vector to hold all tile data for the chunk.
         let mut tiles: Vec<TileData> = Vec::with_capacity((CHUNK_SIZE * CHUNK_SIZE) as usize);
 
-        // Iterate through all tiles within the chunk.
         for y in 0..chunk_tile_size {
             for x in 0..chunk_tile_size {
                 let world_x = (world_start_x + x) as f64;
                 let world_y = (world_start_y + y) as f64;
 
-                // Sample the Perlin noise function. Coordinates are scaled down.
                 let noise_value = self.perlin.get([world_x / self.scale, world_y / self.scale]);
 
-                // Perlin output is typically [-1.0, 1.0]. Normalize to [0.0, 1.0].
                 let normalized_value = (noise_value + 1.0) / 2.0;
 
-                // Thresholding: Map the noise value to a concrete TileType (Water, Grass, Mountain).
                 let tile_type = if normalized_value < 0.35 {
                     TileType::Water
                 } else if normalized_value < 0.60 {
@@ -105,13 +140,12 @@ impl Generator for PerlinGenerator {
                     TileType::Mountain
                 };
 
-                // Create the TileData, storing the raw noise value as metadata (useful for blending/details).
                 let tile = TileData::new(tile_type, normalized_value as f32);
+
                 tiles.push(tile);
             }
         }
 
-        // Insert the generated tile array into the chunk data structure.
         chunk_data.insert_tiles(tiles);
 
         info!(

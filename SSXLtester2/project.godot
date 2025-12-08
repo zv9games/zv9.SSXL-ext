@@ -15,6 +15,14 @@ run/main_scene="uid://cwhh07dy846y7"
 config/features=PackedStringArray("4.5", "Mobile")
 config/icon="res://icon.svg"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/S2O_godot_plugin/plugin.cfg")
+
 [rendering]
 
 renderer/rendering_method="mobile"
+
+[ssxl]
+
+plugin_enabled=true

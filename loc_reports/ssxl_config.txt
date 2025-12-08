@@ -1,75 +1,150 @@
-﻿>>> FILE START: rust\ssxl_config\src\config.rs (33 LOC) <<<
-// ssxl_config/src/config.rs (Final O(1) State)
+﻿>>> FILE START: rust\ssxl_config\src\config.rs (64 LOC) <<<
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
 
-use serde::Deserialize;
-use std::sync::OnceLock;
-// Assumes 'info!' and 'warn!' are globally available macros or imports.
+use serde::Deserialize;          // Derive macro: allows structs to be deserialized from formats like JSON, TOML, YAML.
+use std::sync::OnceLock;         // Thread-safe, one-time initialization primitive for global state.
 
-// --- CONFIG STRUCTS (Zero Entropy Mapping) ---
-
+// -----------------------------------------------------------------------------
+// Top-level Configuration Struct
+// -----------------------------------------------------------------------------
+// SSXLConfig is the root configuration object for the SSXL engine.
+// It currently holds a single sub-configuration: GenerationConfig.
+// The #[derive(Debug, Deserialize, Clone)] attributes:
+//   - Debug: allows printing the struct for debugging.
+//   - Deserialize: enables automatic parsing from config files.
+//   - Clone: allows duplication of the struct.
 #[derive(Debug, Deserialize, Clone)]
 pub struct SSXLConfig {
-    pub generation: GenerationConfig,
+    pub generation: GenerationConfig,   // Nested configuration for generation rules.
 }
 
+// -----------------------------------------------------------------------------
+// GenerationConfig
+// -----------------------------------------------------------------------------
+// This struct defines parameters for the "generation" subsystem.
+// It includes:
+//   - default_generator_id: identifies which generator to use by default.
+//   - ca_default_ruleset: numeric ID for the default Cellular Automata ruleset.
 #[derive(Debug, Deserialize, Clone)]
 pub struct GenerationConfig {
-    pub default_generator_id: String,
-    pub ca_default_ruleset: u8, // Maps to 1
+    pub default_generator_id: String,   // Example: "basic_terrain_generator"
+    pub ca_default_ruleset: u8,         // Example: 1 (maps to a specific ruleset)
 }
 
-// --- O(1) STATE INJECTION ---
-
+// -----------------------------------------------------------------------------
+// Global Configuration State
+// -----------------------------------------------------------------------------
+// SSXL_CONFIG_STATE is a static OnceLock that holds the global configuration.
+// OnceLock ensures:
+//   - It can only be initialized once.
+//   - After initialization, reads are O(1) and thread-safe.
+//   - Attempts to reinitialize will fail, preventing accidental overwrites.
 static SSXL_CONFIG_STATE: OnceLock<SSXLConfig> = OnceLock::new();
 
-/// O(1) Accessor: Returns the global config.
+// -----------------------------------------------------------------------------
+// Global Accessor Function
+// -----------------------------------------------------------------------------
+// Provides read-only access to the global configuration.
+// Returns a reference to SSXLConfig.
+// Panics if called before initialization (init_config must be called first).
 #[inline(always)]
 pub fn config() -> &'static SSXLConfig {
-    // Guarantees O(1) read time after initialization.
     SSXL_CONFIG_STATE.get().expect("SSXLConfig uninitialized: Call init_config() first.")
 }
 
+// -----------------------------------------------------------------------------
+// Implementation: SSXLConfig
+// -----------------------------------------------------------------------------
+// Adds helper methods to SSXLConfig for convenient access to specific values.
 impl SSXLConfig {
-    /// O(1) Accessor: Returns the configured default Cellular Automata ruleset ID.
+    // Returns the default Cellular Automata ruleset ID.
+    // This is a simple O(1) accessor into the nested GenerationConfig.
     #[inline(always)]
     pub fn get_ca_default_ruleset(&self) -> u8 {
         self.generation.ca_default_ruleset
     }
 
-    // ... (Implement load_from_path and new_with_defaults here)
-    // ... (The previous load logic should be moved into an associated function)
+    // Future expansion:
+    // - load_from_path: load configuration from a file.
+    // - new_with_defaults: create a config with default values.
 }
 
-// --- INITIALIZATION (O(N) One-Time Cost) ---
-// (Move the rest of the 'init_config' function logic here)
 <<< FILE END: rust\ssxl_config\src\config.rs >>>
 
->>> FILE START: rust\ssxl_config\src\engine.toml (13 LOC) <<<
-# config/engine.toml
-
-# --- Core Engine Settings ---
+>>> FILE START: rust\ssxl_config\src\engine.toml (39 LOC) <<<
+# ---------------------------------------------------------------------------
+# Engine Section
+# ---------------------------------------------------------------------------
+# This section is reserved for core engine-wide settings.
+# In your current configuration, it is empty, but it acts as a placeholder.
+# Typical values here might include:
+#   - logging_level (e.g., "info", "debug")
+#   - performance tuning flags
+#   - global toggles for optional subsystems
 [engine]
-# Enables/disables advanced logging features (e.g., debug tracing)
-# logging_level = "info" # Example setting not in SSXLConfig, but common
 
-# --- Generation Defaults ---
+# ---------------------------------------------------------------------------
+# Generation Section
+# ---------------------------------------------------------------------------
+# This section defines defaults for the "generation" subsystem of the engine.
+# It controls how new worlds, maps, or structures are generated when no
+# explicit parameters are provided by the user or FFI/CLI.
 [generation]
-# The generator ID to use when no specific generator is requested by the FFI/CLI.
-# Options include "perlin_basic_2d", "cellular_automata_basic", etc.
+
+# ---------------------------------------------------------------------------
+# Default Generator ID
+# ---------------------------------------------------------------------------
+# Specifies which generator algorithm should be used by default.
+# In this case, "perlin_basic_2d" means the engine will use a Perlin noise
+# based 2D generator when no other generator is requested.
+# Other possible values might include:
+#   - "cellular_automata_basic" (for cave-like maps)
+#   - "diamond_square" (for fractal terrain)
 default_generator_id = "perlin_basic_2d"
 
-# The specific ruleset ID to use for the Cellular Automata generator (if selected).
-# 0: Basic Cave, 1: Maze/Dungeon, etc.
+# ---------------------------------------------------------------------------
+# Cellular Automata Default Ruleset
+# ---------------------------------------------------------------------------
+# Defines which ruleset ID to use if the Cellular Automata generator is selected.
+# This is a numeric code that maps to a specific ruleset implementation.
+# Example mappings:
+#   0 → Basic Cave generation
+#   1 → Maze/Dungeon generation
+#   2 → Custom experimental ruleset
+# In your configuration, "1" means the default CA generator will produce
+# maze/dungeon-like structures.
 ca_default_ruleset = 1
+
 <<< FILE END: rust\ssxl_config\src\engine.toml >>>
 
->>> FILE START: rust\ssxl_config\src\lib.rs (6 LOC) <<<
-// ssxl_config/src/lib.rs
+>>> FILE START: rust\ssxl_config\src\lib.rs (24 LOC) <<<
+// -----------------------------------------------------------------------------
+// Module Declaration
+// -----------------------------------------------------------------------------
+// Declares that this crate has a submodule named `config`.
+// The Rust compiler will look for a file named `config.rs` inside `src/config/`
+// or a directory named `config/` with a `mod.rs` file.
+// This module contains the configuration logic for the SSXL engine.
 pub mod config;
 
-// Re-export for simplified access
-pub use config::config; 
-pub use config::init_config; 
-pub use config::SSXLConfig;
+// -----------------------------------------------------------------------------
+// Re-exports
+// -----------------------------------------------------------------------------
+// These lines re-export selected items from the `config` module.
+// Re-exporting means that external crates (or other parts of this crate)
+// can access these items directly from the root of the crate,
+// without needing to explicitly navigate into the `config` module.
+//
+// Example:
+//   Without re-export → `use ssxl_config::config::SSXLConfig;`
+//   With re-export    → `use ssxl_config::SSXLConfig;`
+//
+// This simplifies usage and creates a clean public API surface.
+pub use config::config;        // Re-export the global accessor function `config()`.
+pub use config::init_config;   // Re-export the initialization function `init_config()`.
+pub use config::SSXLConfig;    // Re-export the main configuration struct `SSXLConfig`.
+
 <<< FILE END: rust\ssxl_config\src\lib.rs >>>
 

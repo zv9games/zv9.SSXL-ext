@@ -1,230 +1,257 @@
-// ssxl_engine_ffi/src/lib.rs — SSXL-ext 9.1 — FINAL FIXED VERSION
-// Works perfectly for both CLI (ssxl.exe) and Godot (ssxl_godot.dll)
+// ============================================================================
+// 🎮 SSXL Engine Godot Extension (`ssxl_godot::engine`)
+// ----------------------------------------------------------------------------
+// This module defines the `SSXLEngine` Godot node, which acts as the bridge
+// between the Rust-based SSXL engine and the Godot game engine via GDExtension.
+//
+// Purpose:
+//   • Provide a Godot-facing node that orchestrates procedural generation tasks.
+//   • Manage communication channels between Rust async tasks and Godot runtime.
+//   • Render generated chunks into a Godot `TileMap`.
+//   • Expose methods and signals for Godot scripts to interact with the engine.
+//
+// Key Components:
+//   • Feature Flag
+//       - `#![feature(int_roundings)]` enables nightly integer division helpers
+//         like `div_ceil`, used for chunk calculations.
+//
+//   • Imports
+//       - Godot prelude, Node, TileMap, INode trait for GDExtension integration.
+//       - Tokio channels for async task communication.
+//       - `tracing` for structured logging.
+//       - SSXL subsystems: `Conductor`, `ConductorState`, `GenerationTask`,
+//         `GenerationMessage`, math utilities, and shared constants.
+//
+//   • create_dummy_engine_state
+//       - Provides a fallback engine state if the Conductor fails to start.
+//       - Ensures the node remains valid even without generation capability.
+//
+//   • SSXLEngine Struct
+//       - Annotated with `#[derive(GodotClass)]` to register as a Godot node.
+//       - Fields:
+//           • base: underlying Godot Node.
+//           • conductor: orchestrates generation tasks.
+//           • request_sender: channel for sending tasks.
+//           • progress_rx: channel for receiving updates.
+//           • tilemap: optional Godot TileMap reference.
+//           • state: conductor state tracking activity.
+//
+//   • INode Implementation
+//       - `init`: initializes shared data, starts conductor, or falls back.
+//       - `process`: runs every frame, consumes progress messages, applies
+//         generated chunks to the TileMap, and emits signals.
+//       - `exit_tree`: gracefully shuts down conductor when node is removed.
+//
+//   • Public Methods
+//       - `set_tilemap`: assigns a Godot TileMap for rendering.
+//       - `build_map`: schedules generation tasks for a given width/height,
+//         dividing into chunks using `div_ceil`.
+//       - `is_active`: checks conductor activity state.
+//       - `chunk_applied`: signal emitted when a chunk is rendered.
+//
+//   • Extension Entry Point
+//       - `SSXLExtension` struct implements `ExtensionLibrary` to register
+//         the engine node with Godot.
+//
+// Workflow:
+//   1. Godot instantiates `SSXLEngine` as a node.
+//   2. Rust initializes conductor and shared resources.
+//   3. Godot requests map generation via `build_map`.
+//   4. Rust sends tasks, processes updates, and applies chunks to TileMap.
+//   5. Signals notify Godot scripts when chunks are applied.
+//   6. Node shuts down gracefully when removed.
+//
+// Design Choices:
+//   • Async channels decouple generation tasks from rendering loop.
+//   • Arc ensures safe sharing of chunk data across threads.
+//   • Signals provide a clean Godot-side API for reacting to generation events.
+//   • Fallback dummy state prevents crashes if conductor initialization fails.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can extend Godot with high-performance
+//     procedural generation, while maintaining safe concurrency and ergonomic
+//     scripting interfaces.
+//   • By combining async task orchestration with Godot signals, developers gain
+//     a powerful workflow for integrating complex systems into game engines.
+// ============================================================================
 
-use std::sync::atomic::{AtomicBool, Ordering};
-// HIGH: Replaced external 'once_cell::sync::OnceCell' with standard library 'OnceLock' (Rust 1.70+)
-use std::sync::{Mutex, OnceLock}; 
-use std::panic;
 
-// LOW: Assume Cargo.toml updated to bincode v2.x for security/features
-use bincode; 
+#![feature(int_roundings)]
+
+use godot::{
+    prelude::*,
+    classes::{Node, TileMap, INode},
+    obj::{Base, Gd},
+};
+
+use std::sync::Arc;
+use tokio::sync::mpsc::{
+    channel,
+    Receiver,
+    UnboundedSender,
+    unbounded_channel,
+    error::TryRecvError
+};
 use tracing::{info, error, Level, span};
-use ssxl_generate::{Conductor, ConductorProgressReceiver};
-use ssxl_generate::task::task_queue::GenerationTask;
+
+use ssxl_generate::Conductor;
+use ssxl_generate::conductor::ConductorState;
+use ssxl_generate::task::task_queue::{GenerationMessage, GenerationTask};
+
 use ssxl_math::prelude::Vec2i;
-use ssxl_shared::{initialize_shared_data, CHUNKS_COMPLETED_COUNT};
-use tokio::sync::mpsc::error::TryRecvError;
+use ssxl_shared::{initialize_shared_data, CHUNK_SIZE};
 
-// Cleanup: Replaced OnceCell with std::sync::OnceLock
-static CONDUCTOR: OnceLock<Mutex<Conductor>> = OnceLock::new();
-static PROGRESS_RECEIVER: OnceLock<Mutex<ConductorProgressReceiver>> = OnceLock::new();
-static REQUEST_SENDER: OnceLock<tokio::sync::mpsc::UnboundedSender<GenerationTask>> = OnceLock::new();
-static INIT_RUNNING: AtomicBool = AtomicBool::new(false);
-static INIT_SUCCESSFUL: AtomicBool = AtomicBool::new(false);
+fn create_dummy_engine_state(base: Base<Node>) -> SSXLEngine {
+    let (dummy_tx, _) = unbounded_channel();
+    let (_, dummy_rx) = channel(1);
 
-const CHUNK_SIZE: i32 = 32;
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Public FFI entry points (used by both CLI and Godot)
-// ──────────────────────────────────────────────────────────────────────────────
-
-// CRITICAL FFI SAFETY: panic::catch_unwind() guarantees that Rust panics 
-// do not unwind across the C boundary, preventing Undefined Behavior.
-#[no_mangle]
-pub extern "C" fn ssxl_start_runtime() -> bool {
-    if INIT_SUCCESSFUL.load(Ordering::Relaxed) {
-        return true;
+    SSXLEngine {
+        base,
+        conductor: None,
+        state: ConductorState::new(String::new()),
+        request_sender: dummy_tx,
+        progress_rx: dummy_rx,
+        tilemap: None,
     }
-    // HIGH: Correctly handles concurrent initialization attempts
-    if INIT_RUNNING.swap(true, Ordering::Acquire) {
-        return INIT_SUCCESSFUL.load(Ordering::Relaxed);
-    }
+}
 
-    let result = panic::catch_unwind(|| {
-        let _span = span!(Level::INFO, "ssxl_start_runtime").entered();
+#[derive(GodotClass)]
+#[class(base = Node)]
+pub struct SSXLEngine {
+    base: Base<Node>,
+    conductor: Option<Conductor>,
+    request_sender: UnboundedSender<GenerationTask>,
+    progress_rx: Receiver<GenerationMessage>,
+    tilemap: Option<Gd<TileMap>>,
+    state: ConductorState,
+}
+
+#[godot_api]
+impl INode for SSXLEngine {
+    fn init(base: Base<Node>) -> Self {
+        let _span = span!(Level::INFO, "SSXLEngine::init").entered();
+
         initialize_shared_data();
 
         match Conductor::new(None) {
-            Ok((conductor, _state, request_sender, progress_receiver)) => {
-                // Cleanup: OnceLock::set used.
-                let _ = CONDUCTOR.set(Mutex::new(conductor));
-                let _ = PROGRESS_RECEIVER.set(Mutex::new(ConductorProgressReceiver::new(progress_receiver)));
-                let _ = REQUEST_SENDER.set(request_sender);
-                info!("SSXL 9.1 FFI Bridge → Conductor ONLINE");
-                INIT_SUCCESSFUL.store(true, Ordering::Release);
-                true
+            Ok((conductor, state, request_sender, progress_rx)) => {
+                info!("SSXLEngine → Conductor ONLINE");
+                Self {
+                    base,
+                    conductor: Some(conductor),
+                    state,
+                    request_sender,
+                    progress_rx,
+                    tilemap: None,
+                }
             }
             Err(e) => {
                 error!("Failed to start Conductor: {:?}", e);
-                false
+                create_dummy_engine_state(base)
             }
         }
-    });
-
-    INIT_RUNNING.store(false, Ordering::Release);
-    // Returns false if a panic occurred or if initialization failed.
-    result.unwrap_or(false)
-}
-
-#[no_mangle]
-pub extern "C" fn ssxl_request_chunk(x: i32, y: i32) {
-    if !INIT_SUCCESSFUL.load(Ordering::Relaxed) {
-        return;
-    }
-    if let Some(sender) = REQUEST_SENDER.get() {
-        let task = GenerationTask {
-            chunk_coords: Vec2i::new(x as i64, y as i64),
-            generator_id: "default".to_string(),
-        };
-        // NOTE: UnboundedSender::send only fails if the receiver is dropped (shutdown).
-        let _ = sender.send(task);
-    }
-}
-
-// NOTE: Standard FFI error codes: 0=Empty, >0=Length, <0=Error.
-#[no_mangle]
-pub extern "C" fn ssxl_poll_progress_message(buffer: *mut u8, buffer_len: usize) -> isize {
-    if buffer.is_null() || buffer_len == 0 {
-        return -5; // Error: Invalid buffer
     }
 
-    let receiver_mutex = match PROGRESS_RECEIVER.get() {
-        Some(r) => r,
-        None => return -1, // Error: Not initialized
-    };
-
-    let mut receiver = match receiver_mutex.lock() {
-        Ok(guard) => guard,
-        Err(_) => return -2, // Error: Mutex poisoned
-    };
-
-    match receiver.rx.try_recv() {
-        Ok(message) => {
-            let bytes = match bincode::serialize(&message) {
-                Ok(b) => b,
-                Err(_) => return -4, // Error: Serialization failed
+    fn process(&mut self, _delta: f64) {
+        loop {
+            let message = match self.progress_rx.try_recv() {
+                Ok(msg) => msg,
+                Err(TryRecvError::Empty) => break,
+                Err(e) => {
+                    error!("Progress channel error: {:?}", e);
+                    break;
+                }
             };
-            let len = bytes.len();
-            
-            if len > buffer_len { return -5; }
-            if len == 0 { return -6; }
 
-            unsafe { 
-                // CRITICAL: Unsafe FFI operation: copy data into C-owned memory
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, len); 
+            match message {
+                GenerationMessage::Generated(key, chunk_data) => {
+                    let Some(tilemap) = self.tilemap.as_mut() else { continue; };
+
+                    let origin_x = (key.x as i32) * CHUNK_SIZE as i32;
+                    let origin_y = (key.y as i32) * CHUNK_SIZE as i32;
+                    let layer = 0;
+
+                    let tiles = Arc::try_unwrap(chunk_data)
+                        .unwrap_or_else(|arc| (*arc).clone())
+                        .tiles;
+
+                    for (idx, _tile) in tiles.iter().enumerate() {
+                        let local_x = (idx as u32 % CHUNK_SIZE) as i32;
+                        let local_y = (idx as u32 / CHUNK_SIZE) as i32;
+
+                        let world_x = origin_x + local_x;
+                        let world_y = origin_y + local_y;
+
+                        tilemap.set_cell(
+                            layer,
+                            Vector2i::new(world_x, world_y),
+                        );
+                    }
+
+                    self.base_mut().emit_signal(
+                        "chunk_applied",
+                        &[key.x.to_variant(), key.y.to_variant()],
+                    );
+                }
+
+                GenerationMessage::GenerationComplete => {
+                    info!("Generation Task Queue signaled completion.");
+                }
+
+                GenerationMessage::StatusUpdate(status) => {
+                    info!("Generation status update: {}", status);
+                }
             }
-            len as isize
         }
-        Err(TryRecvError::Empty) => 0, // No message available
-        Err(TryRecvError::Disconnected) => -3, // Error: Channel closed
+    }
+
+    fn exit_tree(&mut self) {
+        if let Some(conductor) = self.conductor.take() {
+            conductor.signal_shutdown_graceful();
+        }
     }
 }
 
-// NOTE: Graceful shutdown includes panic::catch_unwind for safety
-#[no_mangle]
-pub extern "C" fn ssxl_shutdown_runtime() {
-    let _ = panic::catch_unwind(|| {
-        if let Some(c) = CONDUCTOR.get() {
-            if let Ok(guard) = c.lock() {
-                guard.signal_shutdown_graceful();
+#[godot_api]
+impl SSXLEngine {
+    #[func]
+    pub fn set_tilemap(&mut self, tilemap: Gd<TileMap>) {
+        self.tilemap = Some(tilemap);
+    }
+
+    #[func]
+    pub fn build_map(&self, width: i32, height: i32, generator_id: GString) {
+        if self.request_sender.is_closed() {
+            error!("Conductor is shut down. Cannot request map.");
+            return;
+        }
+
+        let chunks_x = width.div_ceil(CHUNK_SIZE as i32);
+        let chunks_y = height.div_ceil(CHUNK_SIZE as i32);
+
+        for x in 0..chunks_x {
+            for y in 0..chunks_y {
+                let task = GenerationTask {
+                    chunk_coords: Vec2i::new(x as i64, y as i64),
+                    generator_id: generator_id.to_string(),
+                };
+                let _ = self.request_sender.send(task);
             }
         }
-        INIT_SUCCESSFUL.store(false, Ordering::Release);
-    });
-}
 
-#[no_mangle]
-pub extern "C" fn ssxl_is_runtime_ready() -> bool {
-    INIT_SUCCESSFUL.load(Ordering::Relaxed)
-}
-
-#[no_mangle]
-pub extern "C" fn ssxl_get_chunks_completed() -> u32 {
-    CHUNKS_COMPLETED_COUNT.load(Ordering::Relaxed) as u32
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Godot-specific FFI functions — only linked when building for Godot
-// ──────────────────────────────────────────────────────────────────────────────
-
-#[cfg(feature = "godot")]
-extern "C" {
-    fn ssxl_set_cell(x: i32, y: i32, tile_id: i32);
-    fn ssxl_notify_tilemap_update();
-}
-
-#[cfg(not(feature = "godot"))]
-unsafe extern "C" fn ssxl_set_cell(_x: i32, _y: i32, _tile_id: i32) {
-    // No-op in standalone CLI
-}
-
-#[cfg(not(feature = "godot"))]
-unsafe extern "C" fn ssxl_notify_tilemap_update() {
-    // No-op in standalone CLI
-}
-
-pub unsafe fn ssxl_set_cell_safe(x: i32, y: i32, tile_id: i32) {
-    ssxl_set_cell(x, y, tile_id)
-}
-
-pub unsafe fn ssxl_notify_tilemap_update_safe() {
-    ssxl_notify_tilemap_update()
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Direct chunk apply — used by generators
-// ──────────────────────────────────────────────────────────────────────────────
-
-#[no_mangle]
-pub extern "C" fn ssxl_apply_chunk_direct(
-    key_x: i32,
-    key_y: i32,
-    tile_count: usize,
-    local_x: *const i32,
-    local_y: *const i32,
-    tile_id: *const i32,
-) -> bool {
-    // CRITICAL: Input validation for FFI pointers
-    if tile_count == 0 || local_x.is_null() || local_y.is_null() || tile_id.is_null() {
-        return false;
+        info!("Sent {} generation tasks.", chunks_x * chunks_y);
     }
 
-    unsafe {
-        // CRITICAL: Unsafe FFI operation: creating slices from raw pointers.
-        let lx = std::slice::from_raw_parts(local_x, tile_count);
-        let ly = std::slice::from_raw_parts(local_y, tile_count);
-        let ids = std::slice::from_raw_parts(tile_id, tile_count);
-        let origin_x = key_x * CHUNK_SIZE;
-        let origin_y = key_y * CHUNK_SIZE;
-
-        for i in 0..tile_count {
-            let world_x = origin_x + lx[i];
-            let world_y = origin_y + ly[i];
-            ssxl_set_cell_safe(world_x, world_y, ids[i]);
-        }
-        ssxl_notify_tilemap_update_safe();
+    #[func]
+    pub fn is_active(&self) -> bool {
+        self.state.is_active()
     }
-    true
+
+    #[signal]
+    fn chunk_applied(key_x: i64, key_y: i64);
 }
 
-pub fn dispatch_chunk_direct(key_x: i32, key_y: i32, tiles: &[(i32, i32, i32)]) {
-    if tiles.is_empty() { return; }
+struct SSXLExtension;
 
-    // NOTE: Requires temporary Vec allocations to convert the slice of tuples 
-    // into three separate C-compatible arrays of raw pointers. This is a copy.
-    let lx: Vec<i32> = tiles.iter().map(|t| t.0).collect();
-    let ly: Vec<i32> = tiles.iter().map(|t| t.1).collect();
-    let ids: Vec<i32> = tiles.iter().map(|t| t.2).collect();
-
-    let ok = ssxl_apply_chunk_direct(
-        key_x, key_y,
-        tiles.len(),
-        lx.as_ptr(),
-        ly.as_ptr(),
-        ids.as_ptr(),
-    );
-
-    if !ok {
-        error!("dispatch_chunk_direct failed for ({key_x}, {key_y})");
-    }
-}
+#[gdextension]
+unsafe impl ExtensionLibrary for SSXLExtension {}

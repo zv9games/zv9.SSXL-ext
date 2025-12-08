@@ -1,8 +1,66 @@
+// ============================================================================
+// 🎼 Generator Configuration and Validation (`crate::manager::generator_config`)
+// ----------------------------------------------------------------------------
+// This module defines the configuration parameters for a generator run and
+// provides validation logic to ensure map dimensions are safe and reasonable.
+// It is a critical part of the SSXL engine’s setup pipeline, ensuring that
+// generation requests do not exceed system limits.
+//
+// Purpose:
+//   • Encapsulate generator metadata (map size, seed, generator type, overrides).
+//   • Provide human-readable logging for configuration state.
+//   • Validate map dimensions in terms of chunk counts before generation begins.
+//
+// Key Components:
+//   • GeneratorConfig (struct)
+//       - Holds configuration parameters for a generator run:
+//           • width: map width in tiles.
+//           • height: map height in tiles.
+//           • seed: string used for deterministic random generation.
+//           • generator_name: identifier for which generator to use.
+//           • tile_overrides: optional overrides for specific tiles.
+//       - Implements `Display` for human-readable logging.
+//
+//   • ConfigValidator (struct)
+//       - Provides validation logic for `GeneratorConfig`.
+//       - Ensures map dimensions are within safe bounds.
+//       - Prevents runaway generation requests that could exhaust resources.
+//
+// Constants:
+//   • MAX_ACTIVE_CHUNKS
+//       - Defines the maximum number of active chunks allowed in memory.
+//       - Protects against excessive generation requests.
+//
+// Workflow:
+//   1. A `GeneratorConfig` is created with map dimensions, seed, generator name,
+//      and optional tile overrides.
+//   2. `ConfigValidator::validate_map_dimensions` is called before generation.
+//   3. Validation steps:
+//        • Convert dimensions and chunk size to i64 for safe arithmetic.
+//        • Compute width and height in chunks using ceiling division.
+//        • Calculate total number of chunks.
+//        • Ensure total chunks > 0.
+//        • Ensure total chunks ≤ MAX_ACTIVE_CHUNKS.
+//   4. Log success or failure with structured messages.
+//   5. Return `Ok(())` if valid, or `Err(String)` with error message if invalid.
+//
+// Design Choices:
+//   • Ceiling division ensures partial chunks are counted as full.
+//   • Logging provides traceability for both success and failure cases.
+//   • Separation of configuration and validation improves modularity.
+//   • Using `Display` for `GeneratorConfig` makes logs concise and readable.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can enforce safety at the configuration
+//     level, preventing invalid or excessive workloads before they reach runtime.
+//   • By combining strong typing, validation, and logging, it ensures reliability
+//     and transparency in procedural generation workflows.
+// ============================================================================
+
+
 use tracing::{error, info};
 use std::fmt;
 use std::collections::HashMap;
-
-// FIX: Import CHUNK_SIZE directly from the ssxl_shared crate root.
 use ssxl_shared::{CHUNK_SIZE, TileCoord, TileType};
 
 const MAX_ACTIVE_CHUNKS: i64 = 100_000_000;
@@ -21,9 +79,9 @@ impl fmt::Display for GeneratorConfig {
         write!(
             f,
             "{{ W: {}, H: {}, Seed: '{}', Gen: '{}', Overrides: {} }}",
-            self.width, 
-            self.height, 
-            self.seed, 
+            self.width,
+            self.height,
+            self.seed,
             self.generator_name,
             self.tile_overrides.len()
         )
@@ -40,7 +98,6 @@ impl ConfigValidator {
         let map_width_i64 = config.width as i64;
         let map_height_i64 = config.height as i64;
 
-        // The ceiling division to calculate the number of chunks: (dividend + divisor - 1) / divisor
         let width_in_chunks = (map_width_i64 + chunk_size_i64 - 1) / chunk_size_i64;
         let height_in_chunks = (map_height_i64 + chunk_size_i64 - 1) / chunk_size_i64;
         let total_chunks = width_in_chunks * height_in_chunks;

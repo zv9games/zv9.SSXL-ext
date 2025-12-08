@@ -1,50 +1,85 @@
-// FILE: ssxl_cli/src/actions/mod.rs
+// ============================================================================
+// ⚙️ SSXL CLI Actions Module (`ssxl_cli::actions`)
+// ----------------------------------------------------------------------------
+// This module acts as the central façade for all command-line actions in the
+// SSXL engine CLI. It aggregates constants, utilities, and exports from child
+// modules, providing a unified interface for launching Godot, running tests,
+// monitoring conductor status, and initiating benchmarks.
+//
+// Structure:
+//   • Submodules:
+//       - benchmarking: Tools for real-time monitoring of the Conductor and
+//         placeholders for benchmark logic.
+//       - godot_harness: Utilities for launching and managing the external
+//         Godot tester project (editor and headless modes).
+//       - testing: Menu and orchestration logic for executing test suites.
+//       - test_suites: Self-contained architectural and data validation tests.
+//       - test_core_suites: Tests requiring external processes like `cargo`
+//         builds and Godot FFI validation.
+//
+//   • Configuration Constants:
+//       - GODOT_EXE_PATH: Absolute path to the Godot executable.
+//       - RELATIVE_PROJECT_PATH_FRAGMENT: Relative path to the Godot tester
+//         project’s GDExtension folder.
+//       - DLL_NAME: Expected name of the compiled Rust dynamic library.
+//       - SOURCE_DLL_PATH_FRAGMENT: Path fragment where the compiled DLL is
+//         found (e.g., `target/debug/`).
+//       - GODOT_TEST_SCENE: Scene path for FFI bridge validation.
+//       - HEADLESS_GEN_TEST_SCENE: Scene path for headless generation pipeline
+//         validation.
+//       - HEADLESS_ANIM_TEST_SCENE: Scene path for headless animation tempo
+//         validation.
+//
+//   • Utility Functions:
+//       - get_godot_project_abs_path: Calculates the absolute path to the Godot
+//         tester project root, ensuring portability across environments.
+//
+//   • Public Exports (Façade):
+//       - start_signal_inspector: Real-time conductor monitoring feed.
+//       - copy_dll_to_tester_project_at_boot, launch_godot_client,
+//         launch_headless_godot: Godot harness utilities.
+//       - run_cargo_tests, run_ffi_bridge_validation,
+//         run_headless_generation_integration_test,
+//         run_headless_animation_tempo_test: Core test suite exports.
+//       - run_communication_channel_test, run_data_channel_test,
+//         run_map_generation_test, run_animation_conductor_test: General test
+//         suite exports.
+//       - execute_testing_menu: Entry point for orchestrating test execution.
+//
+// Design Choices:
+//   • Modular organization ensures separation of concerns between harnessing,
+//     benchmarking, and testing logic.
+//   • Constants centralize configuration for portability and maintainability.
+//   • Re-exports provide a clean façade, allowing external callers to interact
+//     with CLI actions without needing to know internal module structure.
+//
+// Educational Note:
+//   • This module demonstrates the façade pattern in Rust: exposing a curated
+//     set of functions and constants from multiple submodules to simplify
+//     external usage.
+//   • By consolidating CLI actions here, developers gain a single, predictable
+//     entry point for managing Godot integration, conductor monitoring, and
+//     validation pipelines.
+// ============================================================================
 
-//! # CLI Actions Module (`ssxl_cli::actions`)
-//!
-//! This module acts as the public interface (façade) for all complex command-line
-//! actions, such as launching Godot, running tests, or initiating benchmarks.
-//! It aggregates constants, external dependencies, and exports from its child modules.
 
 use std::env;
 use std::path::PathBuf;
 
-// --- Internal Modules ---
-
-/// Tools for real-time monitoring of the Conductor and placeholder for benchmark logic.
 mod benchmarking;
-/// Utilities for launching and managing the external Godot engine tester project.
 mod godot_harness;
-/// The main menu and delegation stub for all test suites.
 mod testing;
-/// Contains self-contained architectural and data validation tests.
 mod test_suites;
-/// Contains tests requiring external processes like `cargo` and Godot FFI validation.
 mod test_core_suites;
 
-// --- Configuration Constants ---
-
-/// The absolute path to the Godot executable file.
 pub const GODOT_EXE_PATH: &str = "C:/ZV9/zv9.SSXL-ext/SSXL_engine_tester/godot.windows.editor.x86_64.exe"; 
-/// The project-relative path fragment pointing to the GDExtension folder (e.g., `godot_tester_project/gde/`).
 pub const RELATIVE_PROJECT_PATH_FRAGMENT: &str = "../SSXLtester2/";
-/// The expected file name of the compiled Rust dynamic library (e.g., `ssxl_engine.dll`).
 pub const DLL_NAME: &str = "ssxl_engine.dll";
-/// The project-relative path fragment where the compiled DLL is found (e.g., `target/debug/`).
 pub const SOURCE_DLL_PATH_FRAGMENT: &str = "target/debug/";
-/// The scene path within the Godot project used for FFI bridge validation tests.
 pub const GODOT_TEST_SCENE: &str = "res://tests/ffi_bridge_test.tscn"; 
-
-// --- NEW HEADLESS TEST SCENES ---
-/// The scene path within the Godot project used for headless generation pipeline validation.
 pub const HEADLESS_GEN_TEST_SCENE: &str = "res://tests/headless_gen_pipeline.tscn";
-/// The scene path within the Godot project used for headless animation tempo validation.
 pub const HEADLESS_ANIM_TEST_SCENE: &str = "res://tests/headless_anim_tempo.tscn";
-// --- END NEW HEADLESS TEST SCENES ---
 
-// --- Utility Functions ---
-
-/// Calculates the absolute path to the Godot tester project root.
 pub fn get_godot_project_abs_path() -> Result<PathBuf, String> {
     let mut path = env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
@@ -60,29 +95,21 @@ pub fn get_godot_project_abs_path() -> Result<PathBuf, String> {
     }
 }
 
-
-// --- Public Module Exports (Façade) ---
-
-/// Re-export for starting the **real-time status feed**.
 pub use benchmarking::start_signal_inspector;
 
-// Exports from godot_harness (Includes the requested launch_headless_godot).
 pub use godot_harness::{
     copy_dll_to_tester_project_at_boot,
     launch_godot_client,
     launch_headless_godot,
 };
 
-// Exports from test_core_suites.
 pub use test_core_suites::{
     run_cargo_tests,
     run_ffi_bridge_validation,
-    // --- ADDING NEW HEADLESS TESTS ---
     run_headless_generation_integration_test,
     run_headless_animation_tempo_test,
 };
 
-// Exports from test_suites.
 pub use test_suites::{
     run_communication_channel_test,
     run_data_channel_test,
@@ -90,7 +117,5 @@ pub use test_suites::{
     run_animation_conductor_test,
 };
 
-
-/// Exports related to **testing and validation**.
 #[allow(unused_imports)]
 pub use testing::execute_testing_menu;

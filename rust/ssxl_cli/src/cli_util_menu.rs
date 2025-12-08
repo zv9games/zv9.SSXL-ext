@@ -1,29 +1,89 @@
+// ============================================================================
+// 🧭 SSXL CLI: Developer Console Menu (`ssxl_cli::cli_util_menu`)
+// ----------------------------------------------------------------------------
+// This module defines the interactive command-line menu system for the SSXL
+// engine developer console. It provides a structured way to organize, present,
+// and execute various developer actions, including validation tests, benchmarks,
+// and inspection utilities.
+//
+// Purpose:
+//   • Offer a unified interface for developers to run tests, benchmarks, and
+//     debugging tools directly from the CLI.
+//   • Simplify orchestration by exposing a menu-driven workflow rather than
+//     requiring manual invocation of individual functions.
+//   • Ensure that both Rust-only validation and Godot-linked integration tests
+//     can be triggered consistently.
+//
+// Key Components:
+//   • CliAction
+//       - Represents a single executable action in the menu.
+//       - Contains:
+//           • key: the character used to trigger the action.
+//           • label: human-readable description shown in the menu.
+//           • id: internal identifier for the action.
+//           • action: closure wrapping the function to execute.
+//       - Provides a `new` constructor for placeholder actions.
+//
+//   • CliMenu
+//       - Represents a group of actions under a common title.
+//       - Provides `new` for initialization.
+//       - Includes `prompt_action` (currently unimplemented) for interactive
+//         selection logic.
+//
+//   • build_menu
+//       - Constructs the full list of available actions for the developer console.
+//       - Organizes actions into categories:
+//           I. Core Rust Validation (cargo tests, FFI, channels, map generation, animation).
+//           II. Headless Integration Tests (Godot-based generation and animation validation).
+//           III. Engine Launch & Debugging Tools (launch Godot client/headless, signal inspector).
+//           IV. Benchmarks & Utilities (generation tests, grid benchmarks, bitmask conversion).
+//           V. System Control (exit).
+//       - Each action is mapped to a key and closure for execution.
+//
+//   • print_menu
+//       - Prints the structured menu to the console.
+//       - Displays each action’s key and label for user selection.
+//       - Provides a clear prompt for interaction.
+//
+// Workflow:
+//   1. Developer runs the CLI console.
+//   2. `build_menu` constructs the list of available actions.
+//   3. `print_menu` displays the menu with keys and labels.
+//   4. User selects an action by pressing the corresponding key.
+//   5. The associated closure executes the requested function.
+//
+// Design Choices:
+//   • Actions are closures wrapped in `Box<dyn Fn()>` for flexibility and dynamic dispatch.
+//   • Keys are single characters for quick selection in interactive mode.
+//   • Labels use emojis and descriptive text for clarity and developer ergonomics.
+//   • Menu organization mirrors developer workflows: validation, integration, debugging,
+//     benchmarking, and control.
+//
+// Educational Note:
+//   • This module demonstrates how to build a modular CLI menu system in Rust,
+//     combining structured data (CliAction, CliMenu) with dynamic execution.
+//   • By centralizing developer actions here, contributors gain a predictable,
+//     ergonomic interface for testing and debugging the SSXL engine.
+// ============================================================================
+
+
 use crate::actions::{
-    // --- Core Test & Validation Functions (Godot/Rust interaction) ---
     run_cargo_tests,
     run_ffi_bridge_validation,
     run_communication_channel_test,
     run_data_channel_test,
     run_map_generation_test,
     run_animation_conductor_test,
-    
-    // --- NEW: Headless Integration Tests for Rendering Logic (Fixing Generate/Animate) ---
-    run_headless_generation_integration_test, // Validates 'generate' FFI data pipeline.
-    run_headless_animation_tempo_test,        // Validates 'animate' conductor tempo/latency.
-    
-    // --- Launch & Debug Functions ---
+    run_headless_generation_integration_test,
+    run_headless_animation_tempo_test,
     launch_godot_client,
     launch_headless_godot,
     start_signal_inspector,
 };
-// Benchmark/Utility functions are correctly imported from their dedicated module:
 use crate::cli_util_bench::{run_bitmask_conversion, run_max_grid_benchmark, test_generation_and_placement_cli};
 use crate::cli_util_inspect::{print_godot_api_surface, print_module_tree};
 use tracing::warn;
 
-
-/// Defines a single executable action within the Command Line Interface menu.
-/// Each action is a closure wrapped in a Box for dynamic execution.
 pub struct CliAction {
     pub key: char,
     pub label: &'static str,
@@ -32,19 +92,16 @@ pub struct CliAction {
 }
 
 impl CliAction {
-    /// Helper constructor (primarily for TODO/unimplemented actions).
     pub fn new(id: &'static str, label: &'static str) -> Self {
         CliAction {
             key: '?',
             label,
             id,
-            action: Box::new(|| {}) // Default no-op action
+            action: Box::new(|| {})
         }
     }
 }
 
-
-/// Defines a structure for organizing and presenting a group of CLI actions.
 pub struct CliMenu<'a> {
     pub title: &'static str,
     pub actions: &'a [CliAction],
@@ -55,19 +112,13 @@ impl<'a> CliMenu<'a> {
         CliMenu { title, actions }
     }
     
-    // Note: prompt_action implementation is omitted as it is environment-specific.
     pub fn prompt_action(&self) -> CliAction {
         unimplemented!()
     }
 }
 
-
-/// Constructs the complete list of available actions for the SSXL Engine Dev Console.
 pub fn build_menu() -> Vec<CliAction> {
     vec![
-        // =======================================================================
-        // I. CORE RUST VALIDATION (Internal Checks)
-        // =======================================================================
         CliAction { 
             key: '0', 
             label: "✅ Run: Full Cargo Test Suite", 
@@ -104,11 +155,6 @@ pub fn build_menu() -> Vec<CliAction> {
             id: "animation_tempo",
             action: Box::new(run_animation_conductor_test)
         },
-
-        // =======================================================================
-        // II. HEADLESS INTEGRATION TESTS (Simulating Engine in Godot)
-        // This targets the root of our 'generate' and 'animate' rendering errors.
-        // =======================================================================
         CliAction { 
             key: '6', 
             label: "✅ Validate: Headless Generation Integration (Full Pipeline Simulation)", 
@@ -121,10 +167,6 @@ pub fn build_menu() -> Vec<CliAction> {
             id: "headless_anim_tempo",
             action: Box::new(run_headless_animation_tempo_test)
         },
-
-        // =======================================================================
-        // III. ENGINE LAUNCH & DEBUGGING TOOLS
-        // =======================================================================
         CliAction {    
             key: 'L',    
             label: "🚀 Launch: Godot Client (Non-Headless)",    
@@ -143,10 +185,6 @@ pub fn build_menu() -> Vec<CliAction> {
             id: "start_inspector",
             action: Box::new(start_signal_inspector)    
         },
-
-        // =======================================================================
-        // IV. BENCHMARKS & UTILITIES
-        // =======================================================================
         CliAction {    
             key: 'T',    
             label: "🧪 Test: Generation & Placement CLI",    
@@ -183,18 +221,11 @@ pub fn build_menu() -> Vec<CliAction> {
             id: "trailkeeper_scan",
             action: Box::new(|| warn!("TODO: Trailkeeper scan not yet implemented."))    
         },
-        
-        // =======================================================================
-        // V. SYSTEM CONTROL
-        // =======================================================================
         CliAction { key: 'E', label: "✅ Exit Console", id: "exit", action: Box::new(|| {}) },
     ]
 }
 
-
-/// Prints the structured menu to the console, ready for user selection.
 pub fn print_menu(menu: &[CliAction]) {
-    
     println!("\n🧭 SSXL-ext Engine Dev Console\n");
     for item in menu {
         println!("[{}] {}", item.key, item.label);

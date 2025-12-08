@@ -1,48 +1,78 @@
-// ssxl_godot/src/engine/cleanup.rs
+// ============================================================================
+// 🎼 Engine Shutdown Logic (`crate::engine::shutdown`)
+// ----------------------------------------------------------------------------
+// This module defines the `shutdown_logic` function, which provides a clean,
+// public-facing API for Godot to explicitly shut down the SSXL engine. It ensures
+// that all resources, background threads, and subsystems are gracefully released.
 //
-// This module contains logic for teardown, shutdown, and resource release (Logic Implementation).
+// Purpose:
+//   • Allow Godot scripts to trigger a controlled shutdown of the SSXL engine.
+//   • Safely tear down the Conductor and related subsystems.
+//   • Clear references to Godot nodes to prevent dangling pointers.
+//   • Return a confirmation message compatible with Godot (`GString`).
+//
+// Key Components:
+//   • SSXLEngine
+//       - Represents the engine state exposed to Godot.
+//       - Holds references to conductor, animation subsystems, and Godot nodes.
+//   • state! macro
+//       - Provides safe access to the internal state of `SSXLEngine`.
+//   • Arc + Mutex
+//       - Used to manage shared ownership of the Conductor across threads.
+//       - `Arc::try_unwrap` ensures teardown only occurs if the Conductor is
+//         uniquely owned, preventing unsafe shutdowns.
+//
+// Workflow:
+//   1. Access the engine’s internal state via the `state!` macro.
+//   2. If a Conductor exists:
+//        • Attempt to unwrap the `Arc<Mutex<Conductor>>`.
+//        • If successful, call `graceful_teardown()` on the Conductor.
+//        • If not unique or poisoned, skip teardown safely.
+//   3. Clear other subsystems:
+//        • conductor_state
+//        • animation_conductor
+//        • animation_state
+//   4. Clear Godot node references:
+//        • signals_node
+//        • tilemap_node
+//   5. Return a Godot-compatible confirmation message (`GString`).
+//
+// Design Choices:
+//   • Graceful teardown ensures background tasks and channels are closed cleanly.
+//   • Clearing subsystems prevents memory leaks and dangling references.
+//   • Returning a `GString` integrates seamlessly with Godot’s scripting layer.
+//   • Defensive use of `Arc::try_unwrap` avoids unsafe shutdown in multi-threaded contexts.
+//
+// Educational Note:
+//   • This function demonstrates how Rust can safely manage engine lifecycle
+//     when integrated with external systems like Godot. By combining concurrency
+//     primitives, structured teardown, and Godot-compatible types, it ensures
+//     stability and reliability during engine shutdown.
+// ============================================================================
+
 
 use godot::prelude::*;
-use std::sync::Arc; // Corrected import (needed for Arc::try_unwrap)
+use std::sync::Arc;
 
-// FIX 1: Adopt the macro-friendly import pattern.
 use crate::engine::state as state_module;
-// CRITICAL FIX: Import necessary types/macros from the state module.
 use state_module::{SSXLEngine, state};
 
-// The entire #[godot_api] impl block is removed to resolve E0119.
-
-/// Logic for the Public Godot-facing function to explicitly release all background threads and resources.
 pub fn shutdown_logic(engine: &mut SSXLEngine) -> GString {
-    // CRITICAL FIX: The `state!` macro requires the state module's struct name as the argument.
     let state = state!(engine);
     
-    // NOTE: In the previous turn, the Conductor method was confirmed to be `graceful_teardown`.
     if let Some(conductor_arc) = state.conductor.take() {
-        // Attempt to stop the generation thread gracefully
-        // NOTE: conductor_arc is Arc<Mutex<Conductor>>
-        
-        // FIX E0599: Use `.ok().and_then(|m| m.into_inner().ok())` to correctly flatten 
-        // the Option<Result<T, E>> into Option<T>. This consumes the Arc and the Mutex 
-        // and handles both non-unique Arc and Mutex poisoning gracefully.
         if let Some(conductor) = Arc::try_unwrap(conductor_arc)
-            .ok() // Result<Mutex, Arc> -> Option<Mutex> (discards non-unique Arc)
-            .and_then(|m| m.into_inner().ok()) // Mutex<T> -> Result<T, PoisonError> -> Option<T> (discards poisoning)
+            .ok()
+            .and_then(|m| m.into_inner().ok())
         {
-            // `conductor` is now the owned Conductor struct (T), allowing the consuming method call.
             conductor.graceful_teardown();
-        } else {
-            // The shutdown failed because other Arcs still exist or the Mutex was poisoned.
-            // No action needed here, as the resources are already marked as taken.
         }
     }
     
-    // Clear other owned resources
     state.conductor_state.take();
     state.animation_conductor.take();
     state.animation_state.take();
     
-    // Clear Godot references
     state.signals_node.take();
     state.tilemap_node.take();
 

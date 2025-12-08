@@ -1,3 +1,55 @@
+// ============================================================================
+// 🧪 SSXL CLI: Core Test Runner (`ssxl_cli::actions::test_core_runner`)
+// ----------------------------------------------------------------------------
+// This module provides utilities for executing both Rust-based unit/integration
+// tests and Godot-based headless integration tests. It acts as the backbone of
+// the CLI testing framework, ensuring that internal Rust logic and external
+// Godot integration are validated consistently.
+//
+// Key Functions:
+//   • run_cargo_tests
+//       - Executes the full Rust test suite via `cargo test`.
+//       - Runs with `--nocapture` to stream output directly to the console.
+//       - Reports success/failure based on Cargo’s exit status.
+//
+//   • read_all_output_from_stream
+//       - Helper function for reading all output from a process stream.
+//       - Runs in a separate thread to avoid blocking the main process.
+//       - Collects stdout/stderr into strings for later logging.
+//
+//   • run_godot_test
+//       - Generic runner for Godot-based integration tests.
+//       - Accepts a test title, scene path, and success message.
+//       - Spawns Godot in headless mode with the specified scene.
+//       - Captures stdout and stderr concurrently for full visibility.
+//       - Logs formatted output and reports success/failure based on Godot’s
+//         exit status.
+//
+// Workflow:
+//   1. Rust unit/integration tests are executed via `run_cargo_tests`.
+//   2. Godot is launched in headless mode with a specific test scene.
+//   3. Output streams (stdout/stderr) are captured in parallel threads.
+//   4. Results are logged to the console, including success/failure messages.
+//   5. Exit codes and captured output provide detailed diagnostics.
+//
+// Design Choices:
+//   • `std::process::Command` is used to spawn external processes (Cargo, Godot).
+//   • `Stdio::piped` allows capturing stdout/stderr for real-time logging.
+//   • Threads are used to read output streams concurrently, preventing blocking.
+//   • `tracing` macros (`info`, `warn`, `error`) provide structured logging for
+//     visibility and debugging.
+//   • Headless Godot execution ensures tests can run in CI/CD pipelines without
+//     requiring a GUI.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can orchestrate external processes to
+//     validate integration with another engine (Godot).
+//   • By combining Cargo tests with Godot headless scenes, developers gain
+//     confidence that both the Rust engine and its FFI bridge are functioning
+//     correctly in real runtime conditions.
+// ============================================================================
+
+
 use std::io::{self, BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -5,12 +57,9 @@ use tracing::{error, info, warn};
 
 use super::{
     get_godot_project_abs_path, GODOT_EXE_PATH, 
-    // Keep constants here for completeness, or only required ones if splitting strictly
-    // by dependencies. Keeping them here allows `run_godot_test` to access them.
     GODOT_TEST_SCENE, HEADLESS_ANIM_TEST_SCENE, HEADLESS_GEN_TEST_SCENE,
 };
 
-/// Runs the full cargo test suite.
 pub fn run_cargo_tests() {
     println!("🚀 Running full cargo test suite...");
 
@@ -26,7 +75,6 @@ pub fn run_cargo_tests() {
     }
 }
 
-/// Helper function to read all output from a stream in a non-blocking way. (O(n) on stream size)
 fn read_all_output_from_stream<R: io::Read + Send + 'static>(stream: R) -> String {
     let mut reader = BufReader::new(stream);
     let mut output = String::new();
@@ -41,8 +89,6 @@ fn read_all_output_from_stream<R: io::Read + Send + 'static>(stream: R) -> Strin
     output
 }
 
-/// Generic runner for Godot-based integration tests.
-/// Extracts all boilerplate for spawning and output piping.
 pub(crate) fn run_godot_test(
     test_title: &str,
     test_scene: &str,
@@ -104,7 +150,6 @@ pub(crate) fn run_godot_test(
     let stdout_output = stdout_handle.join().unwrap_or_else(|_| "Stdout reading thread panicked.".to_string());
     let stderr_output = stderr_handle.join().unwrap_or_else(|_| "Stderr reading thread panicked.".to_string());
     
-    // Output formatting and final result logging.
     println!("\n--- GODOT {} TEST OUTPUT START ---", test_title.to_uppercase());
     println!("{}", stdout_output);
     println!("--- GODOT {} TEST OUTPUT END ---\n", test_title.to_uppercase());

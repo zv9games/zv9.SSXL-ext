@@ -1,29 +1,54 @@
-# camera.gd
 extends Camera2D
-class_name SSXLCameraDriver
 
-const CHUNK_SIZE := 32
-const VIEW_RADIUS := 3
-var last_chunk_key := Vector2i(-999, -999)
+# ============================================================================
+# 1. NODE REFERENCES & CONSTANTS
+# ============================================================================
+
+# Assuming SSXLSignals is a sibling of the Camera2D node in the main scene.
+@onready var ssxl_signals = get_parent().get_node("SSXLSignals") 
+
+# Define the size of one chunk in world units (e.g., 32x32 tiles * 16px/tile = 512)
+# Since TileMap coordinates are usually in tiles, we'll use a simpler factor based on
+# how chunk coordinates map to world space. Assuming a tile size of 16x16 and 
+# a chunk size of 32x32 tiles, the world chunk size is 512.
+const WORLD_CHUNK_SIZE: int = 512 
+
+# How many chunks to request in each direction (e.g., RADIUS 2 means 5x5 chunks total).
+const STREAM_RADIUS: int = 2 
+
+# Tracks the last chunk coordinate the camera was centered over.
+var last_center_chunk: Vector2i = Vector2i(-9999, -9999)
+
+
+# ============================================================================
+# 2. STREAMING LOGIC
+# ============================================================================
 
 func _physics_process(delta):
-	# 🧭 O(1) current chunk key check
-	var current_chunk_key = world_to_chunk(global_position)
+	# Calculate the current chunk key (x, y) based on the camera's position.
+	# The integer division by WORLD_CHUNK_SIZE gives us the chunk coordinate.
+	var current_center_chunk: Vector2i = (global_position / WORLD_CHUNK_SIZE).floor() as Vector2i
 	
-	if current_chunk_key != last_chunk_key:
-		last_chunk_key = current_chunk_key
-		request_chunks_around(current_chunk_key)
+	# Only request chunks if the camera has moved into a new central chunk.
+	if current_center_chunk != last_center_chunk:
+		last_center_chunk = current_center_chunk
+		
+		if ssxl_signals:
+			request_surrounding_chunks(current_center_chunk)
+		else:
+			push_error("SSXLSignals node is missing or not configured.")
 
-# 🗺️ O(R^2) dispatch (R=VIEW_RADIUS)
-func request_chunks_around(center_key: Vector2i):
-	var signals = get_node("/root/SSXLSignals")
+func request_surrounding_chunks(center_key: Vector2i):
+	print("--- 📡 Requesting chunks centered at %s ---" % center_key)
 	
-	for x in range(-VIEW_RADIUS, VIEW_RADIUS + 1):
-		for y in range(-VIEW_RADIUS, VIEW_RADIUS + 1):
-			var key_to_request = center_key + Vector2i(x, y)
-			# O(1) signal dispatch
-			signals.chunk_request.emit(key_to_request)
-
-# 📐 O(1) coordinate conversion
-func world_to_chunk(world_pos: Vector2) -> Vector2i:
-	return Vector2i(floor(world_pos.x / CHUNK_SIZE), floor(world_pos.y / CHUNK_SIZE))
+	# Loop through the streaming radius around the center chunk.
+	for x in range(-STREAM_RADIUS, STREAM_RADIUS + 1):
+		for y in range(-STREAM_RADIUS, STREAM_RADIUS + 1):
+			
+			# Calculate the absolute chunk key for the request.
+			var request_key = center_key + Vector2i(x, y)
+			
+			# Emit the signal defined in SSXLSignals.gd.
+			# SSXLSignals.gd is set up to listen for this signal and call 
+			# SSXLEngine.build_map_by_size(x, y, generator_id).
+			ssxl_signals.emit_signal("chunk_request", request_key)

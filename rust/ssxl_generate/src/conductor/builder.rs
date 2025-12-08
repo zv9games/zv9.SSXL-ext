@@ -1,4 +1,62 @@
-// src/conductor/builder.rs
+// ============================================================================
+// 🎼 Conductor Setup and Spawn (`crate::conductor::setup`)
+// ----------------------------------------------------------------------------
+// This module provides the initialization and spawning logic for the SSXL
+// Conductor, the central orchestrator of procedural generation tasks. It
+// prepares channels, managers, and state, then launches the asynchronous
+// request loop that drives chunk generation.
+//
+// Purpose:
+//   • Bundle together configuration, managers, channels, and initial state.
+//   • Provide a clean entry point for starting the Conductor runtime.
+//   • Ensure safe, modular setup of async communication and caching systems.
+//
+// Key Components:
+//   • PROGRESS_CHANNEL_BOUND
+//       - Defines bounded capacity for the progress channel.
+//       - Prevents unbounded queuing of progress messages, applying backpressure.
+//
+//   • setup_channels_and_state
+//       - Loads configuration from a file path (or defaults).
+//       - Initializes the GeneratorManager, which tracks available generators.
+//       - Creates bounded progress channel for updates and unbounded request
+//         channel for chunk generation tasks.
+//       - Determines initial generator ID from config.
+//       - Creates initial ConductorState with that ID.
+//       - Returns a `ConductorInternalSetup` bundle containing all components.
+//
+//   • spawn
+//       - Consumes `ConductorInternalSetup` and spawns the async request loop.
+//       - Initializes a RuntimeManager (Tokio runtime wrapper).
+//       - Clones generator map and creates a chunk cache (LRU, capacity 4096).
+//       - Marks conductor state as running.
+//       - Starts the async request loop with runtime handle, channels, generators,
+//         cache, and state.
+//       - Constructs a `Conductor` instance with runtime, managers, state, cache,
+//         and channels.
+//       - Returns tuple: (Conductor, ConductorState, request sender, progress receiver).
+//
+// Workflow:
+//   1. `setup_channels_and_state` prepares configuration, managers, channels, and state.
+//   2. `spawn` consumes setup bundle and starts async request loop.
+//   3. Conductor instance is returned, ready to manage generation tasks.
+//   4. Progress updates flow through bounded channel; requests flow through unbounded channel.
+//   5. Chunk cache ensures efficient reuse of generated chunks.
+//
+// Design Choices:
+//   • Separation of setup and spawn improves modularity and testability.
+//   • Bounded progress channel prevents overload; unbounded request channel ensures flexibility.
+//   • Arc-based sharing allows safe concurrent access to generators, cache, and state.
+//   • Logging provides visibility into initialization and runtime events.
+//
+// Educational Note:
+//   • This module demonstrates how to structure async orchestration in Rust,
+//     combining configuration, state management, channels, and runtime spawning.
+//   • By encapsulating setup and spawn logic, the Conductor remains extensible
+//     and maintainable, supporting complex procedural generation workflows.
+// ============================================================================
+
+
 use super::{conductor_state, Conductor};
 use super::internal_setup::ConductorInternalSetup; 
 
@@ -17,9 +75,7 @@ pub(crate) fn setup_channels_and_state(
     config_path: Option<&str>,
 ) -> Result<ConductorInternalSetup, io::Error> {
     let config = get_config_from_path(config_path);
-    // TODO: (Implied) Handle errors in GeneratorManager::new().
-    // The previous code already includes error handling for GeneratorManager::new()
-    // by using the `map_err` and `?` operators to convert the custom error into an io::Error.
+
     let generator_manager = GeneratorManager::new().map_err(|e| {
         io::Error::new(io::ErrorKind::Other, format!("Generator setup failed: {}", e))
     })?;
@@ -64,6 +120,7 @@ pub(crate) fn spawn(
 
     let runtime_manager = RuntimeManager::new()?;
     let handle = runtime_manager.get_handle();
+
     let generators_for_loop = Arc::new(generator_manager.get_map_clone());
     let chunk_cache = Arc::new(ChunkCache::new(4096)?);
     let chunk_cache_for_loop = chunk_cache.clone();

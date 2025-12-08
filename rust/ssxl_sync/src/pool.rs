@@ -1,82 +1,93 @@
-//! # Thread Pool Manager (`ssxl_sync::pool_manager`)
-//!
-//! Defines the generic, fixed-size thread pool used for executing synchronous,
-//! CPU-intensive generation tasks off the main thread and the main Tokio runtime.
-//! This pattern ensures high-throughput batch processing of `ChunkData`.
+// ============================================================================
+// ⚙️ Thread Pool Manager (`ssxl_sync::pool_manager`)
+// ----------------------------------------------------------------------------
+// This module implements a fixed-size thread pool for executing synchronous,
+// CPU-intensive generation tasks outside of the main thread and Tokio runtime.
+// It is the backbone for high-throughput batch processing of `ChunkData`,
+// ensuring that heavy work does not block async event loops.
+//
+// Key Concepts:
+//   • Worker: Represents a single thread in the pool, with an ID and join handle.
+//   • GenerationTask: Enum describing the unit of work (e.g., generate a chunk,
+//     or shut down gracefully).
+//   • ConductorResult: Enum describing the result of a task (completed chunk or error).
+//   • WorkerPool: Manages the pool of workers, task queue, and graceful shutdown.
+//
+// Design Choices:
+//   • Fixed pool size (POOL_SIZE = 4) for predictable resource usage.
+//   • `crossbeam_channel` used for task/result communication because it provides
+//     synchronous, blocking semantics ideal for CPU-bound work.
+//   • `Arc<Receiver<Task>>` allows multiple worker threads to share the same
+//     task queue safely.
+//   • Results are sent back to the Conductor via a separate channel, enabling
+//     centralized collection of completed work.
+//
+// Workflow:
+//   1. Initialization (`WorkerPool::new`):
+//      - Creates task and result channels.
+//      - Spawns N worker threads, each running `run_worker_loop`.
+//   2. Task submission (`submit_task`):
+//      - Sends a `GenerationTask` into the pool’s task channel.
+//   3. Worker loop (`run_worker_loop`):
+//      - Blocks until a task arrives.
+//      - Processes the task (e.g., generate a chunk).
+//      - Sends back a `ConductorResult`.
+//      - Shuts down gracefully if the channel is closed.
+//   4. Shutdown (`Drop` impl):
+//      - Sends a `Shutdown` task to unblock workers.
+//      - Joins all worker threads to ensure clean termination.
+//
+// Educational Note:
+//   • This module demonstrates a classic concurrency pattern: a fixed-size
+//     worker pool consuming tasks from a shared queue.
+//   • By separating task submission, worker execution, and result collection,
+//     the system achieves both parallelism and safety.
+//   • Graceful shutdown ensures no threads are leaked and all resources are
+//     properly cleaned up.
+// ============================================================================
+
 
 use std::thread::{self, JoinHandle};
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use tracing::{info, error, warn};
 use std::sync::Arc;
 
-// --- Imports from sibling crates/modules ---
-// NOTE: Imports from ssxl_generate removed to avoid cyclical dependency.
 use ssxl_math::prelude::Vec2i;
-// FIX: Import ChunkData directly from the root of ssxl_shared to resolve both E0433 errors.
 use ssxl_shared::ChunkData; 
 
-// --- Configuration ---
-/// Defines the size of the worker pool.
 const POOL_SIZE: usize = 4;
 
-
-// --- 1. Worker Definition ---
-
-/// Represents a single worker thread's state and handle.
 struct Worker {
-    /// The ID of the worker thread.
     id: usize,
-    /// The handle to join the thread on shutdown.
     handle: Option<JoinHandle<()>>,
 }
 
-// --- Local Definitions to Break Dependency Cycle ---
-/// The unit of work sent to the thread pool.
 #[derive(Debug)]
 pub enum GenerationTask {
-    /// A command to begin generating a new chunk of data.
     GenerateChunk,
-    /// A command to signal the worker thread to shut down gracefully.
     Shutdown,
 }
 
-/// The result returned from the completed work.
 #[derive(Debug)]
 pub enum ConductorResult {
-    /// A successfully completed chunk of generated data.
-    // FIX 1 (Line 47): Use the directly imported ChunkData.
     CompletedChunk(Arc<ChunkData>),
-    /// An error that occurred during generation.
     Error(String),
 }
 
-/// The unit of work sent to the thread pool (Alias for local definition).
 pub type Task = GenerationTask;
-
-/// The result returned from the completed work (Alias for local definition).
 pub type TaskResult = ConductorResult;
 
-
-// --- 2. Pool Manager Structure ---
-
-/// Manages the pool of worker threads and the task queue.
 pub struct WorkerPool {
-    /// The channel used to send tasks from the `Conductor` to the workers.
     task_sender: Sender<Task>,
-    // Redundant `result_receiver` field removed.
-    /// Collection of worker structs, primarily used to hold join handles for shutdown.
     workers: Vec<Worker>,
 }
 
 impl WorkerPool {
-    /// Creates a new worker pool and starts all worker threads.
     pub fn new() -> (Self, Receiver<TaskResult>) {
         let (task_tx, task_rx) = unbounded::<Task>();
         let (result_tx, result_rx) = unbounded::<TaskResult>();
         
         let mut workers = Vec::with_capacity(POOL_SIZE);
-        
-        // Wrap the task receiver in an Arc to be shared by all worker threads.
         let shared_task_rx = Arc::new(task_rx);
 
         for id in 0..POOL_SIZE {
@@ -98,19 +109,16 @@ impl WorkerPool {
         (
             WorkerPool {
                 task_sender: task_tx,
-                // Removed the unused `result_receiver` from initialization.
                 workers,
             },
-            result_rx, // The primary receiver is correctly returned for the Conductor to use.
+            result_rx,
         )
     }
 
-    /// Submits a new generation task to the pool.
     pub fn submit_task(&self, task: Task) -> Result<(), crossbeam_channel::SendError<Task>> {
         self.task_sender.send(task)
     }
 
-    /// The main loop executed by each worker thread.
     fn run_worker_loop(
         id: usize,
         task_rx: Arc<Receiver<Task>>,
@@ -119,27 +127,20 @@ impl WorkerPool {
         info!("Worker {} started, ready to receive tasks.", id);
 
         loop {
-            // Blocks until a task is available or the sender is dropped (shutdown).
             match task_rx.recv() {
                 Ok(task) => {
-                    // --- Perform CPU-intensive generation work here ---
                     info!("Worker {} processing task {:?}", id, task);
                     
-                    // TODO: Execute the actual generation/batch function
                     let result: TaskResult = TaskResult::CompletedChunk(
-                        // FIX 2 (Line 130): Use the directly imported ChunkData.
                         Arc::new(ChunkData::new_at_coords(Vec2i::new(0, 0)))
                     );
                     
-                    // Send the result back to the Conductor
                     if let Err(e) = result_tx.send(result) {
                         warn!("Worker {} failed to send result: {}", id, e);
-                        // The Conductor's receiver must have dropped. Exit.
                         break;
                     }
                 }
                 Err(_) => {
-                    // Sender was dropped, time to shut down.
                     info!("Worker {} task channel closed. Shutting down.", id);
                     break;
                 }
@@ -148,17 +149,12 @@ impl WorkerPool {
     }
 }
 
-// --- 3. Graceful Shutdown ---
-
 impl Drop for WorkerPool {
-    /// Gracefully shuts down all worker threads.
     fn drop(&mut self) {
         info!("WorkerPool initiating graceful shutdown...");
         
-        // Attempt to send a shutdown command to any worker currently blocked on `recv()`.
         let _ = self.task_sender.send(Task::Shutdown);
         
-        // Wait for all workers to finish.
         for mut worker in self.workers.drain(..) {
             if let Some(handle) = worker.handle.take() {
                 if let Err(e) = handle.join() {
@@ -171,3 +167,5 @@ impl Drop for WorkerPool {
         info!("WorkerPool shutdown complete.");
     }
 }
+
+

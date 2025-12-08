@@ -1,4 +1,62 @@
-// ssxl_cli\src\cli_util_bench.rs
+// ============================================================================
+// ⚡ SSXL CLI: Benchmarking Utilities (`ssxl_cli::cli_util_bench`)
+// ----------------------------------------------------------------------------
+// This module provides command-line utilities for validating and benchmarking
+// the SSXL engine’s generation and conductor subsystems. It focuses on three
+// core areas: synchronous chunk generation, placeholder conversion routines,
+// and large-scale throughput benchmarking.
+//
+// Key Functions:
+//   • test_generation_and_placement_cli
+//       - Validates the Conductor by attempting chunk generation with multiple
+//         generators (Perlin and Cellular Automata).
+//       - Confirms that chunks can be generated synchronously via `get_chunk_data`.
+//       - Reports success/failure based on the number of chunks generated.
+//       - Ensures generator IDs are correctly registered and active.
+//
+//   • run_bitmask_conversion
+//       - Placeholder function simulating conversion of a world image into tile
+//         placement data.
+//       - Logs a fixed number of tiles placed to demonstrate workflow.
+//       - Serves as a stub for future image-to-world conversion logic.
+//
+//   • run_max_grid_benchmark
+//       - Executes a large-scale workload benchmark to measure maximum tile
+//         generation throughput.
+//       - Spawns two threads:
+//           1. Workload thread: runs `benchmark_generation_workload` to simulate
+//              tile generation across a massive grid.
+//           2. Ticker thread: monitors progress, calculates throughput, and
+//              prints real-time updates to stdout.
+//       - Reports final throughput in tiles/sec and diagnostics in tiles/ms.
+//       - Compares results against baseline (MVG_BASELINE) and target thresholds
+//         (ITERATION5_TARGET) to evaluate performance.
+//       - Provides structured logging for success, warnings, or critical failures.
+//
+// Workflow:
+//   1. Initialize Conductor or workload counters.
+//   2. Spawn threads for generation and progress monitoring.
+//   3. Capture progress in real time, printing formatted output to the console.
+//   4. Join threads and calculate final throughput metrics.
+//   5. Compare results against baseline/target thresholds and log outcomes.
+//
+// Design Choices:
+//   • `Arc<AtomicU64>` provides thread-safe counters for progress tracking.
+//   • `std::thread::spawn` enables concurrent workload execution and monitoring.
+//   • `tracing` macros (`info`, `warn`, `error`) provide structured logging for
+//     visibility and debugging.
+//   • Real-time progress printing with carriage return (`\r`) creates a dynamic,
+//     single-line ticker in the terminal.
+//   • Baseline and target thresholds allow performance regression detection.
+//
+// Educational Note:
+//   • This module demonstrates how to build benchmarking tools in Rust using
+//     concurrency primitives, atomic counters, and structured logging.
+//   • By validating both correctness (chunk generation) and performance
+//     (throughput benchmarks), developers gain confidence in the scalability
+//     and reliability of the SSXL engine.
+// ============================================================================
+
 
 use tracing::{info, warn, error};
 use std::time::Instant;
@@ -36,7 +94,6 @@ pub fn test_generation_and_placement_cli() {
     if conductor.set_generator(perlin_id).is_ok() {
         info!("-> Active Generator set to: {}", perlin_id);
         for &coords in &test_coords {
-            // FIX: Use the correct synchronous generation method: `get_chunk_data`
             let _chunk = conductor.get_chunk_data(&coords);
             info!("  - Generated chunk {:?} successfully.", coords);
             chunks_generated += 1;
@@ -49,7 +106,6 @@ pub fn test_generation_and_placement_cli() {
     if conductor.set_generator(ca_id).is_ok() {
         info!("-> Active Generator set to: {}", ca_id);
         let coords = Vec2i::new(50, 50);
-        // FIX: Use the correct synchronous generation method: `get_chunk_data`
         let _chunk = conductor.get_chunk_data(&coords);
         info!("  - Generated chunk {:?} successfully.", coords);
         chunks_generated += 1;
@@ -68,7 +124,6 @@ pub fn test_generation_and_placement_cli() {
 
     conductor.graceful_teardown();
 }
-
 
 pub fn run_bitmask_conversion() {
     warn!("🧪 Starting bitmask conversion from world.png (Placeholder)...");

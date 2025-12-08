@@ -1,64 +1,91 @@
-// ssxl_generate/src/ca/rule_set.rs
+// ============================================================================
+// 🧩 Cellular Automata Rule Set (`crate::ca::rule_set`)
+// ----------------------------------------------------------------------------
+// This module defines the rulesets and transition logic for the Cellular
+// Automata (CA) subsystem of the SSXL engine. It determines how tiles evolve
+// from one generation to the next based on their current state and the number
+// of live neighbors.
+//
+// Purpose:
+//   • Provide reusable constants for identifying different CA rulesets.
+//   • Implement the core transition function (`get_next_tile_type`) that applies
+//     Birth/Survival rules to evolve tile states.
+//   • Support multiple terrain generation styles (caves, mazes, static fills).
+//
+// Rule Set Identifiers:
+//   • RULE_BASIC_CAVE (0)
+//       - Birth: 4–5 neighbors
+//       - Survival: 1–7 neighbors
+//       - Produces large, open cave-like structures.
+//   • RULE_MAZE (1)
+//       - Birth: exactly 3 neighbors
+//       - Survival: 1–4 neighbors
+//       - Produces thin, winding maze-like corridors.
+//   • RULE_SOLID (2)
+//       - Static rule: fills all tiles with Rock.
+//   • RULE_CHECKERBOARD (3)
+//       - Static rule: alternates Rock/Void in a checkerboard pattern.
+//
+// Function: get_next_tile_type
+//   • Arguments:
+//       - current_type: current tile state (`TileType`).
+//       - live_neighbors: number of Rock neighbors (0–8).
+//       - ruleset: identifier for which ruleset to apply.
+//   • Returns:
+//       - Next tile state (`TileType`).
+//
+// Workflow:
+//   1. Select Birth/Survival ranges based on ruleset.
+//   2. If tile is Rock (alive):
+//        - Survives if neighbor count is within survival range.
+//        - Otherwise becomes Void.
+//   3. If tile is Void (dead):
+//        - Becomes Rock if neighbor count is within birth range.
+//        - Otherwise remains Void.
+//   4. Other tile types (e.g., Water, Ore) remain unchanged.
+//
+// Design Choices:
+//   • Encapsulates ruleset logic in a single function for clarity.
+//   • Uses pattern matching to separate Rock/Void cases.
+//   • Birth/Survival ranges are defined per ruleset for flexibility.
+//   • Supports extensibility: new rulesets can be added easily.
+//
+// Educational Note:
+//   • Cellular Automata rulesets are often expressed in "B/S notation"
+//     (e.g., B3/S1-4 for Maze, B4-5/S1-7 for Cave).
+//   • This function demonstrates how to translate those rules into Rust logic,
+//     enabling reproducible terrain generation across chunks.
+// ============================================================================
 
-// FIX: Import TileType directly from the root of ssxl_shared, assuming it is re-exported there.
+
 use ssxl_shared::TileType;
 
-// --- 1. Rule Set Identifiers ---
-
-/// Identifier for the standard cave generation ruleset (B4-5/S1-7).
 pub const RULE_BASIC_CAVE: u8 = 0;
-/// Identifier for the maze-like generation ruleset (B3/S1-4).
 pub const RULE_MAZE: u8 = 1;
-/// Placeholder/future rule for generating a solid block.
 pub const RULE_SOLID: u8 = 2;
-/// Placeholder/future rule for generating a checkerboard pattern.
 pub const RULE_CHECKERBOARD: u8 = 3;
 
-// --- 2. Core Rule Application Function ---
-
-/// Determines the next state of a tile based on the current state, live neighbor count, and a specific ruleset.
-///
-/// This implements the standard Birth/Survival (B/S) rules for cellular automata.
-///
-/// # Arguments
-/// * `current_type`: The tile's state at the current CA iteration (Void or Rock).
-/// * `live_neighbors`: The count of surrounding `TileType::Rock` tiles (0-8).
-/// * `ruleset`: The identifier defining the B/S parameters to use.
-///
-/// # Returns
-/// The tile's state for the next CA iteration.
 pub fn get_next_tile_type(current_type: TileType, live_neighbors: u8, ruleset: u8) -> TileType {
-
-    // Define the specific Birth (B) and Survival (S) parameters based on the ruleset ID.
-    // Bx-y: Tile will be born (become Rock) if live_neighbors is in range [x, y] and current state is Void.
-    // Sx-y: Tile will survive (remain Rock) if live_neighbors is in range [x, y] and current state is Rock.
     let (birth_min, birth_max, survive_min, survive_max) = match ruleset {
-        RULE_MAZE => (3, 3, 1, 4),           // B3/S1-4 (Favors thin, complex structures with few dead ends)
-        RULE_BASIC_CAVE | _ => (4, 5, 1, 7), // B4-5/S1-7 (Favors large, open, robust cave systems)
+        RULE_MAZE => (3, 3, 1, 4),
+        RULE_BASIC_CAVE | _ => (4, 5, 1, 7),
     };
 
     match current_type {
-        // --- Survival Check: If the tile is currently Rock (alive) ---
         TileType::Rock => {
             if live_neighbors >= survive_min && live_neighbors <= survive_max {
-                // Within survival range: Rock survives.
                 TileType::Rock
             } else {
-                // Outside survival range: Rock dies (becomes Void).
                 TileType::Void
             }
         }
-        // --- Birth Check: If the tile is currently Void (dead) ---
         TileType::Void => {
             if live_neighbors >= birth_min && live_neighbors <= birth_max {
-                // Within birth range: Void becomes Rock (birth).
                 TileType::Rock
             } else {
-                // Outside birth range: Void remains Void.
                 TileType::Void
             }
         }
-        // Handle any other TileTypes outside the CA simulation (e.g., Water, Ore) by leaving them unchanged.
         _ => current_type,
     }
 }

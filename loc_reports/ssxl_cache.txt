@@ -1,6 +1,7 @@
-﻿>>> FILE START: rust\ssxl_cache\Cargo.toml (14 LOC) <<<
+﻿>>> FILE START: rust\ssxl_cache\Cargo.toml (16 LOC) <<<
 [package]
 name = "ssxl_cache"
+version = "0.9.1"
 edition = "2021"
 
 [dependencies]
@@ -14,165 +15,206 @@ bincode = { workspace = true }
 sha2 = { workspace = true }
 glam = { workspace = true }
 tracing = { workspace = true }
-parking_lot = { workspace = true}
+parking_lot = { workspace = true }
+lru         = { workspace = true }
 <<< FILE END: rust\ssxl_cache\Cargo.toml >>>
 
->>> FILE START: rust\ssxl_cache\src\lib.rs (139 LOC) <<<
-// ssxl_cache/src/lib.rs
+>>> FILE START: rust\ssxl_cache\src\lib.rs (167 LOC) <<<
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
 
-use ssxl_math::coordinate_system::ChunkKey;
-use ssxl_sync::AtomicResource;
-use ssxl_shared::ChunkData;
-// OPTIMIZATION: Import HashSet for O(1) key management in RegionIndex
-use std::collections::{HashMap, HashSet};
-use std::io;
-use std::sync::Arc;
-use parking_lot::RwLock; 
-use tracing::{info, warn};
-use glam::I64Vec3; 
+use ssxl_math::coordinate_system::ChunkKey;   // Unique identifier for a chunk (x,y,z coordinates).
+use ssxl_shared::ChunkData;                   // Struct holding all tile data for a chunk.
+use ssxl_sync::AtomicResource;                // Thread-safe wrapper for atomic resource access.
 
-type CacheMap = HashMap<ChunkKey, Arc<ChunkData>>;
+use std::collections::{HashMap, HashSet};     // HashMap for region storage, HashSet for chunk membership.
+use std::sync::{
+    Arc,                                      // Arc: atomic reference-counted pointer for shared ownership.
+    atomic::{AtomicUsize, Ordering}           // Atomic counters for metrics (hits, misses, evictions).
+};
+use std::io;                                  // For returning I/O results.
+use std::num::NonZeroUsize;                   // Non-zero integer type for cache capacity.
 
-const REGION_SIZE: i64 = 64;
+use parking_lot::{Mutex, RwLock};             // High-performance locks for cache and region index.
+use tracing::info;                            // Logging utility.
+use glam::I64Vec3;                            // Vector type for integer coordinates.
+use lru::LruCache;                            // Least Recently Used cache implementation.
 
-type RegionKey = ChunkKey;
-// OPTIMIZATION: Switched from Vec<ChunkKey> (O(N) remove) to HashSet<ChunkKey> (O(1) remove).
-type RegionList = RwLock<HashSet<ChunkKey>>; 
-type RegionMap = HashMap<RegionKey, Arc<RegionList>>;
+// -----------------------------------------------------------------------------
+// Constants and Type Aliases
+// -----------------------------------------------------------------------------
 
+const REGION_SIZE: i64 = 64;                  // Defines how many chunks fit into one region.
+type RegionKey = ChunkKey;                    // RegionKey is just a ChunkKey at region granularity.
+type RegionList = RwLock<HashSet<ChunkKey>>;  // Each region stores a set of chunk keys, protected by RwLock.
+
+// -----------------------------------------------------------------------------
+// CacheMetrics: Tracks hits, misses, and evictions
+// -----------------------------------------------------------------------------
+
+#[derive(Debug, Default)]
+pub struct CacheMetrics {
+    pub hits: AtomicUsize,        // Number of successful cache lookups.
+    pub misses: AtomicUsize,      // Number of failed cache lookups.
+    pub evictions: AtomicUsize,   // Number of chunks evicted due to LRU policy.
+}
+
+impl CacheMetrics {
+    #[inline(always)]
+    pub fn hit(&self) { self.hits.fetch_add(1, Ordering::Relaxed); }     // Increment hit counter.
+    #[inline(always)]
+    pub fn miss(&self) { self.misses.fetch_add(1, Ordering::Relaxed); }  // Increment miss counter.
+    #[inline(always)]
+    pub fn evict(&self) { self.evictions.fetch_add(1, Ordering::Relaxed);} // Increment eviction counter.
+}
+
+// -----------------------------------------------------------------------------
+// RegionIndex: Maps regions to sets of chunks
+// -----------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct RegionIndex {
-    storage: AtomicResource<RegionMap>,
+    storage: AtomicResource<HashMap<RegionKey, Arc<RegionList>>>, // Thread-safe map of region -> chunk set.
 }
 
 impl RegionIndex {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            storage: AtomicResource::new(RegionMap::new()),
+            storage: AtomicResource::new(HashMap::new()),          // Initialize empty region map.
         }
     }
-    
-    // O(1) Optimization: Force inlining this critical math function.
-    #[inline(always)] 
+
+    // Convert a chunk key into its region key by dividing coordinates by REGION_SIZE.
+    #[inline(always)]
     fn chunk_to_region_key(chunk_key: ChunkKey) -> RegionKey {
-        let rx = chunk_key.0.x / REGION_SIZE; 
-        let ry = chunk_key.0.y / REGION_SIZE; 
-        let rz = chunk_key.0.z / REGION_SIZE; 
-
-        ChunkKey(I64Vec3 { x: rx, y: ry, z: rz })
+        let p = chunk_key.0;
+        let rx = p.x / REGION_SIZE;
+        let ry = p.y / REGION_SIZE;
+        let rz = p.z / REGION_SIZE;
+        ChunkKey(I64Vec3::new(rx, ry, rz))
     }
 
-    pub fn get_chunks_in_region(&self, region_key: &RegionKey) -> Option<Arc<RegionList>> {
-        let map = self.storage.read();
-        map.get(region_key).map(Arc::clone)
-    }
-
+    // Insert a chunk into its region’s set.
     pub fn insert_key(&self, chunk_key: ChunkKey) {
         let region_key = Self::chunk_to_region_key(chunk_key);
-        let mut map_lock = self.storage.write();
-
-        // Use the consistent parking_lot::RwLock and initialize with a HashSet
-        let list_lock_arc = map_lock.entry(region_key)
-            .or_insert_with(|| Arc::new(RwLock::new(HashSet::new()))) // Initialize with HashSet
-            .clone();
-        
-        // CRITICAL: Drop outer map lock BEFORE acquiring inner list lock to prevent deadlock.
-        drop(map_lock); 
-
-        // Acquire inner lock.
-        let mut list = list_lock_arc.write();
-        list.insert(chunk_key); // O(1) insertion
+        let list_arc = {
+            let mut map = self.storage.write();                     // Lock map for writing.
+            map.entry(region_key)
+                .or_insert_with(|| Arc::new(RwLock::new(HashSet::new())))
+                .clone()
+        };
+        let mut list = list_arc.write();                            // Lock region set for writing.
+        list.insert(chunk_key);                                     // Add chunk to region.
     }
-    
+
+    // Remove a chunk from its region’s set.
+    // If the region becomes empty, remove the region entirely.
     pub fn remove_key(&self, chunk_key: ChunkKey) -> bool {
         let region_key = Self::chunk_to_region_key(chunk_key);
-        
-        let list_lock_arc = {
-            let map = self.storage.read();
-            map.get(&region_key).map(Arc::clone)
-        };
+        let list_arc = self.storage.read().get(&region_key).cloned();
 
-        if let Some(list_lock_arc) = list_lock_arc {
-            
-            // Acquire inner write lock using parking_lot
-            let mut list = list_lock_arc.write();
-            
-            // OPTIMIZATION: O(1) removal using HashSet::remove()
+        if let Some(list_arc) = list_arc {
+            let mut list = list_arc.write();
             if list.remove(&chunk_key) {
-                
                 if list.is_empty() {
-                    // CRITICAL: Drop inner list lock guard BEFORE acquiring outer map lock.
-                    drop(list); 
-                    let mut map_write = self.storage.write();
-                    map_write.remove(&region_key);
-                    info!("Removed empty region key from index: {:?}", region_key);
+                    drop(list);                                     // Release lock before modifying map.
+                    self.storage.write().remove(&region_key);       // Remove empty region.
+                    info!("Removed empty region from index: {:?}", region_key);
                 }
                 return true;
             }
         }
-        
         false
     }
 }
 
-#[derive(Debug, Clone)]
+// -----------------------------------------------------------------------------
+// ChunkCache: Main cache structure with LRU eviction
+// -----------------------------------------------------------------------------
+
+#[derive(Debug)]
 pub struct ChunkCache {
-    storage: AtomicResource<CacheMap>,
-    region_index: RegionIndex,
-    max_capacity: usize,
+    storage: Mutex<LruCache<ChunkKey, Arc<ChunkData>>>, // LRU cache storing chunks.
+    region_index: RegionIndex,                         // Region index for quick lookup.
+    capacity: NonZeroUsize,                            // Maximum number of chunks allowed.
+    pub metrics: Arc<CacheMetrics>,                    // Shared metrics tracker.
 }
 
 impl ChunkCache {
-    pub fn new(max_chunks: usize) -> Result<Self, io::Error> {
-        info!("Initializing ChunkCache and RegionIndex with max_chunks: {}", max_chunks);
+    // Create a new cache with a maximum number of chunks.
+    pub fn new(max_chunks: usize) -> io::Result<Self> {
+        let capacity = NonZeroUsize::new(max_chunks.max(1))
+            .unwrap_or(NonZeroUsize::new(1024).unwrap()); // Ensure non-zero capacity.
         
-        Ok(ChunkCache { 
-            storage: AtomicResource::new(CacheMap::new()), 
-            region_index: RegionIndex::new(),
-            max_capacity: max_chunks,
+        info!("ChunkCache initialized with LRU eviction (capacity: {})", capacity);
+
+        Ok(Self {
+            storage: Mutex::new(LruCache::new(capacity)), // Initialize LRU cache.
+            region_index: RegionIndex::new(),             // Initialize region index.
+            capacity,
+            metrics: Arc::new(CacheMetrics::default()),   // Initialize metrics tracker.
         })
     }
 
-    pub fn load_chunk(&self, key: &ChunkKey) -> Result<Option<Arc<ChunkData>>, io::Error> {
-        let map = self.storage.read();
-        Ok(map.get(key).map(Arc::clone))
+    // Load a chunk from the cache.
+    // Returns Some(chunk) if found, None otherwise.
+    pub fn load_chunk(&self, key: &ChunkKey) -> Option<Arc<ChunkData>> {
+        let mut guard = self.storage.lock();             // Lock cache for reading.
+        let result = guard.get(key).map(Arc::clone);     // Clone Arc if chunk exists.
+        
+        if result.is_some() {
+            self.metrics.hit();                          // Track hit.
+        } else {
+            self.metrics.miss();                         // Track miss.
+        }
+
+        result
     }
 
-    pub fn save_chunk(&self, key: &ChunkKey, data: Arc<ChunkData>) -> Result<(), io::Error> {
-        let mut map = self.storage.write();
-        let key_copy = *key; // Copy key for use with map and index
+    // Save a chunk into the cache.
+    // If capacity exceeded, evict least recently used chunk.
+    pub fn save_chunk(&self, key: &ChunkKey, data: Arc<ChunkData>) -> io::Result<()> {
+        let key = *key;
+        let mut guard = self.storage.lock();
+
+        self.region_index.insert_key(key);               // Update region index.
+
+        let _old_data = guard.put(key, data);            // Insert chunk into LRU cache.
         
-        if map.len() >= self.max_capacity {
-            // FUTURE WORK: Implementation of a high-performance LRU eviction strategy 
-            // is required here to maintain cache bounds.
-            warn!("ChunkCache capacity limit ({}) reached. LRU eviction is required to prevent OOM.", self.max_capacity);
+        if let Some((evicted_key, _)) = guard.pop_lru() { // Evict least recently used chunk if needed.
+            self.metrics.evict();                        // Track eviction.
+            self.region_index.remove_key(evicted_key);   // Remove evicted chunk from region index.
+            info!(
+                "LRU evicted chunk: {:?} (cache size: {})",
+                evicted_key,
+                guard.len()
+            );
         }
-        
-        if map.insert(key_copy, data).is_none() {
-            info!("Saved new chunk to cache: {:?}", key_copy);
-            
-            self.region_index.insert_key(key_copy);
-        } else {
-            // No index update needed for overwrite.
-            warn!("Overwrote existing chunk in cache: {:?}", key_copy);
-        }
+
         Ok(())
     }
-    
-    /// Removes a chunk from the cache and its corresponding entry from the RegionIndex.
+
+    // Remove a chunk manually from the cache.
     pub fn remove_chunk(&self, key: &ChunkKey) -> Option<Arc<ChunkData>> {
-        let removed_data = self.storage.write().remove(key);
-        
-        if removed_data.is_some() {
-            if self.region_index.remove_key(*key) {
-                info!("Removed chunk key and updated region index: {:?}", key);
-            } else {
-                warn!("Chunk removed from cache, but key was not found in RegionIndex: {:?}", key);
-            }
+        let removed = self.storage.lock().pop(key);      // Remove chunk from cache.
+        if removed.is_some() {
+            self.region_index.remove_key(*key);          // Update region index.
+            info!("Manually removed chunk from cache: {:?}", key);
         }
-        removed_data
+        removed
+    }
+
+    // Return current number of chunks in cache.
+    pub fn len(&self) -> usize {
+        self.storage.lock().len()
+    }
+
+    // Return maximum capacity of cache.
+    pub fn capacity(&self) -> usize {
+        self.capacity.get()
     }
 }
+
 <<< FILE END: rust\ssxl_cache\src\lib.rs >>>
 

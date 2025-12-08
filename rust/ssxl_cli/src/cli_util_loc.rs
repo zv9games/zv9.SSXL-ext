@@ -1,28 +1,85 @@
-//! # CLI Utilities: Line of Code (LOC) Analysis (`ssxl_cli::cli_util_loc`)
-//!
-//! This module provides functions for scanning the SSXL-ext workspace, calculating
-//! Lines of Code (LOC) for both Rust (`.rs`) and GDScript (`.gd`) files, and
-//! generating the LOC reports required by the Godot engine.
+// ============================================================================
+// 📊 SSXL CLI: Line of Code (LOC) Analysis (`ssxl_cli::cli_util_loc`)
+// ----------------------------------------------------------------------------
+// This module provides developer utilities for scanning the SSXL-ext workspace,
+// calculating Lines of Code (LOC) for both Rust (`.rs`) and GDScript (`.gd`)
+// files, and generating reports consumed by the Godot engine.
+//
+// Purpose:
+//   • Track codebase growth and complexity across Rust and Godot components.
+//   • Provide a single-number LOC file (`RUST_LOC_TOTAL.txt`) for fast parsing
+//     by Godot at bootup.
+//   • Generate detailed reports with per-file LOC counts and full file contents
+//     for auditing and review.
+//
+// Key Components:
+//   • OUTPUT_FINAL_LOC_FILE
+//       - Fixed-name file (`RUST_LOC_TOTAL.txt`) written to the project root.
+//       - Contains a single integer: the total Rust LOC count.
+//       - Used by Godot for quick boot-time validation.
+//
+//   • LOC_REPORTS_DIR
+//       - Directory (`../loc_reports`) where full LOC reports are stored.
+//       - Each report is timestamped with epoch seconds for uniqueness.
+//
+//   • count_loc_from_content
+//       - Helper function that counts non-empty, non-comment lines.
+//       - Ignores lines starting with `//` (Rust) or `#` (GDScript).
+//       - Provides a simplified but effective LOC metric.
+//
+//   • write_final_loc_total
+//       - Writes the total Rust LOC count to the fixed-name file.
+//       - Ensures Godot can quickly parse LOC without scanning the workspace.
+//
+//   • scan_and_report_loc
+//       - Main entry point for LOC analysis.
+//       - Scans all Rust crate directories under `ssxl-ext/rust/`.
+//       - Scans GDScript files under `../ssxl_engine_tester`.
+//       - Aggregates LOC counts, builds a detailed report, and writes both:
+//           1. A full report with per-file LOC and file contents.
+//           2. A single-number LOC file for Godot boot parsing.
+//       - Uses `WalkDir` for recursive traversal and `fs::read_to_string`
+//         for file content analysis.
+//       - Sleeps briefly at the end to ensure logs and writes are flushed.
+//
+// Workflow:
+//   1. Traverse Rust and GDScript source directories.
+//   2. Count LOC for each file using `count_loc_from_content`.
+//   3. Build a detailed report with LOC counts and file contents.
+//   4. Write the report to `../loc_reports/ssxl_loc_report_live_<timestamp>.txt`.
+//   5. Write the total Rust LOC to `../RUST_LOC_TOTAL.txt`.
+//   6. Log results for developer visibility.
+//
+// Design Choices:
+//   • Simplified LOC counting avoids parsing complexity while still providing
+//     meaningful metrics.
+//   • Reports include full file contents for transparency and auditing.
+//   • Timestamped filenames prevent overwriting and allow historical tracking.
+//   • Fixed-name LOC file ensures fast integration with Godot boot logic.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can be used to build developer tooling
+//     that integrates with external engines (Godot).
+//   • By automating LOC analysis, developers gain visibility into codebase
+//     growth and maintainability, while Godot gains a quick boot-time metric.
+// ============================================================================
+
 
 use walkdir::WalkDir;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::fs;
 use tracing::{info, error};
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// Constants for the fixed-name output file, which is read by Godot.
 const OUTPUT_FINAL_LOC_FILE: &str = "RUST_LOC_TOTAL.txt";
-// Directory for full LOC reports, relative to the project root (../)
 const LOC_REPORTS_DIR: &str = "../loc_reports";
 
-/// Helper to count lines of code in file content, ignoring empty lines and comments (simplified).
 fn count_loc_from_content(content: &str) -> u64 {
     let mut count = 0;
     for line in content.lines() {
         let trimmed = line.trim();
-        // Simple check: ignore empty lines and lines starting with comment markers.
         if !trimmed.is_empty() && !trimmed.starts_with("//") && !trimmed.starts_with("#") {
             count += 1;
         }
@@ -30,12 +87,9 @@ fn count_loc_from_content(content: &str) -> u64 {
     count
 }
 
-/// Helper function to write the final Rust LOC total to a fixed-name file
-/// for fast parsing by Godot at bootup.
 fn write_final_loc_total(loc_count: u64) {
-    // Navigate up one level to the project root (ssxl-ext/)
     let root_dir = PathBuf::from("../");
-    let output_path = root_dir.join(OUTPUT_FINAL_LOC_FILE); // Final Path: ../RUST_LOC_TOTAL.txt
+    let output_path = root_dir.join(OUTPUT_FINAL_LOC_FILE);
 
     let content = format!("{}\n", loc_count);
 
@@ -51,17 +105,11 @@ fn write_final_loc_total(loc_count: u64) {
     }
 }
 
-/// Scans the Rust workspace, calculates lines of code (LOC), and generates
-/// the full report and the final single-number LOC file.
-///
-/// Assumes CWD is inside the `ssxl-ext/rust/` directory.
 pub fn scan_and_report_loc() {
     let mut total_rs_loc: u64 = 0;
     let mut total_gd_loc: u64 = 0;
     let mut report_lines: Vec<String> = Vec::new();
 
-    // 1. Scan Rust Code
-    // These paths are correct relative to the ssxl-ext/rust/ directory.
     let rust_dirs = ["ssxl_cache/src", "ssxl_engine_ffi/src", "ssxl_generate/src",
                      "ssxl_godot/src", "ssxl_math/src", "ssxl_shared/src",
                      "ssxl_sync/src", "ssxl_tools/src", "ssxl_cli/src"];
@@ -76,10 +124,7 @@ pub fn scan_and_report_loc() {
                     
                     if loc > 0 {
                         let path_str = format!("rust/{}", path.display());
-                        // 1. Add LOC and path line
                         report_lines.push(format!("{:>10} LOC | {}", loc, path_str));
-                        
-                        // 2. Add file content wrapped in delimiters
                         report_lines.push(format!("// --- START: {} ---", path_str));
                         report_lines.push(content);
                         report_lines.push(format!("// --- END: {} ---", path_str));
@@ -89,8 +134,6 @@ pub fn scan_and_report_loc() {
         }
     }
 
-    // 2. Scan GDScript Code
-    // Path traversal is correct: `ssxl-ext/rust/` -> `../ssxl_engine_tester`
     let gd_dirs = ["../ssxl_engine_tester"];
     for dir in &gd_dirs {
         for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
@@ -101,12 +144,8 @@ pub fn scan_and_report_loc() {
                     total_gd_loc += loc;
                     
                     if loc > 0 {
-                        // Note: path.display() will include the '..' but this is acceptable for internal reports.
                         let path_str = path.display().to_string();
-                        // 1. Add LOC and path line
                         report_lines.push(format!("{:>10} LOC | {}", loc, path_str));
-                        
-                        // 2. Add file content wrapped in delimiters (using '#' for GDScript comments)
                         report_lines.push(format!("# --- START: {} ---", path_str));
                         report_lines.push(content);
                         report_lines.push(format!("# --- END: {} ---", path_str));
@@ -116,10 +155,8 @@ pub fn scan_and_report_loc() {
         }
     }
 
-    // 3. Generate the full, dynamically-named report in the `../loc_reports/` directory
     let reports_dir = PathBuf::from(LOC_REPORTS_DIR);
 
-    // Create the directory if it doesn't exist.
     if let Err(e) = fs::create_dir_all(&reports_dir) {
         error!("❌ Failed to create LOC reports directory {:?}. Error: {}", reports_dir, e);
     }
@@ -140,7 +177,6 @@ pub fn scan_and_report_loc() {
         total_rs_loc + total_gd_loc
     );
 
-    // Write the full report to the corrected dynamic path.
     match fs::write(&final_report_path, full_report_content) {
         Ok(_) => {
             info!("✅ Full LOC report written to: {}", final_report_path.display());
@@ -150,7 +186,6 @@ pub fn scan_and_report_loc() {
         }
     }
 
-    // 4. Write the single line count to the fixed-name file (RUST_LOC_TOTAL.txt)
     write_final_loc_total(total_rs_loc);
 
     thread::sleep(Duration::from_millis(100));

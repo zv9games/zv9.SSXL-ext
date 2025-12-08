@@ -1,34 +1,90 @@
-// ssxl_godot/src/tilemap/async_poll.rs
+// ============================================================================
+// ⚡ AsyncPoller (`crate::tilemap::async_poll`)
+// ----------------------------------------------------------------------------
+// This module defines the `AsyncPoller` struct, which acts as the bridge
+// between Tokio asynchronous channels and Godot’s main thread. It provides
+// non-blocking polling methods to safely drain generation and animation
+// message channels each frame.
 //
-// The sacred bridge between Tokio and Godot.
-// Polls background channels on the main thread.
-// Zero blocking. Zero panic. Eternal.
+// Purpose:
+//   • Integrate Tokio async channels with Godot’s synchronous game loop.
+//   • Provide safe, non-blocking polling of generation and animation updates.
+//   • Prevent runaway loops by enforcing maximum message limits.
+//   • Centralize channel management for clarity and maintainability.
+//
+// Key Components:
+//   • Constants
+//       - MAX_GEN_MSGS (64): maximum generation messages processed per poll.
+//         Prevents runaway loops if channel is flooded.
+//       - MAX_ANIM_MSGS (2048): maximum animation messages processed per poll.
+//         Higher limit since animation updates are more frequent.
+//
+//   • Type Aliases
+//       - AnimationReceiver: unbounded channel receiver for `AnimationUpdate`.
+//         Animation updates are frequent, so unbounded channels are used.
+//       - GenerationReceiver: bounded channel receiver for `GenerationMessage`.
+//         Generation messages are controlled by the conductor, so bounded channels are used.
+//
+//   • AsyncPoller (struct)
+//       - Fields:
+//           • generation_rx: optional bounded receiver for generation messages.
+//           • animation_rx: optional unbounded receiver for animation updates.
+//       - Implements `Default` for easy initialization.
+//
+//   • Methods
+//       - new()
+//           • Creates a new AsyncPoller with no receivers.
+//       - set_animation_rx(rx)
+//           • Assigns an animation receiver.
+//       - set_generation_rx(rx)
+//           • Assigns a generation receiver.
+//       - clear_receivers()
+//           • Clears both receivers, useful for resetting or shutting down.
+//       - poll_generation()
+//           • Non-blocking poll of generation messages.
+//           • Drains up to MAX_GEN_MSGS messages.
+//           • Handles Empty (no messages) and Disconnected (channel closed).
+//           • Returns a vector of `GenerationMessage`.
+//       - poll_animations()
+//           • Non-blocking poll of animation updates.
+//           • Drains up to MAX_ANIM_MSGS messages.
+//           • Uses smaller initial capacity (min(256)) for efficiency.
+//           • Returns a vector of `AnimationUpdate`.
+//
+// Design Choices:
+//   • Non-blocking polling ensures responsiveness in Godot’s frame loop.
+//   • Bounded vs. unbounded channels reflect expected message frequency.
+//   • Temporary ownership of receivers avoids borrow checker conflicts,
+//     then receivers are restored for subsequent polls.
+//   • Logging errors (e.g., channel disconnection) aids debugging.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can integrate asynchronous systems
+//     (Tokio channels) into synchronous environments like Godot. By enforcing
+//     message limits and restoring receivers after polling, `AsyncPoller`
+//     ensures safe, efficient communication between concurrent generation/
+//     animation tasks and the main game loop.
+// ============================================================================
+
 
 use tokio::sync::mpsc::{
-    // FIX 3: Import the Bounded Receiver for Generation Messages
     Receiver as TokioBoundedReceiver,
     UnboundedReceiver as TokioUnboundedReceiver,
     error::TryRecvError,
 };
-// CRITICAL FIX: The imported type for AnimationUpdate is now at the crate root
+
 use ssxl_shared::AnimationUpdate; 
-// FIX 1: The correct GenerationMessage location (from prior fix)
 use ssxl_shared::message::generation_message::GenerationMessage; 
 
 const MAX_GEN_MSGS: usize = 64;
 const MAX_ANIM_MSGS: usize = 2048;
 
-// CRITICAL FIX 4: Update the type alias to use the crate root path for AnimationUpdate
 pub type AnimationReceiver = TokioUnboundedReceiver<ssxl_shared::AnimationUpdate>;
-// CRITICAL FIX 5: Define the type alias for the Bounded Receiver to expect GenerationMessage
 pub type GenerationReceiver = TokioBoundedReceiver<GenerationMessage>;
 
 #[derive(Default)]
 pub struct AsyncPoller {
-    // Only animation uses unbounded — generation is bounded and handled via Conductor
-    // FIX 6: Add state for the Generation Receiver, using GenerationMessage
     generation_rx: Option<GenerationReceiver>,
-    // FIX 7: Rename animation_rx for consistency with the new setter in init.rs
     animation_rx: Option<AnimationReceiver>,
 }
 
@@ -37,32 +93,20 @@ impl AsyncPoller {
         Self::default()
     }
 
-    // --- Animation Methods (Renamed for consistency with init.rs fix) ---
-
-    /// Setter matching the logic in init.rs
     pub fn set_animation_rx(&mut self, rx: Option<AnimationReceiver>) {
-        // FIX 8: The 'take()' in init.rs already pulls the receiver out of an Option,
-        // so the setter must accept an Option<Receiver> for cases where the channel is uninitialized (None).
         self.animation_rx = rx;
     }
 
-    // --- Generation Methods (New) ---
-
-    /// Setter for the generation channel, matching the logic in init.rs
     pub fn set_generation_rx(&mut self, rx: Option<GenerationReceiver>) {
-        // FIX 9: Set the generation receiver
         self.generation_rx = rx;
     }
 
     pub fn clear_receivers(&mut self) {
-        // FIX 10: Clear both receivers
         self.generation_rx = None;
         self.animation_rx = None;
     }
 
-    /// Poll all pending generation updates — safe to call every frame
     pub fn poll_generation(&mut self) -> Vec<GenerationMessage> {
-        // CRITICAL FIX 11: Change return type and message type to GenerationMessage
         let Some(mut rx) = self.generation_rx.take() else {
             return Vec::new();
         };
@@ -70,7 +114,6 @@ impl AsyncPoller {
         let mut updates = Vec::with_capacity(MAX_GEN_MSGS);
 
         loop {
-            // NOTE: The tokio Bounded Receiver uses a different try_recv signature (TryRecvError)
             match rx.try_recv() {
                 Ok(update) => updates.push(update),
                 Err(TryRecvError::Empty) => break,
@@ -89,10 +132,7 @@ impl AsyncPoller {
         updates
     }
 
-
-    /// Poll all pending animation updates — safe to call every frame
     pub fn poll_animations(&mut self) -> Vec<AnimationUpdate> {
-        // FIX 12: Use the consistent name
         let Some(mut rx) = self.animation_rx.take() else {
             return Vec::new();
         };
@@ -114,7 +154,6 @@ impl AsyncPoller {
             }
         }
 
-        // FIX 13: Use the consistent name
         self.animation_rx = Some(rx);
         updates
     }

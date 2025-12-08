@@ -1,60 +1,112 @@
-use godot::builtin::Dictionary; 
-// FIX: Removed unused imports: `godot::obj::cap::GodotDefault` and `godot::prelude::*`.
-use std::error::Error; // Required for the Result type in execute_channel_and_state_setup
-use std::sync::{Arc, Mutex}; // Required for the Conductor return type
+// ============================================================================
+// 🎼 Engine Initialization and API Layer (`crate::engine::initializer`)
+// ----------------------------------------------------------------------------
+// This module provides the glue between the SSXL engine core and the Godot
+// game engine. It defines initialization routines and public-facing APIs that
+// allow Godot scripts to interact with the procedural generation system.
+//
+// Purpose:
+//   • Bootstrap the SSXL engine inside Godot.
+//   • Set up conductor state, communication channels, and runtime orchestration.
+//   • Provide a safe, thread-aware interface for spawning and managing the Conductor.
+//   • Expose a public API for chunk data retrieval compatible with Godot.
+//
+// Key Components:
+//   • EngineInitializer (struct)
+//       - Acts as a bootstrapper for the engine.
+//       - Provides methods to:
+//           • Create a new initializer (`new`).
+//           • Execute channel and state setup (`execute_channel_and_state_setup`).
+//           • Wrap and spawn the conductor (`execute_conductor_setup_and_spawn`).
+//       - Ensures conductor is safely shared across threads using `Arc<Mutex>`.
+//       - Extracts and clones `AnimationConductorHandle` for animation orchestration.
+//
+//   • GenerationAPI (struct)
+//       - Provides a public-facing API for chunk data retrieval.
+//       - Intended to be called from Godot scripts.
+//       - Currently a stub implementation returning an empty `Dictionary`.
+//       - Future extension point for exposing generated chunk data to Godot.
+//
+// Workflow:
+//   1. Godot calls `EngineInitializer::new()` to create an initializer.
+//   2. `execute_channel_and_state_setup` wires channels and conductor state.
+//   3. `execute_conductor_setup_and_spawn` wraps conductor in `Arc<Mutex>`
+//      and provides an animation handle.
+//   4. Godot scripts can call `GenerationAPI::fetch_chunk_data` to retrieve
+//      chunk data (stubbed for now).
+//
+// Design Choices:
+//   • Separation of initialization (EngineInitializer) from data access (GenerationAPI).
+//   • Use of `Arc<Mutex>` ensures safe concurrent access to conductor across threads.
+//   • Returning `Dictionary` aligns with Godot’s native data structures for FFI.
+//   • Stubbed `fetch_chunk_data` provides a placeholder for future expansion.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can integrate with external engines
+//     (like Godot) via FFI. By combining safe concurrency primitives, modular
+//     initialization, and Godot-compatible data types, it creates a bridge
+//     between procedural generation logic and game engine scripting.
+// ============================================================================
 
-// --- CRITICAL FIX: Import dependencies needed for initialization methods ---
-use ssxl_generate::Conductor; 
-use ssxl_sync::AnimationConductorHandle; 
-// Import GenesisHandles from the sibling module
-use super::api_initializers::GenesisHandles; 
+use godot::prelude::GString;
+use godot::builtin::Dictionary;
+use std::error::Error;
+use std::sync::{Arc, Mutex};
+use ssxl_generate::Conductor;
+use ssxl_shared::AnimationConductorHandle;
+use crate::engine::api_initializers::{execute_channel_and_state_setup, GenesisHandles};
 
-// -----------------------------------------------------------------------------
-// Internal API Struct (Used by state.rs)
-// -----------------------------------------------------------------------------
-
-/// Internal struct that encapsulates the initial setup logic for the engine.
 #[derive(Default)]
-pub struct EngineInitializer {
-    // Add fields here later, if needed (e.g., configuration handles)
-}
+pub struct EngineInitializer {}
 
 impl EngineInitializer {
-    /// Constructs a new, default EngineInitializer.
-    pub fn new() -> Self {
-        Self::default()
-    }
-    
-    // CRITICAL FIX 1: Implement the missing Phase 1 method signature.
-    /// PHASE 1: Initializes all channels and core state objects.
-    pub fn execute_channel_and_state_setup(&self, _config_path: Option<&str>) -> Result<GenesisHandles, Box<dyn Error>> {
-        // NOTE: The actual logic for channel setup must be implemented here.
-        unimplemented!("Engine setup channel logic not yet implemented in initializer.");
+    pub fn new() -> Self { Self::default() }
+
+    pub fn execute_channel_and_state_setup(
+        &self,
+        config_path: Option<&str>,
+    ) -> Result<GenesisHandles, Box<dyn Error>> {
+        execute_channel_and_state_setup(config_path)
     }
 
-    // CRITICAL FIX 2: Implement the missing Phase 2 method signature.
-    /// PHASE 2: Spawns the conductor threads. This consumes the `handles` struct.
-    // FIX: Prefix `handles` with `_` to suppress the unused variable warning.
-    pub fn execute_conductor_setup_and_spawn(&self, _handles: GenesisHandles) -> (Option<Arc<Mutex<Conductor>>>, AnimationConductorHandle) {
-        // NOTE: The actual logic for spawning threads must be implemented here.
-        unimplemented!("Engine thread spawning logic not yet implemented in initializer.");
+    pub fn execute_conductor_setup_and_spawn(
+        &self,
+        handles: GenesisHandles,
+    ) -> (Option<Arc<Mutex<Conductor>>>, AnimationConductorHandle) {
+        let conductor_arc = Arc::new(Mutex::new(handles._gen_conductor));
+        let anim_handle: AnimationConductorHandle = handles.anim_command_tx.clone();
+        (Some(conductor_arc), anim_handle)
     }
 }
 
-/// Internal struct representing the available methods for command dispatch.
-/// Used for state management in SSXLEngine.
-#[derive(Default)]
-pub struct GenerationAPI {
-    // Add internal fields here later, if needed (e.g., handles to command queues)
+#[derive(Debug, Clone)]
+pub enum GenerationAPI {
+    Uninitialized,
+    Active,
+    Halted,
+    Error(String),
 }
 
-// FIX E0599: Implement the missing method for the internal GenerationAPI struct.
+impl Default for GenerationAPI {
+    fn default() -> Self {
+        GenerationAPI::Uninitialized
+    }
+}
+
 impl GenerationAPI {
-    /// Provides the internal logic access point for fetching chunk data.
+    /// Return a human-readable status string for Godot
+    pub fn as_status(&self) -> GString {
+        match self {
+            GenerationAPI::Uninitialized => GString::from("Uninitialized"),
+            GenerationAPI::Active => GString::from("Active"),
+            GenerationAPI::Halted => GString::from("Halted"),
+            GenerationAPI::Error(msg) => GString::from(format!("Error: {}", msg).as_str()),
+        }
+    }
+
+    /// Example stub for chunk data retrieval
     pub fn fetch_chunk_data(&self, _x: i32, _y: i32) -> Dictionary {
-        // NOTE: The actual logic for retrieving and converting the chunk data
-        // from the conductor or cache must be implemented here.
-        // Returning a placeholder Dictionary for compilation.
-        Dictionary::new() 
+        Dictionary::new()
     }
 }
+

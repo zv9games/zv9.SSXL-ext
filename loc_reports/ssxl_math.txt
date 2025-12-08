@@ -1,7 +1,7 @@
 ﻿>>> FILE START: rust\ssxl_math\Cargo.toml (16 LOC) <<<
 [package]
 name = "ssxl_math"
-version = "0.1.0"
+version = "0.9.1"
 edition.workspace = true
 
 [dependencies]
@@ -19,67 +19,68 @@ rand = { workspace = true }
 rand_pcg = { workspace = true }
 <<< FILE END: rust\ssxl_math\Cargo.toml >>>
 
->>> FILE START: rust\ssxl_math\src\coordinate_system.rs (118 LOC) <<<
-// ssxl_math/src/coordinate_system.rs
-
-//! # Coordinate System
-//!
-//! Defines the core coordinate types for the SSXL-ext engine, using 64-bit integers (`I64Vec3`)
-//! to support extremely large, virtually infinite world dimensions.
-//!
-//! This module implements the crucial logic for converting a global `WorldPos` into its
-//! localized `(ChunkKey, TileOffset)` components, ensuring mathematical correctness
-//! even for large **negative coordinates** through the use of Euclidean division.
-
+>>> FILE START: rust\ssxl_math\src\coordinate_system.rs (119 LOC) <<<
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
+// serde::{Serialize, Deserialize}
+//   - Enables serialization and deserialization of structs (WorldPos, ChunkKey, TileOffset).
+//   - Useful for saving/loading world state or transmitting coordinates across systems.
 use serde::{Serialize, Deserialize};
-use crate::primitives::CHUNK_SIZE_I64;
-use glam::I64Vec3;
 
+// CHUNK_SIZE_I64
+//   - Constant defining the cubic dimension of a chunk (e.g., 32).
+//   - Used to calculate chunk boundaries and offsets.
+use crate::primitives::CHUNK_SIZE_I64;
+
+// I64Vec3
+//   - A 3D vector type using 64-bit integers.
+//   - Allows extremely large coordinate ranges, far beyond i32 limits.
+use glam::I64Vec3;
 
 // -----------------------------------------------------------------------------
 // Core Coordinate Types
 // -----------------------------------------------------------------------------
+// These structs define the fundamental coordinate system for the engine.
+// They wrap I64Vec3 to provide semantic meaning (WorldPos vs ChunkKey vs TileOffset).
 
-/// Represents a specific point in the vast 3D world space.
-/// The underlying `I64Vec3` ensures the system can handle coordinates well beyond i32 limits.
+// WorldPos
+//   - Represents a specific point in the infinite 3D world.
+//   - Stored as a 64-bit vector to handle huge coordinates safely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WorldPos(pub I64Vec3);
 
-/// The unique identifier for a 3D chunk.
-/// This acts as the *base coordinate* for a 32x32x32 (or `CHUNK_SIZE`) cubic volume of the world.
+// ChunkKey
+//   - Identifies a chunk in the world.
+//   - Each chunk is a cubic volume of size CHUNK_SIZE_I64.
+//   - Acts as the "index" of the chunk in world space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ChunkKey(pub I64Vec3);
 
-/// The local position of a tile *within* its parent chunk.
-/// Coordinates are always non-negative and range from `[0, CHUNK_SIZE - 1]`.
+// TileOffset
+//   - Represents the local position of a tile inside its parent chunk.
+//   - Always non-negative, ranging from 0 to CHUNK_SIZE_I64 - 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TileOffset(pub I64Vec3);
-
 
 // -----------------------------------------------------------------------------
 // WorldPos Implementation
 // -----------------------------------------------------------------------------
-
+// Provides conversion from global coordinates to chunk-local coordinates.
 impl WorldPos {
-    /// Converts a global `WorldPos` into its discrete `ChunkKey` and local `TileOffset` components.
-    ///
-    /// This conversion is robust against **negative world coordinates** by using
-    /// `rem_euclid`, which guarantees the `TileOffset` is always positive (or zero).
+    // to_chunk_coords
+    //   - Splits a global WorldPos into (ChunkKey, TileOffset).
+    //   - Uses Euclidean division to handle negative coordinates correctly.
+    //   - Ensures TileOffset is always non-negative.
     pub fn to_chunk_coords(&self) -> (ChunkKey, TileOffset) {
-
         let chunk_size = CHUNK_SIZE_I64;
 
-        // 1. Calculate the Tile Offset (Local Position)
-        // `rem_euclid` ensures the remainder is always non-negative, correctly wrapping
-        // negative world coordinates (e.g., -1 rem_euclid 32 = 31).
+        // Compute tile offset using rem_euclid (always non-negative).
         let tile_x = self.0.x.rem_euclid(chunk_size);
         let tile_y = self.0.y.rem_euclid(chunk_size);
         let tile_z = self.0.z.rem_euclid(chunk_size);
 
-        // 2. Calculate the Chunk Key (Chunk Index)
-        // The chunk index is calculated by subtracting the tile offset (remainder)
-        // and then performing simple integer division. This is the correct Euclidean
-        // division for finding the quotient (chunk index).
+        // Compute chunk index by subtracting offset and dividing by chunk size.
         let chunk_x = (self.0.x - tile_x) / chunk_size;
         let chunk_y = (self.0.y - tile_y) / chunk_size;
         let chunk_z = (self.0.z - tile_z) / chunk_size;
@@ -94,15 +95,15 @@ impl WorldPos {
 // -----------------------------------------------------------------------------
 // ChunkKey Implementation
 // -----------------------------------------------------------------------------
-
+// Provides conversion from chunk-local coordinates back to global coordinates.
 impl ChunkKey {
-    /// Reconstructs the original `WorldPos` from the `ChunkKey` and `TileOffset`.
-    ///
-    /// This is the inverse operation, verifying the idempotence of the coordinate system.
+    // to_world_pos
+    //   - Reconstructs a WorldPos from a ChunkKey and TileOffset.
+    //   - Formula: World = (Chunk Index * Chunk Size) + Tile Offset.
+    //   - Ensures round-trip consistency with WorldPos::to_chunk_coords.
     pub fn to_world_pos(&self, offset: TileOffset) -> WorldPos {
         let chunk_size = CHUNK_SIZE_I64;
 
-        // Formula: World = (Chunk Index * Chunk Size) + Tile Offset
         let world_x = self.0.x * chunk_size + offset.0.x;
         let world_y = self.0.y * chunk_size + offset.0.y;
         let world_z = self.0.z * chunk_size + offset.0.z;
@@ -114,44 +115,37 @@ impl ChunkKey {
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
-
+// Validates correctness of conversions, especially for large and negative coordinates.
 #[cfg(test)]
 mod tests {
     use super::*;
     use glam::I64Vec3;
 
-    // NOTE: CHUNK_SIZE_I64 is assumed to be 32 for these tests.
-
     #[test]
-    /// Tests conversion for a very large positive coordinate, confirming I64 robustness.
     fn test_world_to_chunk_positive() {
-        let huge_coord = 5_000_000_000i64; // Well over i32::MAX
-        let expected_chunk_key = huge_coord / CHUNK_SIZE_I64; // 156,250,000
-        let expected_offset = huge_coord % CHUNK_SIZE_I64; // 0
+        // Large positive coordinate (well beyond i32::MAX).
+        let huge_coord = 5_000_000_000i64;
+        let expected_chunk_key = huge_coord / CHUNK_SIZE_I64;
+        let expected_offset = huge_coord % CHUNK_SIZE_I64;
 
         let pos = WorldPos(I64Vec3::new(huge_coord, 10, 64));
         let (key, offset) = pos.to_chunk_coords();
 
-        // 64 / 32 = 2 (chunk key), 64 rem_euclid 32 = 0 (offset)
+        // Verify chunk index and offset.
         assert_eq!(key.0, I64Vec3::new(expected_chunk_key, 0, 2), "ChunkKey failed for i64 coord");
         assert_eq!(offset.0, I64Vec3::new(expected_offset, 10, 0), "TileOffset failed for i64 coord");
     }
 
     #[test]
-    /// CRUCIAL test for negative coordinates, verifying the Euclidean division logic.
     fn test_world_to_chunk_negative_crucial() {
-        // Test case 1: (-1, -1, -1)
-        // Expected: Chunk index should be -1. Offset should be 31 (32 - 1).
+        // Case 1: (-1, -1, -1) → ChunkKey = -1, Offset = 31.
         let pos = WorldPos(I64Vec3::new(-1, -1, -1));
         let (key, offset) = pos.to_chunk_coords();
 
         assert_eq!(key.0, I64Vec3::new(-1, -1, -1), "ChunkKey for -1 failed to be -1");
         assert_eq!(offset.0, I64Vec3::new(31, 31, 31), "TileOffset for -1 failed to be 31");
 
-        // Test case 2: (-33, -64, -100)
-        // X: -33 rem 32 = 31, (-33 - 31)/32 = -2.
-        // Y: -64 rem 32 = 0, (-64 - 0)/32 = -2.
-        // Z: -100 rem 32 = 28, (-100 - 28)/32 = -4.
+        // Case 2: (-33, -64, -100) → deeper negative coordinates.
         let pos_deep = WorldPos(I64Vec3::new(-33, -64, -100));
         let (key_deep, offset_deep) = pos_deep.to_chunk_coords();
 
@@ -160,172 +154,185 @@ mod tests {
     }
 
     #[test]
-    /// Tests that converting a WorldPos to (ChunkKey, TileOffset) and back results in the original WorldPos.
     fn test_round_trip() {
+        // Round-trip test: WorldPos → (ChunkKey, TileOffset) → WorldPos.
         let original_pos = WorldPos(I64Vec3::new(-9_876_543_210, 456, -789));
 
         let (key, offset) = original_pos.to_chunk_coords();
-
         let final_pos = key.to_world_pos(offset);
 
         assert_eq!(original_pos, final_pos, "WorldPos to ChunkKey and back must be idempotent with i64");
     }
 }
+
 <<< FILE END: rust\ssxl_math\src\coordinate_system.rs >>>
 
->>> FILE START: rust\ssxl_math\src\generation_utils.rs (62 LOC) <<<
-// ssxl_math/src/generation_utils.rs
-
-//! # Generation Utilities
-//!
-//! Provides common mathematical and random-sampling utilities used throughout the
-//! procedural generation pipeline (e.g., `ssxl_generate` crate).
-//!
-//! Functions here are designed for rapid, stateless generation logic, such as
-//! calculating percentage chance rolls and generating unique identifiers for data structures.
-
+>>> FILE START: rust\ssxl_math\src\generation_utils.rs (65 LOC) <<<
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
+// SSXLData
+//   - Trait defined in the primitives module.
+//   - Provides two essential methods:
+//       * get_id() -> u64: returns a unique identifier for the data.
+//       * get_value_len() -> usize: returns the length of the associated value.
+//   - Used here to process data objects generically.
 use crate::primitives::SSXLData;
+
+// rand::Rng
+//   - Trait from the `rand` crate that provides random number generation utilities.
+//   - Enables us to call gen_range() for chance rolls.
 use rand::Rng;
 
 // -----------------------------------------------------------------------------
-// Randomness and Chance Utilities
+// Function: generate_percent_roll
 // -----------------------------------------------------------------------------
-
-/// Rolls a chance check against a given percentage.
-///
-/// This function is vital for injecting controlled **randomness** and **balance**
-/// into the generation process (e.g., probability of a resource spawning, or a
-/// cellular automata rule firing).
-///
-/// # Arguments
-/// * `target_percent` - The probability of success, expressed as a whole percentage (0-100).
-///
-/// # Returns
-/// * `0`: Success (The random number was less than `target_percent`).
-/// * `1`: Failure (The random number was greater than or equal to `target_percent`).
-///
-/// # Example
-/// A 25% chance of spawning:
-/// ```ignore
-/// if generate_percent_roll(25) == 0 {
-///     // spawn item
-/// }
-/// ```
+// Purpose:
+//   - Performs a probabilistic roll against a given percentage chance.
+//   - Used in procedural generation to decide whether an event occurs (e.g., spawning resources).
+//
+// Arguments:
+//   - target_percent: u8 (0–100), representing the probability of success.
+//
+// Behavior:
+//   - Generates a random integer between 0 and 99 inclusive.
+//   - Compares it against target_percent.
+//   - Returns 0 if success (random < target_percent).
+//   - Returns 1 if failure (random >= target_percent).
+//
+// Example:
+//   - generate_percent_roll(25) → 25% chance of returning 0 (success).
 pub fn generate_percent_roll(target_percent: u8) -> u32 {
-    // Generate a random value in the inclusive range [0, 99], which is a 0-100 scale.
+    // Generate a random value in the range [0, 99].
     let rand_val = rand::thread_rng().gen_range(0..100) as u8;
 
-    // Success occurs if the random value falls within the target range.
+    // Compare against target_percent.
     if rand_val < target_percent {
-        0 // Success / Hit
+        0 // Success
     } else {
-        1 // Failure / Miss
+        1 // Failure
     }
 }
 
 // -----------------------------------------------------------------------------
-// Data Processing Utilities
+// Function: process_data
 // -----------------------------------------------------------------------------
-
-/// Processes an object implementing the `SSXLData` trait to derive a simple aggregate identifier.
-///
-/// This is a basic utility that combines the object's unique ID with its data payload size.
-/// It is often used for creating quick, unique signatures or simple hashing/checksums
-/// for data chunks across worker threads.
-///
-/// # Arguments
-/// * `data` - A reference to any structure that implements the `SSXLData` trait.
-///
-/// # Returns
-/// * `u64` - The sum of the data's ID and the length of its associated value.
+// Purpose:
+//   - Processes an object implementing SSXLData to derive a simple aggregate identifier.
+//   - Combines the object's unique ID with the length of its value payload.
+//   - Useful for lightweight hashing, checksums, or quick uniqueness checks.
+//
+// Arguments:
+//   - data: reference to any object implementing SSXLData.
+//
+// Behavior:
+//   - Calls get_id() to retrieve the object’s unique identifier.
+//   - Calls get_value_len() to retrieve the length of its payload.
+//   - Adds them together to produce a u64 aggregate value.
+//
+// Returns:
+//   - u64 representing the combined identifier + payload length.
 pub fn process_data(data: &impl SSXLData) -> u64 {
-    // Combine the inherent ID (u64) with the value length (u64 after casting).
+    // Combine ID and payload length into a single value.
     let processed_value = data.get_id() + data.get_value_len() as u64;
     processed_value
 }
+
 <<< FILE END: rust\ssxl_math\src\generation_utils.rs >>>
 
->>> FILE START: rust\ssxl_math\src\hashing.rs (97 LOC) <<<
-
-// ssxl_math/src/hashing.rs
-
-/// # Hashing Utilities for SSXL-ext
-///
-/// This module provides **deterministic, collision-resistant** hashing functions
-/// essential for identifying and retrieving procedural data.
-///
-/// Hashing is crucial for:
-/// 1.  Generating unique, stable IDs for **world chunks** based on their coordinates.
-/// 2.  Creating cache keys for **generated content** to ensure persistence and integrity.
+>>> FILE START: rust\ssxl_math\src\hashing.rs (110 LOC) <<<
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
+// SSXLResult
+//   - A custom result type defined in the primitives module.
+//   - Used here to wrap hashing results, ensuring consistency with the rest of the engine.
 use crate::primitives::SSXLResult;
+
+// I64Vec3
+//   - A 3D vector type using 64-bit integers.
+//   - Allows chunk coordinates to span extremely large worlds without overflow.
 use glam::I64Vec3;
+
+// sha2::{Digest, Sha256}
+//   - Digest: trait providing hashing functionality.
+//   - Sha256: implementation of the SHA-256 cryptographic hash algorithm.
+//   - Used to generate deterministic, collision-resistant hashes.
 use sha2::{Digest, Sha256};
 
-/// Generates a **deterministic SHA-256 hash** for a given 3D chunk coordinate.
-///
-/// This hash is used as a unique identifier (a key) for world chunks, ensuring that
-/// the same coordinate always yields the identical hash string, which is crucial
-/// for cache lookups and procedural generation stability.
-///
-/// # Arguments
-///
-/// * `coords` - The 3D world coordinate of the chunk, using 64-bit integers (`I64Vec3`)
-///              to support extremely large, dimension-agnostic worlds.
-///
-/// # Returns
-///
-/// A `SSXLResult<String>` containing the 64-character hexadecimal SHA-256 hash.
+// -----------------------------------------------------------------------------
+// Function: hash_chunk_coords
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Generates a deterministic SHA-256 hash for a given 3D chunk coordinate.
+//   - Ensures that identical coordinates always produce the same hash string.
+//   - Used as a unique identifier for chunks in caching and procedural generation.
+//
+// Arguments:
+//   - coords: I64Vec3 representing the chunk’s world-space coordinates.
+//
+// Behavior:
+//   - Serializes coordinates into a canonical string format ("x:y:z").
+//   - Feeds the string into a SHA-256 hasher.
+//   - Produces a 64-character hexadecimal string.
+//
+// Returns:
+//   - SSXLResult<String> containing the hash.
 pub fn hash_chunk_coords(coords: I64Vec3) -> SSXLResult<String> {
-    // 1. Serialize the coordinates into a canonical string format (e.g., "100:5:25").
-    // This fixed format ensures deterministic input for the hash function.
+    // Serialize coordinates into a deterministic string.
     let coord_string = format!("{}:{}:{}", coords.x, coords.y, coords.z);
 
-    // 2. Compute the SHA-256 hash.
+    // Initialize SHA-256 hasher and feed in the string.
     let mut hasher = Sha256::new();
     hasher.update(coord_string.as_bytes());
     let result = hasher.finalize();
 
-    // 3. Convert the hash bytes into a lowercase 64-character hexadecimal string.
+    // Convert hash bytes into lowercase hex string.
     Ok(format!("{:x}", result))
 }
 
-/// Generates a **deterministic SHA-256 hash** for a generic 64-bit data key.
-///
-/// This is typically used to create unique cache keys for generated content or
-/// assets, prefixed with `"content_"` for easy identification in the cache system
-/// (`ssxl_cache`).
-///
-/// # Arguments
-///
-/// * `data_key` - A generic `u64` identifier for the content (e.g., a seed,
-///                a configuration ID, or a tile type index).
-///
-/// # Returns
-///
-/// A `SSXLResult<String>` containing the hash prefixed with `"content_"`.
+// -----------------------------------------------------------------------------
+// Function: hash_content_data
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Generates a deterministic SHA-256 hash for a generic u64 data key.
+//   - Used for content caching (e.g., assets, seeds, configurations).
+//   - Adds a "content_" prefix for easy identification in cache systems.
+//
+// Arguments:
+//   - data_key: u64 identifier for the content.
+//
+// Behavior:
+//   - Converts the key into a string.
+//   - Feeds the string into a SHA-256 hasher.
+//   - Produces a 64-character hexadecimal string prefixed with "content_".
+//
+// Returns:
+//   - SSXLResult<String> containing the prefixed hash.
 pub fn hash_content_data(data_key: u64) -> SSXLResult<String> {
-    // 1. Convert the u64 key into a string.
+    // Convert numeric key into string.
     let key_string = data_key.to_string();
 
-    // 2. Compute the SHA-256 hash.
+    // Initialize SHA-256 hasher and feed in the string.
     let mut hasher = Sha256::new();
     hasher.update(key_string.as_bytes());
     let result = hasher.finalize();
 
-    // 3. Format the result with the required "content_" prefix.
+    // Prefix with "content_" and return.
     Ok(format!("content_{:x}", result))
 }
 
-
-/// Unit tests to ensure the hashing functions are **deterministic** and produce
-/// the expected **format** and **uniqueness** required for stable world generation.
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
+// Validates determinism, uniqueness, and formatting of the hashing functions.
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    /// Tests that the same coordinates always produce the identical hash (determinism).
     fn test_chunk_coords_determinism() {
+        // Same coordinates should always produce identical hashes.
         let coords = I64Vec3::new(3_000_000_000, -5, 100);
         let hash1 = hash_chunk_coords(coords).unwrap();
         let hash2 = hash_chunk_coords(coords).unwrap();
@@ -334,21 +341,21 @@ mod tests {
     }
 
     #[test]
-    /// Tests the expected hash length (64 chars) and confirms that a small coordinate change
-    /// results in a completely different hash (uniqueness/avalanche effect).
     fn test_chunk_coords_uniqueness_and_format() {
+        // Adjacent coordinates should produce different hashes.
         let coords1 = I64Vec3::new(1, 1, 1);
         let coords2 = I64Vec3::new(1, 1, 2); // Only Z differs
         let hash1 = hash_chunk_coords(coords1).unwrap();
         let hash2 = hash_chunk_coords(coords2).unwrap();
 
+        // Verify hash length and uniqueness.
         assert_eq!(hash1.len(), 64, "Chunk hash is not the expected SHA-256 hex length (64).");
         assert_ne!(hash1, hash2, "Uniqueness failed: adjacent coordinates produced same hash.");
     }
 
     #[test]
-    /// Tests determinism, the 'content_' prefix, and the total expected length (72 chars).
     fn test_content_data_determinism_and_format() {
+        // Same content key should always produce identical hashes.
         let key: u64 = 987654321;
 
         let hash1 = hash_content_data(key).unwrap();
@@ -356,58 +363,103 @@ mod tests {
 
         assert_eq!(hash1, hash2, "Content hash determinism failed.");
 
+        // Verify prefix and total length.
         assert!(hash1.starts_with("content_"), "Content hash is missing the 'content_' prefix.");
-        // 'content_' (8 chars) + SHA-256 hex (64 chars) = 72
         assert_eq!(hash1.len(), 8 + 64, "Content hash is not the expected total length (72).");
     }
 }
+
 <<< FILE END: rust\ssxl_math\src\hashing.rs >>>
 
->>> FILE START: rust\ssxl_math\src\lib.rs (54 LOC) <<<
-// File: ssxl_math/src/lib.rs
+>>> FILE START: rust\ssxl_math\src\lib.rs (104 LOC) <<<
+// -----------------------------------------------------------------------------
+// Module Declarations
+// -----------------------------------------------------------------------------
+// These modules define the mathematical foundation of the SSXL engine.
+// Each module is declared here so they can be accessed throughout the crate.
 
-// --- 1. Module Declarations (CRITICAL: MUST be at the root) ---
-/// Defines the global and local coordinate system structures (`ChunkKey`, `WorldPos`).
+// coordinate_system
+//   - Defines core coordinate types (WorldPos, ChunkKey, TileOffset).
+//   - Handles conversion between global world positions and chunk-local offsets.
 pub mod coordinate_system;
 
-/// Houses various utility functions for procedural generation algorithms.
+// generation_utils
+//   - Provides utility functions for procedural generation.
+//   - Includes randomness utilities (percent rolls) and data processing helpers.
 pub mod generation_utils;
 
-/// Provides deterministic hashing functions (e.g., `hash_chunk_coords`).
+// hashing
+//   - Provides deterministic hashing functions.
+//   - Used for chunk IDs, cache keys, and ensuring stable procedural generation.
 pub mod hashing;
 
-/// Core mathematical primitives, custom types, and error handling results.
+// primitives
+//   - Defines core mathematical constants, types, and result/error handling.
+//   - Acts as the foundation for other modules.
 pub mod primitives;
 
-// --------------------------------------------------------------------------------
-
-// --- 2. Cold Quantum Fast Implementation (FTL, Safety-Optimized) ---
-
-/// FTL Inverse Square Root: **O(1)** Approximation for vector normalization.
-///
+// -----------------------------------------------------------------------------
+// Fast Inverse Square Root (q_rsqrt)
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Approximates 1/sqrt(number) extremely quickly using bit-level operations.
+//   - Famous algorithm from Quake III Arena, adapted here for safe use.
+//   - Used for vector normalization and other math-heavy operations.
+//
+// Arguments:
+//   - number: f32, the value to invert square root.
+//
+// Behavior:
+//   - Returns 0.0 if input is <= 0.0 (safety guard).
+//   - Uses bit manipulation to approximate inverse square root.
+//   - Refines result with one Newton-Raphson iteration.
+//
+// Returns:
+//   - Approximate 1/sqrt(number).
 #[inline(always)]
 pub fn q_rsqrt(number: f32) -> f32 {
-    // O(1) Safety Guard: Prevents NaN/UB when magnitude is zero or negative.
+    // Safety guard: prevent NaN or undefined behavior.
     if number <= 0.0 { 
         return 0.0;
     }
 
+    // Constant used in Newton-Raphson iteration.
     const THREEHALFS: f32 = 1.5;
+
+    // Half of the input number.
     let x2 = number * 0.5;
     let y = number;
     
-    // Use u32 for bitwise operation.
+    // Bit-level hack: reinterpret float bits as integer.
     let i = y.to_bits();
+    // Magic constant (0x5f3759df) minus half of exponent bits.
     let j_bits = 0x5f3759df_u32.wrapping_sub(i >> 1);
 
+    // Reinterpret back into float.
     let mut y = f32::from_bits(j_bits);
     
-    // Single Newton's iteration.
+    // One iteration of Newton-Raphson refinement.
     y = y * (THREEHALFS - (x2 * y * y));
     y
 }
 
-/// Computes the normalized (unit) vector of a 3D float vector.
+// -----------------------------------------------------------------------------
+// Vector Normalization
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Computes the unit vector (normalized vector) of a 3D vector.
+//   - Uses q_rsqrt for fast inverse square root approximation.
+//
+// Arguments:
+//   - x, y, z: f32 components of the vector.
+//
+// Behavior:
+//   - Computes squared magnitude (x² + y² + z²).
+//   - Uses q_rsqrt to approximate 1/sqrt(mag_sq).
+//   - Multiplies each component by inverse magnitude.
+//
+// Returns:
+//   - Tuple (f32, f32, f32) representing normalized vector.
 pub fn normalize_vector_3d(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     let mag_sq = x * x + y * y + z * z;
     let inv_mag = q_rsqrt(mag_sq); 
@@ -415,14 +467,17 @@ pub fn normalize_vector_3d(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
     (x * inv_mag, y * inv_mag, z * inv_mag)
 }
 
-// --------------------------------------------------------------------------------
-
-// --- 3. Prelude for Internal Engine Use (Minimalist API) ---
-
-/// A convenience module that re-exports all essential types and traits
-/// from the `ssxl_math` crate.
+// -----------------------------------------------------------------------------
+// Prelude Module
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Provides a convenience re-export of all essential types and functions.
+//   - Allows other crates to import `ssxl_math::prelude::*` for quick access.
+//
+// Contents:
+//   - Re-exports coordinate_system, generation_utils, hashing, primitives.
+//   - Re-exports q_rsqrt and normalize_vector_3d.
 pub mod prelude {
-    // Use 'super::' consistently to access items defined in the parent scope (lib.rs).
     pub use super::coordinate_system::*;
     pub use super::generation_utils::*;
     pub use super::hashing::*;
@@ -431,81 +486,86 @@ pub mod prelude {
     pub use super::q_rsqrt;
     pub use super::normalize_vector_3d;
 }
+
 <<< FILE END: rust\ssxl_math\src\lib.rs >>>
 
->>> FILE START: rust\ssxl_math\src\primitives.rs (59 LOC) <<<
-//! # Primitives Module (`ssxl_math::primitives`)
-//!
-//! Defines the essential, low-level data types, type aliases, traits, and global
-//! constants used throughout the SSXL-ext procedural generation engine.
-
+>>> FILE START: rust\ssxl_math\src\primitives.rs (67 LOC) <<<
+// -----------------------------------------------------------------------------
+// Primitives: low-level types, aliases, traits, and constants
+// -----------------------------------------------------------------------------
+// serde::{Deserialize, Serialize}
+//   - Derive macros to allow this crate’s basic types to be serialized/deserialized
+//     for persistence, networking, and inter-crate messaging.
 use serde::{Deserialize, Serialize};
 
-// --- Data Structures ---
-
-/// A 2D vector for integer coordinates, typically used for tile offsets or local
-/// coordinate mapping within a chunk.
-///
-/// Uses `i64` to maintain compatibility with the large coordinate space of `I64Vec3`
-/// from the `glam` crate, preventing silent overflow issues.
+// -----------------------------------------------------------------------------
+// Vec2i: a 2D integer vector
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Canonical 2D coordinate used across the engine for tiles and chunk indexing.
+// Design notes:
+//   - Uses i64 to align with the engine’s 64-bit world coordinates (I64Vec3),
+//     preventing silent overflow if values are promoted or combined with i64 math.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Vec2i {
-    /// The X component of the 2D vector.
+    // X component (horizontal axis)
     pub x: i64,
-    /// The Y component of the 2D vector.
+    // Y component (vertical axis)
     pub y: i64,
 }
 
 impl Vec2i {
-    /// Creates a new `Vec2i` instance.
+    // Constructor for Vec2i, emphasizing explicitness and avoiding field-order mistakes.
     pub fn new(x: i64, y: i64) -> Self {
         Vec2i { x, y }
     }
 }
 
-// --- Type Aliases ---
-
-/// The standard 2D coordinate type for referencing a tile in the world
-/// or within a chunk. Aliased to `Vec2i`.
+// -----------------------------------------------------------------------------
+// Type aliases: semantic clarity with zero runtime cost
+// -----------------------------------------------------------------------------
+// TileCoord
+//   - Semantic alias for a tile’s coordinate in 2D space (world or local).
+//   - Keeps API readable and intent-focused while reusing Vec2i’s layout.
 pub type TileCoord = Vec2i; 
 
-/// The standard 2D coordinate type for referencing a spatial chunk in the world grid.
-/// Aliased to `Vec2i` for memory layout consistency with `TileCoord`.
+// ChunkId
+//   - Semantic alias for a chunk’s 2D identifier in a world grid.
+//   - Mirrors TileCoord’s layout for consistency across APIs and storage.
 pub type ChunkId = Vec2i; 
 
-/// A specialized `Result` type for the SSXL-ext project.
-///
-/// The error type is fixed as `String`, providing a simple, high-level way to
-/// convey error messages across the engine's various crates.
+// SSXLResult<T>
+//   - Project-wide lightweight Result alias with String errors.
+//   - Favoring human-readable messages across crate boundaries without custom error enums.
 pub type SSXLResult<T> = Result<T, String>;
 
-// --- Traits for Engine Data Management ---
-
-/// A trait defining the requirements for any data structure that will be managed
-/// or processed by the SSXL engine (e.g., in the task queue or cache).
-///
-/// The bounds `Send + Sync` are mandatory, ensuring all implementors can be
-/// safely sent between worker threads and shared across thread boundaries.
+// -----------------------------------------------------------------------------
+// Trait: SSXLData
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Minimal contract for data managed by the engine (task queues, caches, workers).
+// Concurrency:
+//   - Send + Sync required to safely move/share implementors across thread boundaries.
 pub trait SSXLData: Send + Sync {
-    /// Retrieves a unique 64-bit ID for the data. Used primarily for cache keys
-    /// and tracking within the `task_queue`.
+    // Unique, stable identifier used for indexing, caching, and deduplication.
     fn get_id(&self) -> u64;
 
-    /// Returns the length or size of the data's core value in bytes or elements.
-    /// Used for diagnostics, memory management, or processing limits.
+    // Size of the core payload (bytes or elements), useful for diagnostics and limits.
     fn get_value_len(&self) -> usize;
 }
 
-// --- Global Constants ---
-
-/// The canonical side length of a procedural chunk in the world.
-///
-/// This value is cast to `i64` to match the coordinate system of the engine,
-/// ensuring consistent type usage for chunk-related calculations.
+// -----------------------------------------------------------------------------
+// Global constants
+// -----------------------------------------------------------------------------
+// CHUNK_SIZE_I64
+//   - Canonical cubic side length for procedural chunks.
+//   - i64 type matches engine math and avoids cross-type casting pitfalls.
 pub const CHUNK_SIZE_I64: i64 = 32;
 
-/// A small constant used for floating-point comparisons to account for
-/// precision errors (e.g., in perlin noise interpolation or physics-related math).
+// F32_EPSILON
+//   - Small tolerance for floating-point comparisons in math-heavy routines
+//     (e.g., noise interpolation, normalization).
 pub const F32_EPSILON: f32 = 1.0e-6;
+
 <<< FILE END: rust\ssxl_math\src\primitives.rs >>>
 

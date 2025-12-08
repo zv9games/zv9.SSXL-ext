@@ -1,7 +1,8 @@
-﻿>>> FILE START: rust\ssxl_cli\Cargo.toml (34 LOC) <<<
+﻿>>> FILE START: rust\ssxl_cli\Cargo.toml (31 LOC) <<<
+# --- In ssxl_cli/Cargo.toml ---
 [package]
 name = "ssxl_cli"
-version = "0.6.0"
+version = "0.9.1"
 edition = "2021"
 
 [[bin]]
@@ -9,33 +10,30 @@ name = "ssxl"
 path = "src/main.rs"
 
 [dependencies]
-# --- INTERNAL DEPENDENCIES (Foundation & FFI) ---
-# CLI needs access to all core data types for diagnostics and the FFI layer to test the runtime.
-ssxl_shared     = { path = "../ssxl_shared" }
-ssxl_engine_ffi = { path = "../ssxl_engine_ffi" }
-ssxl_tools      = { path = "../ssxl_tools" }
-ssxl_generate   = { path = "../ssxl_generate" }
-ssxl_math   = { path = "../ssxl_math" }
+# --- INTERNAL DEPENDENCIES (Now using workspace = true) ---
+# Dependencies are now inherited from the root Cargo.toml paths.
+ssxl_shared = { workspace = true }
+ssxl_engine_ffi = { workspace = true }
+ssxl_tools = { workspace = true }
+ssxl_generate = { workspace = true }
+ssxl_math = { workspace = true }
 
-# --- EXTERNAL DEPENDENCIES (Execution & UI) ---
-# Asynchronous runtime and macros
-tokio           = { workspace = true, features = ["rt-multi-thread", "macros"] }
-# Workspace standard logging framework (replaces log/env_logger)
-tracing         = { workspace = true }
-# Time utilities, often needed for logging/benchmarking output
-chrono          = { workspace = true }
-# Interactive Console UI library
-crossterm       = { workspace = true }
-# File system traversal (for module tree inspector)
-walkdir         = { workspace = true }
-# Parallel processing (for running benchmarks)
-rayon           = { workspace = true }
-# Regular expressions (for any complex parsing tasks)
-regex           = { workspace = true }
+# --- EXTERNAL DEPENDENCIES (Keep as is, they are already clean) ---
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing = { workspace = true }
+chrono = { workspace = true }
+crossterm = { workspace = true }
+walkdir = { workspace = true }
+rayon = { workspace = true }
+regex = { workspace = true }
 tracing-subscriber = { workspace = true }
-ctrlc           = { workspace = true }
+ctrlc = { workspace = true }
 bincode = { workspace = true }
 serde = { workspace = true }
+
+# You will likely need a CLI argument parsing library here, 
+# such as 'clap', which is recommended for complex CLI tools.
+clap = { version = "4.0", features = ["derive"] }
 <<< FILE END: rust\ssxl_cli\Cargo.toml >>>
 
 >>> FILE START: rust\ssxl_cli\src\cli_util_bench.rs (143 LOC) <<<
@@ -751,22 +749,22 @@ pub fn print_menu(menu: &[CliAction]) {
 }
 <<< FILE END: rust\ssxl_cli\src\cli_util_menu.rs >>>
 
->>> FILE START: rust\ssxl_cli\src\main.rs (127 LOC) <<<
+>>> FILE START: rust\ssxl_cli\src\main.rs (143 LOC) <<<
 //! # SSXL-ext CLI Developer Console (`ssxl_cli::main`)
 //!
 //! The main entry point for the interactive developer console. This utility manages
 //! initialization, logging, the main menu loop, and delegates tasks to action modules
 //! for testing, benchmarking, and external tool execution.
 
-mod actions;               // Core functions for tests, benchmarks, and Godot interaction.
-mod cli_util_inspect;      // Utilities for scanning the codebase and API surface.
+mod actions; // Core functions for tests, benchmarks, and Godot interaction.
+mod cli_util_inspect; // Utilities for scanning the codebase and API surface.
 
 // FIX: Change to `pub mod` so its types (CliAction, CliMenu) are accessible
 // by other modules in the crate (like actions/testing.rs).
-pub mod cli_util_menu;     // Menu structure and display logic.
+pub mod cli_util_menu; // Menu structure and display logic.
 
-mod cli_util_bench;        // Functions for running generation tests and benchmarks.
-mod cli_util_loc;          // <--- CHANGE 1: Declare the new LOC utility module.
+mod cli_util_bench; // Functions for running generation tests and benchmarks.
+mod cli_util_loc; // Declares the new LOC utility module.
 
 use std::collections::HashSet;
 use std::thread;
@@ -778,8 +776,9 @@ use tracing::{info, error};
 use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 
 use crate::cli_util_menu::{build_menu, print_menu};
-use ssxl_engine_ffi::ssxl_initialize_engine; // External FFI function to bootstrap the engine core.
-use crate::cli_util_loc::scan_and_report_loc; // <--- CHANGE 2: Update the import path and function name.
+// FIX: Corrected FFI runtime import to use the ssxl_shared crate.
+use ssxl_shared::ssxl_start_runtime; // External FFI function to bootstrap the engine core.
+use crate::cli_util_loc::scan_and_report_loc; // Imports the LOC function.
 use crate::actions::copy_dll_to_tester_project_at_boot; // Action to ensure the latest DLL is in the Godot project.
 
 
@@ -805,7 +804,8 @@ fn init_logging_and_engine() {
 
     // 2. Initialize the Rust Core via FFI
     // Calls the external C-compatible function to boot the engine's core state and runtime.
-    if ssxl_initialize_engine() {
+    // FIX: Using the correct FFI function name and importing from `ssxl_shared`.
+    if ssxl_start_runtime() {
         info!("Engine FFI core initialized.");
     } else {
         // We log the failure but allow the CLI to continue for non-engine tasks (like LOC scan).
@@ -825,19 +825,34 @@ fn main() {
     // Perform initial setup: logging, FFI, and DLL copy.
     init_logging_and_engine();
     
+    // --- FFI Linkage Fix for MSVC (LNK2019) ---
+    // The linker is aggressively discarding the ssxl_godot library (which implements 
+    // ssxl_set_cell and ssxl_notify_tilemap_update) because ssxl_cli doesn't 
+    // appear to call it directly. This symbolic reference forces the linker to include it.
+    extern "C" {
+        // Declare the unresolved FFI functions provided by ssxl_godot
+        fn ssxl_set_cell(x: i32, y: i32, tile_id: i32);
+        fn ssxl_notify_tilemap_update();
+    }
+
+    // WARNING FIX: Removed unnecessary `unsafe` blocks. Pointer coercion is safe.
+    // Create an unused symbolic reference to the function pointers.
+    let _ = ssxl_set_cell as *const ();
+    let _ = ssxl_notify_tilemap_update as *const ();
+    // ---------------------------------------------
+    
     // Run a Lines of Code (LOC) scan on the codebase at startup.
-    // Note: The scan function no longer takes an argument.
-    scan_and_report_loc(); // <--- CHANGE 3: Update function call and remove unnecessary argument.
+    scan_and_report_loc();
     
     // Print welcome ASCII art.
     println!(
         r#"
-                 (__)                      
-                 (oo)
-           /------\/
-          / |    ||
-         * ||----||
-            ~~    ~~
+                (__)      
+                (oo)
+          /------\/
+         / |    ||
+        * ||----||
+          ~~    ~~
 SSXL-ext Engine Console Initialized
 "#
     );

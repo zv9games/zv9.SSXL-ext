@@ -1,41 +1,97 @@
-// ssxl_godot/src/tilemap/ssxl_tilemap.rs
+// ============================================================================
+// 🧩 SSXLTilemap (`crate::tilemap::ssxl_tilemap`)
+// ----------------------------------------------------------------------------
+// This module defines the `SSXLTilemap` class, a custom Godot `TileMap` node
+// that integrates Rust-based rendering logic with Godot’s scene graph. It
+// supports both signal-driven batch rendering and FFI-driven buffered updates,
+// ensuring tiles can be placed efficiently from multiple sources.
 //
-// The final render sink.
-// Receives render batches from the async core (via signal) or FFI calls.
-// Pure, fast, panic-safe, zero bloat.
+// Purpose:
+//   • Provide a Godot-facing `TileMap` implementation controlled by the SSXL engine.
+//   • Support bulk tile placement via signals or GDScript (`batch_set_tiles`).
+//   • Enable external C-style FFI callbacks to queue and flush tile updates.
+//   • Maintain a buffer of pending updates for safe, batched rendering.
+//
+// Key Components:
+//   • Global State
+//       - TILEMAP_INSTANCE_ID: stores the Godot instance ID of the active tilemap.
+//         Allows external FFI functions to safely access the tilemap.
+//       - DEFAULT_LAYER: default layer index used when placing tiles via FFI.
+//
+//   • SSXLTilemap (struct)
+//       - Attributes:
+//           • #[derive(GodotClass)] + #[class(base = TileMap)]
+//             - Marks SSXLTilemap as a Godot class inheriting from TileMap.
+//       - Fields:
+//           • base: underlying Godot TileMap node.
+//           • tile_source_id: ID of the tile source used when setting cells.
+//           • pending_updates: buffer of cell updates queued via FFI calls.
+//
+//   • ITileMap Implementation
+//       - init(base): called when the TileMap node is created.
+//       - Stores instance ID globally for FFI access.
+//       - Initializes with default tile source and empty update buffer.
+//
+//   • Godot API Methods
+//       - batch_set_tiles(batch):
+//           • Primary entrypoint for rendering tiles in bulk.
+//           • Expects a Dictionary with keys: "layer", "positions",
+//             "atlas_coords", "alt_tiles".
+//           • Places tiles on the specified layer using provided coordinates.
+//       - get_instance():
+//           • Retrieves the current SSXLTilemap instance using its global ID.
+//           • Enables safe access for FFI functions.
+//       - flush_updates():
+//           • Applies all pending updates queued via FFI calls.
+//           • Renders them on the default layer in bulk.
+//
+//   • FFI Host Functions
+//       - ssxl_set_cell(x, y, tile_id):
+//           • Queues a single cell update into `pending_updates`.
+//           • Called from external FFI code.
+//       - ssxl_notify_tilemap_update():
+//           • Flushes all queued updates to the TileMap.
+//           • Called from external FFI code.
+//
+// Design Choices:
+//   • Separation of batch rendering (signals) and buffered updates (FFI)
+//     ensures flexibility in how tiles are placed.
+//   • Global instance ID allows external systems to interact with the tilemap
+//     without unsafe global state manipulation.
+//   • Buffered updates prevent unsafe concurrent modifications by batching
+//     tile placement into a controlled flush.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can extend Godot’s TileMap with
+//     custom rendering logic, while also exposing safe FFI hooks for external
+//     systems. By combining signal-driven updates with FFI callbacks,
+//     `SSXLTilemap` provides a robust, dual-path rendering pipeline that
+//     integrates seamlessly into Godot’s scene graph.
+// ============================================================================
+
 
 use godot::prelude::*;
 use godot::classes::{TileMap, ITileMap};
 use godot::obj::Base;
 use godot::builtin::{Vector2i, PackedVector2Array, PackedInt32Array};
-
 use once_cell::sync::OnceCell;
 
-// --- FFI HOST GLOBALS ---
-/// Global storage for the TileMap instance ID, allowing static C-functions to access it.
-// HIGH: OnceCell is used here because this file lives in ssxl_godot, which is a GDExtension
-// that links to the ssxl_engine_ffi library. The std::OnceLock is available in ssxl_engine_ffi.
 pub static TILEMAP_INSTANCE_ID: OnceCell<InstanceId> = OnceCell::new(); 
-const DEFAULT_LAYER: i32 = 0; // The layer where FFI calls place tiles.
+const DEFAULT_LAYER: i32 = 0;
 
-// --- CLASS DEFINITION ---
 #[derive(GodotClass)]
 #[class(base = TileMap)]
 pub struct SSXLTilemap {
     base: Base<TileMap>,
 
     #[export]
-    pub tile_source_id: i32, // Source ID used when setting cells.
-
-    /// Buffer to collect individual cell updates made via FFI calls (`ssxl_set_cell`).
-    /// The updates are flushed to Godot when `ssxl_notify_tilemap_update` is called.
-    pub pending_updates: Vec<(i32, i32, i32)>, // (world_x, world_y, tile_id)
+    pub tile_source_id: i32,
+    pub pending_updates: Vec<(i32, i32, i32)>,
 }
 
 #[godot_api]
 impl ITileMap for SSXLTilemap {
     fn init(base: Base<TileMap>) -> Self {
-        // Store the InstanceId globally when the node is initialized.
         let id = base.to_init_gd().instance_id();
         let _ = TILEMAP_INSTANCE_ID.set(id);
 
@@ -49,10 +105,6 @@ impl ITileMap for SSXLTilemap {
 
 #[godot_api]
 impl SSXLTilemap {
-    // --- BATCH RENDER (Signal/GDScript) ---
-
-    /// Primary render entrypoint — called from Rust via signal
-    /// Expects the exact format from render_batch.rs
     #[func]
     pub fn batch_set_tiles(&mut self, batch: Dictionary) {
         let Some(layer) = batch.get("layer").and_then(|v| v.try_to::<i64>().ok()) else {
@@ -111,19 +163,12 @@ impl SSXLTilemap {
         godot_print!("SSXLTilemap: Rendered {len} tiles on layer {layer}");
     }
 
-    // --- FFI RENDER (Callback) ---
-
-    /// Helper function to get the current TileMap instance from its global ID.
     fn get_instance() -> Option<Gd<Self>> {
         let id = TILEMAP_INSTANCE_ID.get()?;
-        // WARNING FIX: Removed unnecessary `unsafe` block.
-        // `try_from_instance_id` is safe to call.
         godot::prelude::Gd::try_from_instance_id(*id).ok()
     }
 
-    /// Flushes the pending update buffer to the Godot TileMap.
     pub fn flush_updates(&mut self) {
-        // Must take ownership of the buffer *before* acquiring the mutable borrow to `self.base`.
         let updates = std::mem::take(&mut self.pending_updates);
         let len = updates.len();
 
@@ -136,10 +181,8 @@ impl SSXLTilemap {
         
         tilemap.set_layer_enabled(DEFAULT_LAYER, true);
 
-        // Apply all updates from the buffer
         for (world_x, world_y, tile_id) in updates {
             let cell = Vector2i::new(world_x, world_y);
-            // Assuming tile_id maps to (0, tile_id) in the atlas for a placeholder
             let atlas = Vector2i::new(0, tile_id); 
             
             tilemap
@@ -154,26 +197,18 @@ impl SSXLTilemap {
     }
 }
 
-// --- FFI HOST IMPLEMENTATION ---
-// These functions are the "unresolved externals" from ssxl_engine_ffi.
-// They are implemented here to satisfy the linker.
-
-/// C-style function that queues a cell update.
 #[no_mangle]
 pub extern "C" fn ssxl_set_cell(x: i32, y: i32, tile_id: i32) {
     if let Some(mut map) = SSXLTilemap::get_instance() {
-        // Queue the update to the instance's buffer
         map.bind_mut().pending_updates.push((x, y, tile_id));
     } else {
         godot_warn!("ssxl_set_cell: Tilemap instance not available. Update lost.");
     }
 }
 
-/// C-style function that triggers the buffered updates to be rendered.
 #[no_mangle]
 pub extern "C" fn ssxl_notify_tilemap_update() {
     if let Some(mut map) = SSXLTilemap::get_instance() {
-        // Flush the buffered updates to the Godot API
         map.bind_mut().flush_updates();
     }
 }

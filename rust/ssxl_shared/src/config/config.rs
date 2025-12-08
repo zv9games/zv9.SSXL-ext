@@ -1,72 +1,111 @@
-// FILE: ssxl_shared/src/config.rs
+// -----------------------------------------------------------------------------
+// Global Configuration Module Overview
+// -----------------------------------------------------------------------------
+// This module defines the configuration structure and constants that govern
+// the SSXL engine’s behavior. It ensures consistent values across crates
+// (math, generate, cache, godot) and provides safe defaults when loading fails.
+//
+// Key Components:
+// - SSXLConfig: Struct holding runtime configuration settings.
+// - CHUNK_SIZE / TILE_ARRAY_SIZE: Constants defining chunk geometry.
+// - DEFAULT_CONFIG_PATH: Default path for configuration file.
+// - new_with_defaults: Provides safe fallback values.
+// - load_from_path: Attempts to load configuration (placeholder implementation).
+// - default_generator_id: Accessor for generator ID.
+// - get_config_from_path: Public function to load configuration safely.
+// -----------------------------------------------------------------------------
 
-//! # Global Configuration Constants (`ssxl_shared::config`)
-//!
-//! This module defines fundamental, immutable constants that govern the structure
-//! and scale of the SSXL procedural world. These values must be consistent
-//! across all SSXL-ext crates (math, generate, cache, godot) to ensure data
-//! integrity and system entropy is controlled.
-
+// -----------------------------------------------------------------------------
+// Imports
+// -----------------------------------------------------------------------------
+// tracing::{info, warn}
+//   - Logging macros for runtime diagnostics (info-level success, warn-level failure).
+// std::error::Error
+//   - Trait object used for error handling in load_from_path.
+// serde::{Deserialize, Serialize}
+//   - Enables serialization/deserialization of SSXLConfig for persistence and loading.
 use tracing::{info, warn};
 use std::error::Error;
-use serde::{Deserialize, Serialize}; // Assume Serde is used for configuration loading
+use serde::{Deserialize, Serialize};
 
-// --- Config Struct Definition ---
-
-/// Structure holding all runtime configuration settings for the SSXL Engine.
-/// **NOTE:** This must be public to be used by other crates.
+// -----------------------------------------------------------------------------
+// Struct: SSXLConfig
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Holds runtime configuration settings for the SSXL engine.
+// Fields:
+//   - ca_default_ruleset: Default ruleset ID for cellular automata generation.
+//   - default_generator_id: Identifier for the default generator used in world creation.
+// Derives:
+//   - Debug, Clone: For inspection and duplication.
+//   - Serialize, Deserialize: For persistence and loading from config files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SSXLConfig {
-    // Example field required by other code snippets (from new_with_defaults)
     pub ca_default_ruleset: u8,
-    
-    // FIX 1: Add the required field for the default generator ID.
     pub default_generator_id: String,
 }
 
-// --- World Geometry Constants ---
-
-/// The canonical side length of a procedural chunk in tiles.
-/// **Value:** 32 (meaning chunks are 32x32 tiles).
+// -----------------------------------------------------------------------------
+// Constants
+// -----------------------------------------------------------------------------
+// CHUNK_SIZE
+//   - Canonical side length of a chunk in tiles (32).
+// TILE_ARRAY_SIZE
+//   - Total number of tiles in a chunk (32 * 32 = 1024).
+// DEFAULT_CONFIG_PATH
+//   - Default file path for configuration JSON.
 pub const CHUNK_SIZE: u32 = 32;
-
-/// The total number of tiles contained within a single `ChunkData` structure.
-/// **Calculation:** CHUNK_SIZE * CHUNK_SIZE (32 * 32 = 1024).
 pub const TILE_ARRAY_SIZE: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
-
-// --- Loading Constants ---
 const DEFAULT_CONFIG_PATH: &str = "res://ssxl_config.json";
 
+// -----------------------------------------------------------------------------
+// Implementation: SSXLConfig
+// -----------------------------------------------------------------------------
 impl SSXLConfig {
-    /// Creates a safe, hardcoded default configuration.
+    // -------------------------------------------------------------------------
+    // Method: new_with_defaults
+    // -------------------------------------------------------------------------
+    // Provides a safe, hardcoded default configuration.
+    // Ensures engine can initialize even if config file is missing or invalid.
     pub fn new_with_defaults() -> Self {
         SSXLConfig {
-            ca_default_ruleset: 1, // Default CA ruleset ID
-            
-            // FIX 2: Initialize the new field.
-            default_generator_id: "default_noise_gen".to_string(), 
+            ca_default_ruleset: 1,
+            default_generator_id: "default_noise_gen".to_string(),
         }
     }
 
-    /// Internal method to attempt loading config from a file path.
-    /// Returns `Ok(Self)` or an `Err` on failure. (Placeholder implementation).
+    // -------------------------------------------------------------------------
+    // Method: load_from_path
+    // -------------------------------------------------------------------------
+    // Attempts to load configuration from a file path.
+    // Currently a placeholder: always returns defaults.
+    // Returns:
+    //   - Ok(Self) on success
+    //   - Err(Box<dyn Error>) on failure
     pub fn load_from_path(_path: &str) -> Result<Self, Box<dyn Error>> {
-        // In a real application, this would handle file I/O and deserialization.
-        // For now, we simulate success with defaults.
         Ok(SSXLConfig::new_with_defaults())
     }
     
-    // FIX 3: Add the missing accessor method to resolve E0599.
-    /// Returns the configured default Generator ID.
+    // -------------------------------------------------------------------------
+    // Method: default_generator_id
+    // -------------------------------------------------------------------------
+    // Accessor for the default generator ID.
+    // Returns a clone of the string to avoid ownership issues.
     pub fn default_generator_id(&self) -> String {
         self.default_generator_id.clone()
     }
 }
 
-
-/// Attempts to load the configuration from the specified path.
-///
-/// **FIX:** This function is defined publicly here, resolving `E0425` in `api_initializers.rs`.
+// -----------------------------------------------------------------------------
+// Function: get_config_from_path
+// -----------------------------------------------------------------------------
+// Purpose:
+//   - Public entry point for loading configuration.
+//   - Attempts to load from provided path or falls back to DEFAULT_CONFIG_PATH.
+// Behavior:
+//   - On success: logs info and returns loaded config.
+//   - On failure: logs warning and returns safe defaults.
+// Ensures engine always initializes with valid configuration.
 pub fn get_config_from_path(path: Option<&str>) -> SSXLConfig {
     let path_to_load = path.unwrap_or(DEFAULT_CONFIG_PATH);
 
@@ -76,8 +115,11 @@ pub fn get_config_from_path(path: Option<&str>) -> SSXLConfig {
             config
         },
         Err(e) => {
-            // Safe fallback: Logs failure but ensures the engine initializes with defaults.
-            warn!("Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.", path_to_load, e);
+            warn!(
+                "Config load FAILED from path '{}'. Error: {:?}. Returning defaults to ensure engine initialization.",
+                path_to_load,
+                e
+            );
             SSXLConfig::new_with_defaults()
         }
     }

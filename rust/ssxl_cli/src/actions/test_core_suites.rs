@@ -1,3 +1,64 @@
+// ============================================================================
+// 🧪 SSXL CLI: Core Test Suites (`ssxl_cli::actions::test_core_suites`)
+// ----------------------------------------------------------------------------
+// This module defines the core integration tests that validate communication
+// between the Rust engine and the Godot runtime. Unlike lightweight unit tests,
+// these tests spawn external processes (Cargo and Godot) to ensure that the
+// full pipeline—from compilation to FFI bridge to headless execution—works
+// correctly in real runtime conditions.
+//
+// Key Functions:
+//   • run_cargo_tests
+//       - Executes the full Rust test suite via `cargo test`.
+//       - Runs with `--nocapture` to stream output directly to the console.
+//       - Validates that all Rust unit and integration tests pass before
+//         attempting Godot integration.
+//
+//   • run_ffi_bridge_validation
+//       - Launches Godot in headless mode with the FFI bridge validation scene.
+//       - Confirms that the Rust dynamic library is correctly loaded via
+//         GDExtension and that communication between Rust and Godot succeeds.
+//       - Captures stdout/stderr from the Godot process for detailed logging.
+//       - Reports success/failure based on Godot’s exit status.
+//
+//   • run_headless_generation_integration_test
+//       - Executes a headless Godot scene that validates the full map generation
+//         pipeline.
+//       - Ensures procedural generation, streaming, and integration logic work
+//         without requiring a graphical interface.
+//       - Captures and logs Godot output for debugging and validation.
+//
+//   • run_headless_animation_tempo_test
+//       - Runs a headless Godot scene focused on animation conductor tempo.
+//       - Validates high-frequency signal emission and latency handling in the
+//         conductor loop.
+//       - Confirms that the conductor maintains expected performance under load.
+//
+// Workflow:
+//   1. Rust unit/integration tests are executed via `run_cargo_tests`.
+//   2. Godot is launched in headless mode with specific test scenes.
+//   3. Output streams (stdout/stderr) are captured in parallel threads.
+//   4. Results are logged to the console, including success/failure messages.
+//   5. Exit codes and captured output provide detailed diagnostics.
+//
+// Design Choices:
+//   • `std::process::Command` is used to spawn external processes (Cargo, Godot).
+//   • `Stdio::piped` allows capturing stdout/stderr for real-time logging.
+//   • Threads are used to read output streams concurrently, preventing blocking.
+//   • `tracing` macros (`info`, `warn`, `error`) provide structured logging for
+//     visibility and debugging.
+//   • Headless Godot execution ensures tests can run in CI/CD pipelines without
+//     requiring a GUI.
+//
+// Educational Note:
+//   • These tests demonstrate how Rust can orchestrate external processes to
+//     validate integration with another engine (Godot).
+//   • By combining Cargo tests with Godot headless scenes, developers gain
+//     confidence that both the Rust engine and its FFI bridge are functioning
+//     correctly in real runtime conditions.
+// ============================================================================
+
+
 use std::io::{self, BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::thread;

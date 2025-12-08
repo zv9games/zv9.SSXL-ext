@@ -1,73 +1,81 @@
-//! # Primitives Module (`ssxl_math::primitives`)
-//!
-//! Defines the essential, low-level data types, type aliases, traits, and global
-//! constants used throughout the SSXL-ext procedural generation engine.
+// ============================================================================
+// 🔧 Primitives Module (`crate::primitives`)
+// ----------------------------------------------------------------------------
+// This module defines the low-level building blocks of the SSXL engine.
+// It provides core types, traits, and constants that form the mathematical
+// and structural foundation for higher-level systems like coordinate handling,
+// generation utilities, and hashing.
+//
+// Purpose:
+//   • Define canonical vector types for consistent coordinate representation.
+//   • Provide semantic type aliases for clarity in APIs.
+//   • Establish a lightweight, project-wide result type for error handling.
+//   • Define a minimal trait (`SSXLData`) for generic data management.
+//   • Expose global constants for chunk sizing and floating-point tolerance.
+//
+// Key Components:
+//   • Vec2i
+//       - A 2D integer vector using i64 components.
+//       - Represents tile or chunk coordinates in 2D space.
+//       - Aligns with the engine’s 64-bit world math (I64Vec3).
+//       - Prevents overflow when combined with large-scale coordinates.
+//       - Provides a constructor `new(x, y)` for explicit initialization.
+//
+//   • Type Aliases
+//       - TileCoord: semantic alias for a tile’s coordinate in 2D space.
+//       - ChunkId: semantic alias for a chunk’s identifier in a world grid.
+//       - SSXLResult<T>: project-wide result type using `Result<T, String>`,
+//         favoring human-readable error messages over custom enums.
+//
+//   • Trait: SSXLData
+//       - Minimal contract for data managed by the engine (task queues, caches).
+//       - Requires `Send + Sync` for safe concurrency across threads.
+//       - Methods:
+//           • get_id() -> u64: stable identifier for indexing and deduplication.
+//           • get_value_len() -> usize: size of payload, useful for diagnostics.
+//
+//   • Constants
+//       - CHUNK_SIZE_I64: canonical cubic side length for procedural chunks (32).
+//         Uses i64 to align with engine math and avoid casting pitfalls.
+//       - F32_EPSILON: small tolerance (1e-6) for floating-point comparisons,
+//         used in math-heavy routines like normalization or interpolation.
+//
+// Design Choices:
+//   • Using i64 for coordinates ensures compatibility with infinite world math.
+//   • Semantic type aliases improve readability without runtime overhead.
+//   • SSXLResult standardizes error handling across modules.
+//   • SSXLData provides a minimal, flexible trait for generic data processing.
+//
+// Educational Note:
+//   • This module demonstrates how to establish a clean foundation for an engine.
+//     By defining primitives here, higher-level systems can build on consistent,
+//     reusable abstractions, ensuring clarity, safety, and scalability across
+//     the entire codebase.
+// ============================================================================
+
 
 use serde::{Deserialize, Serialize};
 
-// --- Data Structures ---
-
-/// A 2D vector for integer coordinates, typically used for tile offsets or local
-/// coordinate mapping within a chunk.
-///
-/// Uses `i64` to maintain compatibility with the large coordinate space of `I64Vec3`
-/// from the `glam` crate, preventing silent overflow issues.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Vec2i {
-    /// The X component of the 2D vector.
     pub x: i64,
-    /// The Y component of the 2D vector.
     pub y: i64,
 }
 
 impl Vec2i {
-    /// Creates a new `Vec2i` instance.
     pub fn new(x: i64, y: i64) -> Self {
         Vec2i { x, y }
     }
 }
 
-// --- Type Aliases ---
-
-/// The standard 2D coordinate type for referencing a tile in the world
-/// or within a chunk. Aliased to `Vec2i`.
 pub type TileCoord = Vec2i; 
-
-/// The standard 2D coordinate type for referencing a spatial chunk in the world grid.
-/// Aliased to `Vec2i` for memory layout consistency with `TileCoord`.
 pub type ChunkId = Vec2i; 
-
-/// A specialized `Result` type for the SSXL-ext project.
-///
-/// The error type is fixed as `String`, providing a simple, high-level way to
-/// convey error messages across the engine's various crates.
 pub type SSXLResult<T> = Result<T, String>;
 
-// --- Traits for Engine Data Management ---
-
-/// A trait defining the requirements for any data structure that will be managed
-/// or processed by the SSXL engine (e.g., in the task queue or cache).
-///
-/// The bounds `Send + Sync` are mandatory, ensuring all implementors can be
-/// safely sent between worker threads and shared across thread boundaries.
 pub trait SSXLData: Send + Sync {
-    /// Retrieves a unique 64-bit ID for the data. Used primarily for cache keys
-    /// and tracking within the `task_queue`.
     fn get_id(&self) -> u64;
-
-    /// Returns the length or size of the data's core value in bytes or elements.
-    /// Used for diagnostics, memory management, or processing limits.
     fn get_value_len(&self) -> usize;
 }
 
-// --- Global Constants ---
-
-/// The canonical side length of a procedural chunk in the world.
-///
-/// This value is cast to `i64` to match the coordinate system of the engine,
-/// ensuring consistent type usage for chunk-related calculations.
 pub const CHUNK_SIZE_I64: i64 = 32;
-
-/// A small constant used for floating-point comparisons to account for
-/// precision errors (e.g., in perlin noise interpolation or physics-related math).
 pub const F32_EPSILON: f32 = 1.0e-6;

@@ -1,7 +1,6 @@
-[gd_scene load_steps=9 format=3 uid="uid://cwhh07dy846y7"]
+[gd_scene load_steps=8 format=3 uid="uid://cwhh07dy846y7"]
 
 [ext_resource type="Script" uid="uid://bf4m53dvayhbc" path="res://root_scripts/main.gd" id="1_oaegt"]
-[ext_resource type="Script" uid="uid://dj24drjh3he2y" path="res://root_scripts/ssxl_chunk.gd" id="2_e11vb"]
 [ext_resource type="Script" uid="uid://4g1qywnkcmig" path="res://root_scripts/ssxl_engine.gd" id="2_ga5s8"]
 [ext_resource type="TileSet" uid="uid://b6ts3mi2pbpvq" path="res://pacman_tilemap.tres" id="2_pkfb0"]
 [ext_resource type="Script" uid="uid://ctfnvsx0y2hxr" path="res://root_scripts/ssxl_signals.gd" id="3_47gu4"]
@@ -11,31 +10,26 @@
 
 [node name="main" type="Node"]
 script = ExtResource("1_oaegt")
-
-[node name="SSXLEngine" type="SSXLEngine" parent="."]
-script = ExtResource("2_ga5s8")
-
-[node name="SSXLOracle" type="SSXLOracle" parent="."]
-script = ExtResource("3_jyi58")
-
-[node name="SSXLSignals" type="SSXLSignals" parent="."]
-script = ExtResource("3_47gu4")
-
-[node name="SSXLTilemap" type="SSXLTilemap" parent="."]
-z_index = 1
-tile_set = ExtResource("2_pkfb0")
-script = ExtResource("5_47gu4")
-map_width = 480
-map_height = 480
-generator_name = null
-map_seed = null
-perlin_scale = null
-tile_overrides = null
+atlas_coord = Vector2i(4, 4)
 
 [node name="Camera2D" type="Camera2D" parent="."]
 anchor_mode = 0
 zoom = Vector2(0.5, 0.5)
 script = ExtResource("6_e11vb")
 
+[node name="SSXLTilemap" type="SSXLTilemap" parent="."]
+tile_source_id = 0
+z_index = 1
+tile_set = ExtResource("2_pkfb0")
+script = ExtResource("5_47gu4")
+
+[node name="SSXLOracle" type="SSXLOracle" parent="."]
+script = ExtResource("3_jyi58")
+
+[node name="SSXLEngine" type="SSXLEngine" parent="."]
+script = ExtResource("2_ga5s8")
+
+[node name="SSXLSignals" type="SSXLSignals" parent="."]
+script = ExtResource("3_47gu4")
+
 [node name="SSXLChunk" type="Node" parent="."]
-script = ExtResource("2_e11vb")

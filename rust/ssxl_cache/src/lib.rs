@@ -1,4 +1,62 @@
-// ssxl_cache/src/lib.rs
+// ============================================================================
+// 🗄️ Chunk Cache System (`ssxl_cache`)
+// ----------------------------------------------------------------------------
+// This module implements a thread-safe, region-aware cache for chunk data in
+// the SSXL engine. It combines an LRU (Least Recently Used) eviction policy
+// with region indexing to balance performance, memory usage, and spatial
+// organization.
+//
+// Key Concepts:
+//   • ChunkCache:
+//       - Stores chunks in an LRU cache, automatically evicting the least
+//         recently used entries when capacity is exceeded.
+//       - Provides methods to load, save, and remove chunks safely.
+//       - Tracks cache metrics (hits, misses, evictions) for performance tuning.
+//   • RegionIndex:
+//       - Maps regions (groups of chunks) to sets of chunk keys.
+//       - Regions are defined by dividing world coordinates by REGION_SIZE.
+//       - Supports insertion and removal of chunk keys, automatically cleaning
+//         up empty regions.
+//   • CacheMetrics:
+//       - Atomic counters for hits, misses, and evictions.
+//       - Provides lightweight tracking of cache performance without locking.
+//   • REGION_SIZE:
+//       - Defines the granularity of regions (here, 64 units).
+//       - Used to group chunks spatially for efficient lookup.
+//
+// Workflow:
+//   1. Initialization (`ChunkCache::new`):
+//      - Creates an LRU cache with a non-zero capacity.
+//      - Initializes region index and metrics tracker.
+//   2. Loading (`load_chunk`):
+//      - Attempts to retrieve a chunk by key.
+//      - Increments hit/miss counters accordingly.
+//   3. Saving (`save_chunk`):
+//      - Inserts a chunk into the cache and updates the region index.
+//      - If capacity is exceeded, evicts the least recently used chunk.
+//      - Tracks eviction metrics and cleans up region index.
+//   4. Removal (`remove_chunk`):
+//      - Manually removes a chunk and updates the region index.
+//   5. Inspection (`len`, `capacity`):
+//      - Provides current cache size and maximum capacity.
+//
+// Design Choices:
+//   • `parking_lot::Mutex` and `RwLock` provide high-performance locking
+//     primitives for concurrent access.
+//   • `Arc` ensures safe shared ownership of chunks and metrics across threads.
+//   • `AtomicResource` wraps the region index for ergonomic thread-safe access.
+//   • `lru::LruCache` provides a proven eviction strategy for bounded memory.
+//
+// Educational Note:
+//   • This module demonstrates a layered caching strategy:
+//       - LRU eviction ensures memory bounds.
+//       - Region indexing provides spatial organization.
+//       - Metrics tracking enables runtime tuning.
+//   • By combining these techniques, the engine achieves efficient chunk
+//     management in large, procedurally generated worlds.
+// ============================================================================
+
+
 use ssxl_math::coordinate_system::ChunkKey;
 use ssxl_shared::ChunkData;
 use ssxl_sync::AtomicResource;
@@ -6,7 +64,6 @@ use ssxl_sync::AtomicResource;
 use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc,
-    // HIGH: Added Atomic for O(1) non-blocking metric updates
     atomic::{AtomicUsize, Ordering}
 };
 use std::io;
@@ -21,7 +78,6 @@ const REGION_SIZE: i64 = 64;
 type RegionKey = ChunkKey;
 type RegionList = RwLock<HashSet<ChunkKey>>;
 
-// HIGH: O(1) Metric collection
 #[derive(Debug, Default)]
 pub struct CacheMetrics {
     pub hits: AtomicUsize,
@@ -37,7 +93,6 @@ impl CacheMetrics {
     #[inline(always)]
     pub fn evict(&self) { self.evictions.fetch_add(1, Ordering::Relaxed); }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct RegionIndex {
@@ -68,7 +123,6 @@ impl RegionIndex {
                 .or_insert_with(|| Arc::new(RwLock::new(HashSet::new())))
                 .clone()
         };
-        // The lock on `self.storage` is automatically dropped.
         let mut list = list_arc.write();
         list.insert(chunk_key);
     }
@@ -97,7 +151,7 @@ pub struct ChunkCache {
     storage: Mutex<LruCache<ChunkKey, Arc<ChunkData>>>,
     region_index: RegionIndex,
     capacity: NonZeroUsize,
-    pub metrics: Arc<CacheMetrics>, // HIGH: Added metrics tracker
+    pub metrics: Arc<CacheMetrics>,
 }
 
 impl ChunkCache {
@@ -111,7 +165,7 @@ impl ChunkCache {
             storage: Mutex::new(LruCache::new(capacity)),
             region_index: RegionIndex::new(),
             capacity,
-            metrics: Arc::new(CacheMetrics::default()), // HIGH: Initialize metrics
+            metrics: Arc::new(CacheMetrics::default()),
         })
     }
 
@@ -119,7 +173,6 @@ impl ChunkCache {
         let mut guard = self.storage.lock();
         let result = guard.get(key).map(Arc::clone);
         
-        // HIGH: Track hit/miss
         if result.is_some() {
             self.metrics.hit();
         } else {
@@ -133,14 +186,10 @@ impl ChunkCache {
         let key = *key;
         let mut guard = self.storage.lock();
 
-        // RegionIndex insertion is O(1) and idempotent (HashSet). Always update.
         self.region_index.insert_key(key);
 
-        // Insert the new chunk. `put` returns `Option<V>` (the old value) if the key existed.
         let _old_data = guard.put(key, data);
         
-        // FIX E0308: Use `pop_lru()` to get the evicted key/value pair when the cache capacity is exceeded.
-        // `pop_lru()` correctly returns `Option<(K, V)>`.
         if let Some((evicted_key, _)) = guard.pop_lru() {
             self.metrics.evict();
             self.region_index.remove_key(evicted_key);

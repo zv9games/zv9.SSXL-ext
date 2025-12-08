@@ -1,43 +1,56 @@
-// File: ssxl_shared/src/job/mod.rs (Optimized Imports)
+// ============================================================================
+// ⚡ SSXL Job Module ⚡
+// File: ssxl_shared/src/job/mod.rs
+// ----------------------------------------------------------------------------
+// This module is the **command center** of the SSXL engine.
+// It defines the packets of intent (jobs) and the packets of outcome (results)
+// that flow between the engine core and its generation pipeline.
+// Think of it as the **messenger guild**: jobs go in, results come out.
+// ============================================================================
 
-// FIX: Removed unused imports: `ChunkId` and `std::fmt::Display`.
-use crate::ChunkData; // Import public re-exports from lib.rs
+use crate::ChunkData; // 🎯 Core chunk payload imported from lib.rs
 
-// --- The Instruction Packet ---
+// -----------------------------------------------------------------------------
+// 🚀 Instruction Packet: SSXLJob
+// -----------------------------------------------------------------------------
+// Represents the set of commands the engine can receive.
+// Each variant is a ritual order, telling the generator what to do next.
 pub enum SSXLJob {
-    /// Command to initialize map generation.
+    // 🗺️ BuildMap: Spin up a new world grid with given dimensions and seed.
     BuildMap {
         width: u32,
         height: u32,
-        seed: u64, // Use parsed seed
-        // FIX: Replaced unknown GString with standard String
-        generator_id: String
+        seed: u64,
+        generator_id: String, // 🔑 Which generator to invoke
     },
-    /// Command to change the active generator configuration.
+
+    // 🔧 SetGenerator: Swap out the active generator configuration mid-flight.
     SetGenerator {
-        // FIX: Replaced unknown GString with standard String
-        generator_id: String
+        generator_id: String,
     },
-    /// Command to stop all running and pending jobs.
+
+    // 🛑 StopGeneration: Halt all jobs, both running and queued.
     StopGeneration,
-    // ...
+
+    // ... Future expansion: more job types can be added here.
 }
 
-// --- The Result Packet (Sent back to the Engine::tick) ---
-// FIX: Renamed to JobResult to avoid collision with SSXLResult alias
+// -----------------------------------------------------------------------------
+// 🎯 Result Packet: JobResult
+// -----------------------------------------------------------------------------
+// Represents the outcomes returned back to the engine tick loop.
+// Each variant is a signal of success, completion, or failure.
 pub enum JobResult {
-    /// A chunk has been successfully generated and is ready for world state update.
+    // 🌟 ChunkGenerated: A new chunk is ready for integration into world state.
     ChunkGenerated {
-        // NOTE: x/y coordinates are often implicitly contained in ChunkData's bounds,
-        // but keeping them here for explicit communication.
-        x: i32,
+        x: i32,          // Explicit coordinates for clarity
         y: i32,
-        // FIX: ChunkData is now imported and recognized
-        data: ChunkData
+        data: ChunkData, // 📦 The freshly minted chunk payload
     },
-    /// The BuildMap job is finished.
+
+    // ✅ MapBuildComplete: The BuildMap job has finished successfully.
     MapBuildComplete,
-    /// An error occurred during processing.
-    // FIX: Replaced unknown GString with standard String
+
+    // 💥 Error: Something went wrong during job execution.
     Error(String),
 }

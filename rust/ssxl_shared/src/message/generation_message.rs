@@ -1,47 +1,60 @@
-// ssxl_shared/src/message/generation_message.rs (Fixed Imports & Variants)
+// ============================================================================
+// 📡 Generation Messaging
+// File: ssxl_shared/src/message/generation_message.rs
+// ----------------------------------------------------------------------------
+// Purpose:
+//   - Defines the communication protocol between the Conductor (main thread)
+//     and worker threads in the SSXL engine.
+//   - Provides structures for sending generation tasks into the pipeline and
+//     receiving results or status updates back.
+//   - Ensures messages are serializable for persistence, networking, or debugging.
+// ============================================================================
 
-//! # Generation Messaging (`ssxl_shared::message::generation_message`)
+use crate::chunk::chunk_data::ChunkData;   // Core chunk payload type
+use ssxl_math::prelude::Vec2i;             // 2D integer vector for chunk coordinates
+use std::sync::Arc;                        // Atomic reference-counted pointer for safe sharing
+use serde::{Serialize, Deserialize};       // Serialization traits for message passing
 
-use crate::chunk::chunk_data::ChunkData;
-use ssxl_math::prelude::Vec2i;
-use std::sync::Arc;
-// FIX 1: Import the serialization traits from serde.
-use serde::{Serialize, Deserialize};
-
-
-// --- Work Request Structure ---
-
-/// Defines a single unit of work (a task) to be processed by a worker thread.
-///
-/// This structure is put into the engine's `TaskQueue` by the `Conductor`.
-// FIX 2: Add Serialize and Deserialize derives.
+// -----------------------------------------------------------------------------
+// 🛠️ Work Request Structure: GenerationTask
+// -----------------------------------------------------------------------------
+// Represents a single unit of work to be performed by a worker thread.
+// Inserted into the engine’s TaskQueue by the Conductor.
+// Fields:
+//   - chunk_coords: identifies which chunk in chunk-space should be generated.
+//   - generator_id: specifies which generator algorithm to use (e.g. "cellular_automata").
+// Derives:
+//   - Debug, Clone: for inspection and duplication.
+//   - Serialize, Deserialize: for persistence and cross-thread communication.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationTask {
-    /// The chunk-space coordinates of the chunk that needs to be generated.
-    pub chunk_coords: Vec2i,
-    /// The unique identifier of the generator to be used for this task (e.g., "cellular_automata").
-    pub generator_id: String,
+    pub chunk_coords: Vec2i,     // Target chunk coordinates in grid space
+    pub generator_id: String,    // Generator identifier string
 }
 
-
-// --- Communication Message Enumeration ---
-
-/// An enumeration of messages sent from the worker threads back to the
-/// main thread or the Conductor to signal task completion or pipeline status.
-// FIX 3: Add Serialize and Deserialize derives.
+// -----------------------------------------------------------------------------
+// 📬 Communication Message Enumeration: GenerationMessage
+// -----------------------------------------------------------------------------
+// Represents messages sent back from worker threads to the Conductor.
+// Each variant signals a different type of pipeline outcome.
+// Variants:
+//   - Generated: A chunk has been successfully produced.
+//   - StatusUpdate: Informational message about progress or internal state.
+//   - GenerationComplete: Signals that all tasks in a batch are finished.
+// -----------------------------------------------------------------------------
 #[derive(Debug, Serialize, Deserialize)]
 pub enum GenerationMessage {
-    /// Signals that a chunk has been successfully generated.
-    ///
-    /// The payload includes the chunk coordinates (for tracking) and the
-    /// atomic reference-counted data.
+    // 🌟 Generated: A new chunk is ready.
+    // Payload:
+    //   - Vec2i: coordinates of the chunk.
+    //   - Arc<ChunkData>: reference-counted chunk data for safe sharing.
     Generated(Vec2i, Arc<ChunkData>),
 
-    /// Signals a change in the internal generation status or progress update.
+    // 📊 StatusUpdate: Provides progress or state information.
+    // Example: "50% complete" or "Switching generator mode".
     StatusUpdate(String),
 
-    /// Signals that all current tasks related to a specific generation batch
-    /// or request have been finalized. Used by the `Conductor` to update
-    /// the generation state.
+    // ✅ GenerationComplete: Marks the end of a batch of tasks.
+    // Used by the Conductor to update global generation state.
     GenerationComplete,
 }

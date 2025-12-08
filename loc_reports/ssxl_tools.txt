@@ -1,6 +1,7 @@
-﻿>>> FILE START: rust\ssxl_tools\Cargo.toml (10 LOC) <<<
+﻿>>> FILE START: rust\ssxl_tools\Cargo.toml (11 LOC) <<<
 [package]
 name = "ssxl_tools"
+version = "0.9.1"
 edition = "2021" 
 
 [dependencies]

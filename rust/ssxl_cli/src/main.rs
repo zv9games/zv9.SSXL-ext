@@ -1,18 +1,80 @@
-//! # SSXL-ext CLI Developer Console (`ssxl_cli::main`)
-//!
-//! The main entry point for the interactive developer console. This utility manages
-//! initialization, logging, the main menu loop, and delegates tasks to action modules
-//! for testing, benchmarking, and external tool execution.
+// ============================================================================
+// 🧭 SSXL-ext CLI Developer Console (`ssxl_cli::main`)
+// ----------------------------------------------------------------------------
+// This module is the main entry point for the interactive developer console
+// of the SSXL-ext engine. It orchestrates initialization, logging, FFI runtime
+// setup, menu construction, and the interactive loop that allows developers
+// to run validation tests, benchmarks, and inspection utilities.
+//
+// Purpose:
+//   • Provide a unified, interactive interface for developers to control and
+//     validate the SSXL engine from the command line.
+//   • Simplify workflows by centralizing access to tests, benchmarks, and
+//     external Godot integration tools.
+//   • Ensure critical initialization steps (logging, FFI runtime, DLL copy)
+//     are performed before any developer actions are executed.
+//
+// Key Components:
+//   • Module Imports
+//       - `actions`: Core functions for tests, benchmarks, and Godot interaction.
+//       - `cli_util_inspect`: Utilities for scanning the Rust workspace and API surface.
+//       - `cli_util_menu`: Menu structure and display logic (public for reuse).
+//       - `cli_util_bench`: Benchmark and generation workload utilities.
+//       - `cli_util_loc`: LOC (Lines of Code) analysis utilities.
+//
+//   • wait_for_enter
+//       - Pauses execution until the user presses Enter.
+//       - Used to provide acknowledgment before returning to the main menu.
+//
+//   • init_logging_and_engine
+//       - Configures the tracing/logging system with INFO-level output.
+//       - Initializes the SSXL engine core via FFI (`ssxl_start_runtime`).
+//       - Ensures the latest compiled DLL is copied into the Godot tester project.
+//
+//   • main
+//       - Performs initialization (logging, FFI, DLL copy).
+//       - Declares symbolic references to FFI functions to ensure linker inclusion.
+//       - Runs a LOC scan at startup for visibility into codebase size.
+//       - Prints ASCII art banner to signal console readiness.
+//       - Builds the menu structure via `build_menu`.
+//       - Enters the main interactive loop:
+//           1. Displays menu options.
+//           2. Polls for key events using `crossterm`.
+//           3. Debounces input to prevent repeated triggers.
+//           4. Executes the selected action closure.
+//           5. Waits for user acknowledgment before returning to menu.
+//           6. Exits gracefully when the 'E' key is pressed.
+//
+// Workflow:
+//   1. Initialize logging and engine runtime.
+//   2. Copy DLL into Godot tester project.
+//   3. Perform LOC scan and print startup banner.
+//   4. Build and display the interactive menu.
+//   5. Await user input and execute corresponding actions.
+//   6. Continue until exit key is pressed.
+//
+// Design Choices:
+//   • `tracing` and `tracing_subscriber` provide structured, leveled logging.
+//   • `crossterm` enables cross-platform key event polling for interactive input.
+//   • Input debouncing ensures smooth user experience without repeated triggers.
+//   • Modular design separates concerns: actions, benchmarks, inspection, menu,
+//     and LOC utilities are imported and orchestrated here.
+//   • ASCII art banner provides a friendly, recognizable startup signal.
+//
+// Educational Note:
+//   • This module demonstrates how Rust can be used to build an interactive,
+//     developer-focused CLI with structured logging, FFI integration, and
+//     modular action orchestration.
+//   • By centralizing initialization and menu-driven workflows, developers gain
+//     a predictable and ergonomic interface for testing and debugging the SSXL engine.
+// ============================================================================
 
-mod actions; // Core functions for tests, benchmarks, and Godot interaction.
-mod cli_util_inspect; // Utilities for scanning the codebase and API surface.
 
-// FIX: Change to `pub mod` so its types (CliAction, CliMenu) are accessible
-// by other modules in the crate (like actions/testing.rs).
-pub mod cli_util_menu; // Menu structure and display logic.
-
-mod cli_util_bench; // Functions for running generation tests and benchmarks.
-mod cli_util_loc; // Declares the new LOC utility module.
+mod actions;
+mod cli_util_inspect;
+pub mod cli_util_menu;
+mod cli_util_bench;
+mod cli_util_loc;
 
 use std::collections::HashSet;
 use std::thread;
@@ -24,139 +86,99 @@ use tracing::{info, error};
 use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 
 use crate::cli_util_menu::{build_menu, print_menu};
-// FIX: Changed ssxl_initialize_engine to the correct FFI name: ssxl_start_runtime
-use ssxl_engine_ffi::ssxl_start_runtime; // External FFI function to bootstrap the engine core.
-use crate::cli_util_loc::scan_and_report_loc; // Imports the LOC function.
-use crate::actions::copy_dll_to_tester_project_at_boot; // Action to ensure the latest DLL is in the Godot project.
+use ssxl_shared::ssxl_start_runtime;
+use crate::cli_util_loc::scan_and_report_loc;
+use crate::actions::copy_dll_to_tester_project_at_boot;
 
-
-/// Prompts the user to press Enter before returning to the main menu.
 fn wait_for_enter() {
     println!("\nPress Enter to return to menu...");
-    // Read a line from stdin and discard the result.
     let _ = io::stdin().read_line(&mut String::new());
 }
 
-/// Sets up the logging system and performs critical engine initialization steps.
 fn init_logging_and_engine() {
-    // 1. Initialize Tracing/Logging Subscriber
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
-                .with_writer(io::stdout) // Direct log output to stdout.
-                .with_filter(LevelFilter::INFO), // Set the minimum logging level to INFO.
+                .with_writer(io::stdout)
+                .with_filter(LevelFilter::INFO),
         )
         .init();
 
     info!("SSXLBinary: Interactive CLI initializing.");
 
-    // 2. Initialize the Rust Core via FFI
-    // Calls the external C-compatible function to boot the engine's core state and runtime.
-    // FIX: Using the correct FFI function name: ssxl_start_runtime()
     if ssxl_start_runtime() {
         info!("Engine FFI core initialized.");
     } else {
-        // We log the failure but allow the CLI to continue for non-engine tasks (like LOC scan).
         error!("Failed to initialize Engine FFI core.");
     }
     
-    // 3. Copy DLL to Godot Project
-    // Ensure the compiled GDExtension DLL is copied into the Godot tester project
-    // before any Godot-related actions are run.
     if let Err(e) = copy_dll_to_tester_project_at_boot() {
-        // This is a critical warning, as Godot interaction will fail without the DLL.
         error!("DLL Copy Failed: {}", e);
     }
 }
 
 fn main() {
-    // Perform initial setup: logging, FFI, and DLL copy.
     init_logging_and_engine();
     
-    // --- FFI Linkage Fix for MSVC (LNK2019) ---
-    // The linker is aggressively discarding the ssxl_godot library (which implements 
-    // ssxl_set_cell and ssxl_notify_tilemap_update) because ssxl_cli doesn't 
-    // appear to call it directly. This symbolic reference forces the linker to include it.
     extern "C" {
-        // Declare the unresolved FFI functions provided by ssxl_godot
         fn ssxl_set_cell(x: i32, y: i32, tile_id: i32);
         fn ssxl_notify_tilemap_update();
     }
 
-    // WARNING FIX: Removed unnecessary `unsafe` blocks. Pointer coercion is safe.
-    // Create an unused symbolic reference to the function pointers.
     let _ = ssxl_set_cell as *const ();
     let _ = ssxl_notify_tilemap_update as *const ();
-    // ---------------------------------------------
     
-    // Run a Lines of Code (LOC) scan on the codebase at startup.
     scan_and_report_loc();
     
-    // Print welcome ASCII art.
     println!(
         r#"
-              (__)      
-              (oo)
-        /------\/
-        / |    ||
+                (__)      
+                (oo)
+          /------\/
+         / |    ||
         * ||----||
           ~~    ~~
 SSXL-ext Engine Console Initialized
 "#
     );
 
-    // Build the menu structure.
     let menu = build_menu();
-    // Set for input debouncing to prevent multiple actions from a single key press hold.
     let mut last_keys = HashSet::new();
 
-    // --- Main Interactive Console Loop ---
     loop {
-        // Display the menu options.
         print_menu(&menu);
         info!("Console: Awaiting menu selection...");
         print!("> ");
-        // Ensure the prompt character is immediately visible.
         io::stdout().flush().unwrap();
 
-        // Inner loop handles key polling and processing.
         loop {
-            // Poll for key events with a timeout to keep the loop responsive (500ms tempo).
             if event::poll(Duration::from_millis(500)).unwrap() {
                 if let Event::Key(key_event) = event::read().unwrap() {
                     if let KeyCode::Char(c) = key_event.code {
-                        let c = c.to_ascii_uppercase(); // Normalize input to uppercase.
+                        let c = c.to_ascii_uppercase();
 
-                        // Input Debounce Check: Only process if the key hasn't been seen recently.
                         if last_keys.insert(c) {
-                            // Find the corresponding menu item.
                             if let Some(item) = menu.iter().find(|m| m.key == c) {
                                 info!("Menu: Selected: {}", item.label);
                                 println!("\n[{}] {}\n", c, item.label);
                                 
-                                // Execute the action associated with the menu item.
                                 (item.action)();
 
-                                // Check for the exit key ('E').
                                 if c == 'E' {
                                     info!("Exit: Console closed. Engine shutdown complete.");
-                                    return; // Exit the main function, terminating the CLI.
+                                    return;
                                 }
 
-                                // Wait for user acknowledgment before returning to the main menu screen.
                                 wait_for_enter();
-                                // Break the inner polling loop to redraw the menu.
                                 break;
                             }
                         }
                     }
                 }
             } else {
-                // If the poll times out, clear the debounce set, allowing a new key press to be registered.
                 last_keys.clear();
             }
 
-            // Short pause for general loop control.
             thread::sleep(Duration::from_millis(10));
         }
     }
