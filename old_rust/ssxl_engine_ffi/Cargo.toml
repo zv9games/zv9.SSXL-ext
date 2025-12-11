@@ -1,0 +1,21 @@
+[package]
+name = "ssxl_engine_ffi"
+version = "0.9.1"
+edition = "2021"
+
+
+[dependencies]
+# --- INTERNAL DEPENDENCIES (Core Logic) ---
+ssxl_shared   = { path = "../ssxl_shared" }
+ssxl_math     = { path = "../ssxl_math" }
+ssxl_generate = { path = "../ssxl_generate" }
+godot              = { workspace = true }
+godot-ffi          = { workspace = true }
+
+# --- EXTERNAL DEPENDENCIES ---
+tracing            = { workspace = true } 
+tokio 			   = { workspace = true }
+once_cell          = { workspace = true }
+
+[features]
+godot = []

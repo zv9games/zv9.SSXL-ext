@@ -31,5 +31,3 @@ script = ExtResource("2_ga5s8")
 
 [node name="SSXLSignals" type="SSXLSignals" parent="."]
 script = ExtResource("3_47gu4")
-
-[node name="SSXLChunk" type="Node" parent="."]

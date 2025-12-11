@@ -1,0 +1,17 @@
+[package]
+name = "ssxl_shared"
+version = "0.9.1"
+edition = "2021"
+
+[dependencies]
+ssxl_math = { path = "../ssxl_math" }
+# Internal dependencies (Local Crates)
+serde       = { workspace = true }
+serde-big-array  = { workspace = true }
+bincode     = { workspace = true }
+thiserror   = { workspace = true }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+
+# External dependency (Workspace-Inherited)
+tracing     = { workspace = true }
