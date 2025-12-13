@@ -1,0 +1,16 @@
+[package]
+name = "ssxl_cli"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+ssxl_ext = { path = "../ssxl_ext" }
+flume = "0.12"
+rand = "0.8"
+
+tracing = "0.1" 
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+crossterm = "0.27"
+walkdir = "2.5"

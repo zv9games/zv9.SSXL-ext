@@ -1,0 +1,116 @@
+﻿Rust LOC Summary Report
+Generated (UTC): 2025-12-13 01:48:28
+Generated (Epoch Seconds): 1765590509
+Root Directory: C:\zv9\zv9.SSXL-ext\rust
+Target Extensions: rs, toml
+
+------------------------------------------------------
+ FILE LOC | Relative File Path
+------------------------------------------------------
+       10 LOC | Cargo.toml
+       75 LOC | manifest.rs
+       23 LOC | ssxl_config.toml
+       17 LOC | SSXL_forward.rs
+      377 LOC | SSXL_manual.rs
+       12 LOC | verbose.rs
+       23 LOC | ssxl_cli\build.rs
+       12 LOC | ssxl_cli\Cargo.toml
+      120 LOC | ssxl_cli\src\main.rs
+        8 LOC | ssxl_cli\src\ssxl_api_scan.rs
+      108 LOC | ssxl_cli\src\ssxl_menu.rs
+      126 LOC | ssxl_cli\src\ssxl_source_scan.rs
+       34 LOC | ssxl_ext\Cargo.toml
+       94 LOC | ssxl_ext\src\animate_conductor.rs
+       22 LOC | ssxl_ext\src\animate_events.rs
+       92 LOC | ssxl_ext\src\animate_worker.rs
+       49 LOC | ssxl_ext\src\bridge_ffi.rs
+       78 LOC | ssxl_ext\src\bridge_oracle.rs
+       24 LOC | ssxl_ext\src\bridge_signals.rs
+       80 LOC | ssxl_ext\src\cache.rs
+      103 LOC | ssxl_ext\src\config.rs
+       11 LOC | ssxl_ext\src\generate_anim_conductor.rs
+       80 LOC | ssxl_ext\src\generate_batch_processor.rs
+      104 LOC | ssxl_ext\src\generate_ca.rs
+      144 LOC | ssxl_ext\src\generate_ca_simulation.rs
+      121 LOC | ssxl_ext\src\generate_conductor.rs
+      102 LOC | ssxl_ext\src\generate_conductor_state.rs
+       74 LOC | ssxl_ext\src\generate_conductor_sync.rs
+       56 LOC | ssxl_ext\src\generate_manager.rs
+       69 LOC | ssxl_ext\src\generate_perlin.rs
+       88 LOC | ssxl_ext\src\generate_runtime.rs
+       22 LOC | ssxl_ext\src\generate_task_queue.rs
+       76 LOC | ssxl_ext\src\host_anim.rs
+       50 LOC | ssxl_ext\src\host_cleanup.rs
+      103 LOC | ssxl_ext\src\host_commands.rs
+       70 LOC | ssxl_ext\src\host_init.rs
+       57 LOC | ssxl_ext\src\host_poller.rs
+       58 LOC | ssxl_ext\src\host_render.rs
+       98 LOC | ssxl_ext\src\host_state.rs
+       67 LOC | ssxl_ext\src\host_tick.rs
+       53 LOC | ssxl_ext\src\host_tilemap.rs
+       34 LOC | ssxl_ext\src\host_tilemap_status.rs
+       85 LOC | ssxl_ext\src\lib.rs
+       71 LOC | ssxl_ext\src\math.rs
+       21 LOC | ssxl_ext\src\rhythm_manager.rs
+       50 LOC | ssxl_ext\src\shared_chunk.rs
+      110 LOC | ssxl_ext\src\shared_config.rs
+       46 LOC | ssxl_ext\src\shared_error.rs
+       57 LOC | ssxl_ext\src\shared_job.rs
+       35 LOC | ssxl_ext\src\shared_math.rs
+       43 LOC | ssxl_ext\src\shared_message.rs
+       73 LOC | ssxl_ext\src\shared_tile.rs
+      141 LOC | ssxl_ext\src\sync_pool.rs
+       85 LOC | ssxl_ext\src\sync_rhythm.rs
+       78 LOC | ssxl_ext\src\tools.rs
+       23 LOC | ssxl_cli\build.rs
+       12 LOC | ssxl_cli\Cargo.toml
+      120 LOC | ssxl_cli\src\main.rs
+        8 LOC | ssxl_cli\src\ssxl_api_scan.rs
+      108 LOC | ssxl_cli\src\ssxl_menu.rs
+      126 LOC | ssxl_cli\src\ssxl_source_scan.rs
+       34 LOC | ssxl_ext\Cargo.toml
+       94 LOC | ssxl_ext\src\animate_conductor.rs
+       22 LOC | ssxl_ext\src\animate_events.rs
+       92 LOC | ssxl_ext\src\animate_worker.rs
+       49 LOC | ssxl_ext\src\bridge_ffi.rs
+       78 LOC | ssxl_ext\src\bridge_oracle.rs
+       24 LOC | ssxl_ext\src\bridge_signals.rs
+       80 LOC | ssxl_ext\src\cache.rs
+      103 LOC | ssxl_ext\src\config.rs
+       11 LOC | ssxl_ext\src\generate_anim_conductor.rs
+       80 LOC | ssxl_ext\src\generate_batch_processor.rs
+      104 LOC | ssxl_ext\src\generate_ca.rs
+      144 LOC | ssxl_ext\src\generate_ca_simulation.rs
+      121 LOC | ssxl_ext\src\generate_conductor.rs
+      102 LOC | ssxl_ext\src\generate_conductor_state.rs
+       74 LOC | ssxl_ext\src\generate_conductor_sync.rs
+       56 LOC | ssxl_ext\src\generate_manager.rs
+       69 LOC | ssxl_ext\src\generate_perlin.rs
+       88 LOC | ssxl_ext\src\generate_runtime.rs
+       22 LOC | ssxl_ext\src\generate_task_queue.rs
+       76 LOC | ssxl_ext\src\host_anim.rs
+       50 LOC | ssxl_ext\src\host_cleanup.rs
+      103 LOC | ssxl_ext\src\host_commands.rs
+       70 LOC | ssxl_ext\src\host_init.rs
+       57 LOC | ssxl_ext\src\host_poller.rs
+       58 LOC | ssxl_ext\src\host_render.rs
+       98 LOC | ssxl_ext\src\host_state.rs
+       67 LOC | ssxl_ext\src\host_tick.rs
+       53 LOC | ssxl_ext\src\host_tilemap.rs
+       34 LOC | ssxl_ext\src\host_tilemap_status.rs
+       85 LOC | ssxl_ext\src\lib.rs
+       71 LOC | ssxl_ext\src\math.rs
+       21 LOC | ssxl_ext\src\rhythm_manager.rs
+       50 LOC | ssxl_ext\src\shared_chunk.rs
+      110 LOC | ssxl_ext\src\shared_config.rs
+       46 LOC | ssxl_ext\src\shared_error.rs
+       57 LOC | ssxl_ext\src\shared_job.rs
+       35 LOC | ssxl_ext\src\shared_math.rs
+       43 LOC | ssxl_ext\src\shared_message.rs
+       73 LOC | ssxl_ext\src\shared_tile.rs
+      141 LOC | ssxl_ext\src\sync_pool.rs
+       85 LOC | ssxl_ext\src\sync_rhythm.rs
+       78 LOC | ssxl_ext\src\tools.rs
+------------------------------------------------------
+     7324 LOC | TOTAL
+------------------------------------------------------

@@ -1,0 +1,42 @@
+[package]
+name = "ssxl_ext"
+version = "0.9.1"
+edition = "2021"
+# The crate type must be 'cdylib' for a Godot GDExtension
+[lib]
+crate-type = ["cdylib"]
+
+
+[dependencies]
+
+# --- 1. Godot Bindings (Essential Bridge) ---
+# Assuming 'godot' is the chosen Godot Rust binding crate (e.g., godot-rust/gdext)
+# This is the single most important dependency for the Host_* files (host_init.rs, host_tick.rs, etc.)
+godot = { version = "^0.4.4", features = ["serde"] } 
+# The 'serde' feature is often useful for robust configuration reading (config.rs, shared_config.rs)
+
+# --- 2. Concurrency and Async (The Finisher/Conductor Core) ---
+# Required for non-blocking generation, worker threads (sync_pool.rs), and task queues (generate_task_queue.rs)
+# and for the animation workers (animate_conductor.rs, animate_worker.rs).
+tokio = { version = "1.48", features = ["rt", "macros", "sync"] } 
+# Or another runtime like `smol`. 'tokio' is a robust choice for async work.
+
+# Flume is a popular multi-producer, single-consumer (MPSC) channel for communicating
+# between Rust threads and the Godot main thread (e.g., for chunk delivery in shared_message.rs).
+flume = "0.12" 
+
+# Rayon for data parallelism on generation tasks (e.g., in generate_batch_processor.rs)
+rayon = "1.11" 
+
+# --- 3. Generation Primitives ---
+# Noise is essential for procedural generation (generate_perlin.rs)
+noise = { version = "0.9", default-features = false } 
+# Small/shared helper to handle complex state management safely.
+once_cell = "1.21.3" 
+
+# --- 4. Utilities and Serialization ---
+# Serde is critical for robust configuration loading and data sharing across the FFI/Bridge (config.rs, shared_config.rs)
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.9.8"
+dashmap = "6.1.0"
+thiserror = "2.0.17"

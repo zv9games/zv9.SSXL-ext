@@ -4,63 +4,77 @@ for Godot 4.2+ →).
 
 🪶 Manifest v9.1.seed (direct write to tilemap)
 
-zv9.ssxl-ext/
-├── rust/
-│   ├── Cargo.toml                    # workspace + shared config
-│   ├── SSXL-ext/                         # the only real crate (everything lives here)
-│   │   ├── src/
-│   │   │   ├── cache.rs                    # pure Rust cache
-│   │   │   ├── config.rs                   # pure Rust settings
-│   │   │   ├── math.rs                     # pure Rust math helpers
-│   │   │   ├── tools.rs                    # pure Rust utilities
-│   │   │   │
-│   │   │   ├── animate_conductor.rs        # animation conductor
-│   │   │   ├── animate_worker.rs           # worker threads
-│   │   │   ├── animate_events.rs           # animation events
-│   │   │   │
-│   │   │   ├── generate_perlin.rs          # Perlin noise generator
-│   │   │   ├── generate_ca.rs              # cellular automata (main + rules + neighbors)
-│   │   │   ├── generate_ca_simulation.rs   # CA simulation helpers (split if needed)
-│   │   │   ├── generate_conductor.rs       # generation conductor
-│   │   │   ├── generate_conductor_state.rs # conductor state
-│   │   │   ├── generate_conductor_sync.rs  # conductor sync helpers
-│   │   │   ├── generate_manager.rs         # generator manager
-│   │   │   ├── generate_runtime.rs         # runtime manager
-│   │   │   ├── generate_task_queue.rs      # task queue
-│   │   │   ├── generate_batch_processor.rs # batch processor
-│   │   │   │
-│   │   │   ├── shared_chunk.rs             # chunk data + bounds
-│   │   │   ├── shared_tile.rs              # tile data + type
-│   │   │   ├── shared_message.rs           # messages
-│   │   │   ├── shared_config.rs            # shared config structs
-│   │   │   ├── shared_error.rs             # errors
-│   │   │   ├── shared_job.rs               # jobs
-│   │   │   ├── shared_math.rs              # shared math primitives
-│   │   │   │
-│   │   │   ├── sync_pool.rs                # worker pool
-│   │   │   ├── sync_rhythm.rs              # sync/timing
-│   │   │   │
-│   │   │   │ ────────────── Bridge / Host ──────────────
-│   │   │   ├── bridge_ffi.rs               # raw FFI entry points (danger zone)
-│   │   │   ├── bridge_signals.rs           # signal registration & emission
-│   │   │   ├── bridge_oracle.rs            # oracle helper
-│   │   │   │
-│   │   │   ├── host_init.rs                # Godot engine initialization
-│   │   │   ├── host_tick.rs                # Godot tick loop
-│   │   │   ├── host_poller.rs              # Godot poller
-│   │   │   ├── host_render.rs              # Godot render batch
-│   │   │   ├── host_state.rs               # Godot engine state
-│   │   │   ├── host_cleanup.rs             # Godot cleanup
-│   │   │   ├── host_commands.rs            # Godot command handling
-│   │   │   ├── host_tilemap.rs             # Godot TileMap integration
-│   │   │   ├── host_tilemap_status.rs      # Godot status reporter
-│   │   │   ├── host_anim.rs                # Godot animation API
-│   │   │   │
-│   │   │   └── lib.rs                      # re-exports only (super clean)
-│   │   └── Cargo.toml
-│   ├── ssxl_cli/                         # CLI stays separate
-│   │   └── src/main.rs
-│   └── ...
+PS C:\zv9\zv9.ssxl-ext\rust> Get-ChildItem -Path "C:\zv9\zv9.ssxl-ext\rust" -Recurse | Select-Object FullName
+
+FullName
+--------
+C:\zv9\zv9.ssxl-ext\rust\loc_reports
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext
+C:\zv9\zv9.ssxl-ext\rust\Cargo.lock
+C:\zv9\zv9.ssxl-ext\rust\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\LOC_scan.ps1
+C:\zv9\zv9.ssxl-ext\rust\manifest.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_config.toml
+C:\zv9\zv9.ssxl-ext\rust\SSXL_forward.rs
+C:\zv9\zv9.ssxl-ext\rust\SSXL_manual.rs
+C:\zv9\zv9.ssxl-ext\rust\SSXL_noob_survival_guide.gd
+C:\zv9\zv9.ssxl-ext\rust\verbose.rs
+C:\zv9\zv9.ssxl-ext\rust\loc_reports\loc_summary_1507901416...
+C:\zv9\zv9.ssxl-ext\rust\loc_reports\rust.txt
+C:\zv9\zv9.ssxl-ext\rust\loc_reports\ssxl_cli.txt
+C:\zv9\zv9.ssxl-ext\rust\loc_reports\ssxl_ext.txt
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\build.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\main.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_api_scan.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_menu.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_source_scan.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_conductor.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_events.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_worker.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\bridge_ffi.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\bridge_oracle.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\bridge_signals.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\cache.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\config.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_anim_conduct...
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_batch_proces...
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_ca.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_ca_simulatio...
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_conductor.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_conductor_st...
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_conductor_sy...
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_manager.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_perlin.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_runtime.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_task_queue.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_anim.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_cleanup.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_commands.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_init.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_poller.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_render.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_state.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tick.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tilemap.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tilemap_status.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\lib.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\math.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\rhythm_manager.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_chunk.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_config.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_error.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_job.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_math.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_message.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_tile.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_pool.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_rhythm.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\tools.rs
 
 
-
+PS C:\zv9\zv9.SSXL-ext\rust>

@@ -1,0 +1,76 @@
+SSXL-ext Live LOC Report
+Generated (Epoch Seconds): 1765593524
+...
+------------------------------------------------------
+        59 LOC | rust/ssxl_ext/src\animate_conductor.rs
+        16 LOC | rust/ssxl_ext/src\animate_events.rs
+        85 LOC | rust/ssxl_ext/src\animate_worker.rs
+        38 LOC | rust/ssxl_ext/src\bridge_ffi.rs
+        71 LOC | rust/ssxl_ext/src\bridge_oracle.rs
+         9 LOC | rust/ssxl_ext/src\bridge_signals.rs
+        49 LOC | rust/ssxl_ext/src\cache.rs
+        70 LOC | rust/ssxl_ext/src\config.rs
+         7 LOC | rust/ssxl_ext/src\generate_anim_conductor.rs
+        55 LOC | rust/ssxl_ext/src\generate_batch_processor.rs
+        75 LOC | rust/ssxl_ext/src\generate_ca.rs
+        97 LOC | rust/ssxl_ext/src\generate_ca_simulation.rs
+       108 LOC | rust/ssxl_ext/src\generate_conductor.rs
+        66 LOC | rust/ssxl_ext/src\generate_conductor_state.rs
+        43 LOC | rust/ssxl_ext/src\generate_conductor_sync.rs
+        36 LOC | rust/ssxl_ext/src\generate_manager.rs
+        51 LOC | rust/ssxl_ext/src\generate_perlin.rs
+        47 LOC | rust/ssxl_ext/src\generate_runtime.rs
+        17 LOC | rust/ssxl_ext/src\generate_task_queue.rs
+        49 LOC | rust/ssxl_ext/src\host_anim.rs
+        29 LOC | rust/ssxl_ext/src\host_cleanup.rs
+        41 LOC | rust/ssxl_ext/src\host_commands.rs
+        32 LOC | rust/ssxl_ext/src\host_init.rs
+        29 LOC | rust/ssxl_ext/src\host_poller.rs
+        41 LOC | rust/ssxl_ext/src\host_render.rs
+        58 LOC | rust/ssxl_ext/src\host_state.rs
+        52 LOC | rust/ssxl_ext/src\host_tick.rs
+        27 LOC | rust/ssxl_ext/src\host_tilemap.rs
+        28 LOC | rust/ssxl_ext/src\host_tilemap_status.rs
+        61 LOC | rust/ssxl_ext/src\lib.rs
+        40 LOC | rust/ssxl_ext/src\math.rs
+        19 LOC | rust/ssxl_ext/src\rhythm_manager.rs
+        30 LOC | rust/ssxl_ext/src\shared_chunk.rs
+        87 LOC | rust/ssxl_ext/src\shared_config.rs
+        32 LOC | rust/ssxl_ext/src\shared_error.rs
+        37 LOC | rust/ssxl_ext/src\shared_job.rs
+        12 LOC | rust/ssxl_ext/src\shared_math.rs
+        23 LOC | rust/ssxl_ext/src\shared_message.rs
+        47 LOC | rust/ssxl_ext/src\shared_tile.rs
+        89 LOC | rust/ssxl_ext/src\sync_pool.rs
+        58 LOC | rust/ssxl_ext/src\sync_rhythm.rs
+        52 LOC | rust/ssxl_ext/src\tools.rs
+        61 LOC | rust/ssxl_cli/src\main.rs
+         6 LOC | rust/ssxl_cli/src\ssxl_api_scan.rs
+       101 LOC | rust/ssxl_cli/src\ssxl_menu.rs
+        97 LOC | rust/ssxl_cli/src\ssxl_source_scan.rs
+        18 LOC | ../ssxl_engine_tester\addons\S2O_godot_plugin\Aetherion.gd
+        31 LOC | ../ssxl_engine_tester\addons\S2O_godot_plugin\S2O_plugin.gd
+        18 LOC | ../ssxl_engine_tester\addons\S2O_godot_plugin\SSXL.gd
+        66 LOC | ../ssxl_engine_tester\root_scripts\cameras.gd
+         1 LOC | ../ssxl_engine_tester\root_scripts\camera_2.gd
+        62 LOC | ../ssxl_engine_tester\root_scripts\controlpanelanimation.gd
+        98 LOC | ../ssxl_engine_tester\root_scripts\controlpanelgenlogic.gd
+        73 LOC | ../ssxl_engine_tester\root_scripts\controlpanelsignalhandler.gd
+        88 LOC | ../ssxl_engine_tester\root_scripts\controlpaneluisetup.gd
+       109 LOC | ../ssxl_engine_tester\root_scripts\controlpanelutility.gd
+       101 LOC | ../ssxl_engine_tester\root_scripts\control_panel.gd
+        21 LOC | ../ssxl_engine_tester\root_scripts\init.gd
+         1 LOC | ../ssxl_engine_tester\root_scripts\logger.gd
+        85 LOC | ../ssxl_engine_tester\root_scripts\main.gd
+        23 LOC | ../ssxl_engine_tester\root_scripts\root.gd
+        11 LOC | ../ssxl_engine_tester\root_scripts\scenescanner.gd
+         5 LOC | ../ssxl_engine_tester\root_scripts\ssxl_signals.gd
+        27 LOC | ../ssxl_engine_tester\root_scripts\ssxl_tilemap.gd
+         3 LOC | ../ssxl_engine_tester\root_scripts\tester.gd
+        56 LOC | ../ssxl_engine_tester\tests\headless_gen_pipeline.gd
+        20 LOC | ../ssxl_engine_tester\test_scripts\control_panel.gd
+        44 LOC | ../ssxl_engine_tester\test_scripts\test_ffi_data.gd
+------------------------------------------------------
+        2237 LOC | *.rs (Rust Total)
+        961 LOC | *.gd (GDScript Total)
+        3198 LOC | TOTALS

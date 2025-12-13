@@ -2,8 +2,6 @@ function Generate-LOCReportsPerLanguage {
     param(
         [string[]]$TargetDirs,
         [string[]]$RustExts = @("rs", "toml"),
-        [string[]]$GdScriptExts = @("gd", "gdc"),
-        [string[]]$OtherExts = @("md"),
         [string]$OutputBaseDir = "loc_reports",
         [string]$SummaryFile = $("loc_summary_{0}.txt" -f (Get-Random))
     )
