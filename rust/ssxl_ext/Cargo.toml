@@ -40,3 +40,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 toml = "0.9.8"
 dashmap = "6.1.0"
 thiserror = "2.0.17"
+
+[features]
+default = []
+# 🎯 CRITICAL FIX: Define the feature that the CLI relies on for conditional compilation.
+ssxl_cli = []

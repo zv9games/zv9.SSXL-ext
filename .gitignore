@@ -28,5 +28,7 @@ __pycache__/
 
 # Your custom heavy folders
 **/Target/
-SSXL_engine_tester/godot.windows.editor.x86_64.exe
-SSXLtester2/godot.windows.editor.x86_64.exe
+SSXL_engine_tester/Godot_v4.5.1-stable_win64.exe
+SSXLtester2/Godot_v4.5.1-stable_win64.exe
+*.exe
+

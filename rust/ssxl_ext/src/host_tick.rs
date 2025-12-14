@@ -26,7 +26,6 @@ impl INode for SSXLConductor {
     }
 
     /// The Godot engine's main loop update function.
-    /// This is where we execute the non-blocking polling logic.
     fn process(&mut self, _delta: f64) {
         let host_state: &HostState = get_host_state().expect("HostState not initialized in _process");
         
@@ -42,7 +41,6 @@ impl INode for SSXLConductor {
 #[godot_api]
 impl SSXLConductor {
     /// Public method called by GDScript to kick off generation.
-    /// This wraps the host_commands::handle_start_command logic.
     #[func]
     fn start_generation(&mut self, target_tilemap: Gd<Node>) -> bool {
         let host_state_mut = match get_host_state_mut() {

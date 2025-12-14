@@ -7,9 +7,10 @@ use tracing::info;
 
 // Note: We use extern crate self as ssxl_cli to resolve actions defined in main.rs
 extern crate self as ssxl_cli;
-// Only importing the one test function needed, plus the helper functions
+// FIX 1: Import the new action function from main.rs
 use ssxl_cli::{
-    run_grand_unified_test
+    run_grand_unified_test,
+    launch_godot_project // <--- NEW IMPORT
 };
 
 /// Structure representing a single menu item and its action.
@@ -22,6 +23,13 @@ pub struct CliAction {
 
 pub fn build_menu() -> Vec<CliAction> {
     vec![
+        // FIX 2: Add the new action to launch Godot
+        CliAction {
+            key: 'L',
+            label: "🚀 press L: Launch Godot Project (Full Integration Test)",
+            id: "launch_godot",
+            action: Box::new(launch_godot_project)
+        },
         // Only the Grand Unified Test (GUT) remains for one-click validation.
         CliAction {
             key: 'G',
@@ -69,7 +77,7 @@ pub fn run_interactive_loop(menu: Vec<CliAction>) {
                                 
                                 (item.action)(); // Execute the action closure
 
-                                if c == 'U' {   
+                                if c == 'U' {    
                                     return;
                                 }
 

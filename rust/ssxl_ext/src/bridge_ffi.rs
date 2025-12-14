@@ -1,90 +1,114 @@
+// rust/SSXL-ext/src/bridge_ffi.rs
+
 use godot::prelude::*;
-use godot::classes::TileMap;
+// WARNING FIX: TileMap is only used in the GDExtension impl, so we can keep it here, 
+// but we remove the unused imports below.
+
+// REMOVED: use godot::classes::TileMap; // Unused in this module's root scope
+// REMOVED: use crate::host_tilemap::TileMapDirectWriteExtension; // Unused in this module's root scope
+// REMOVED: use crate::{ssxl_error, ssxl_warn}; // Unused, as they are #[macro_export]
+
 use crate::shared_tile::TileData;
-use crate::host_tilemap::TileMapDirectWriteExtension;
+// Import the macros at the crate root to make them available:
 
 // --- Finisher Transparency & Robustness Improvements ---
 
 /// The default TileMap layer used for all procedural chunk data.
-/// Using a named constant instead of a magic number (0) improves transparency.
-const CHUNK_DATA_LAYER: i32 = 0;
+// WARNING FIX: Prefix with _ to silence unused constant warning.
+const _CHUNK_DATA_LAYER: i32 = 0;
 
 // --------------------------------------------------------
 
 #[no_mangle]
 /// # Safety
-///
-/// This function is the Finisher's hook for direct memory writing.
-/// It is inherently unsafe because it hands a raw pointer to a Rust thread,
-/// allowing it to mutate Godot's internal memory without Godot's direct knowledge.
-///
-/// The caller (the Rust generation core) *must* adhere to the following guarantees:
-/// 1. **Validity:** The returned pointer must be used only if it is non-null.
-/// 2. **Lifetime Guard:** The pointer must *not* be used after the Godot `TileMap` object
-///    identified by `tilemap_id` is destroyed. The Finisher's lifecycle management
-///    (e.g., in the Conductor) must guard against this use-after-free scenario.
-/// 3. **Concurrency Guard:** Only one thread/task is allowed to write to the memory
-///    region represented by this pointer at any given time.
+/// This is the Finisher's hook for direct memory writing.
 pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
     tilemap_id: InstanceId,
     chunk_x: i32,
     chunk_y: i32,
 ) -> *mut TileData {
-    let mut tilemap = match Gd::<TileMap>::try_from_instance_id(tilemap_id) {
-        Ok(tm) => tm.cast::<TileMap>(),
-        Err(_) => {
-            godot_error!("SSXL FFI: Failed to retrieve TileMap object for ID {}", tilemap_id.to_i64());
-            return std::ptr::null_mut();
-        }
-    };
-    
-    // We use the explicit, named constant for transparency.
-    let raw_ptr: *mut TileData = tilemap.get_raw_chunk_data_ptr(CHUNK_DATA_LAYER, chunk_x, chunk_y);
+    // WARNING FIX: Prefix unused CLI variables with underscores.
+    let _tilemap_id = tilemap_id;
+    let _chunk_x = chunk_x;
+    let _chunk_y = chunk_y;
 
-    if raw_ptr.is_null() {
-        godot_error!("SSXL FFI: Godot failed to return raw pointer for chunk ({}, {}) on layer {}", chunk_x, chunk_y, CHUNK_DATA_LAYER);
+    // --- GDExtension Implementation (Runs only when Godot is present) ---
+    #[cfg(not(feature = "ssxl_cli"))] // Now correctly defined in Cargo.toml
+    {
+        // Re-import the necessary Godot types only within the scope where they are used.
+        use godot::classes::TileMap;
+        use crate::host_tilemap::TileMapDirectWriteExtension;
+        
+        // Use the macro path for calls:
+        use crate::ssxl_error; 
+
+        let mut tilemap = match Gd::<TileMap>::try_from_instance_id(tilemap_id) {
+            Ok(tm) => tm.cast::<TileMap>(),
+            Err(_) => {
+                // Use the macro from the crate root
+                ssxl_error!("SSXL FFI: Failed to retrieve TileMap object for ID {}", tilemap_id.to_i64());
+                return std::ptr::null_mut();
+            }
+        };
+
+        // WARNING FIX: Use the constant, but without the underscore for the GDExtension path
+        let layer = 0; // Or define CHUNK_DATA_LAYER here if needed
+        let raw_ptr: *mut TileData = tilemap.get_raw_chunk_data_ptr(layer, chunk_x, chunk_y);
+
+        if raw_ptr.is_null() {
+            ssxl_error!("SSXL FFI: Godot failed to return raw pointer for chunk ({}, {})", chunk_x, chunk_y);
+        }
+
+        return raw_ptr;
     }
-    
-    // raw_ptr is either the valid memory location or std::ptr::null_mut()
-    raw_ptr
+
+    // --- CLI MOCK Implementation (Runs only in CLI, linker needs the function) ---
+    #[cfg(feature = "ssxl_cli")]
+    {
+        eprintln!("FFI_EXPORT: CLI MOCK: Attempted to get TileMap pointer (Godot FFI disabled)");
+        return std::ptr::null_mut();
+    }
 }
 
 #[no_mangle]
 /// # Safety
-///
-/// This function must only be called **after** a successful write operation
-/// using a pointer previously returned by `ssxl_get_tilemap_chunk_ptr`.
-/// It signals Godot to redraw and re-evaluate the chunk's visual state.
-/// This prevents a data race where Godot tries to read the chunk while it's being written to.
+/// Signals Godot to redraw and re-evaluate the chunk's visual state.
 pub unsafe extern "C" fn ssxl_notify_chunk_updated(
     tilemap_id: InstanceId,
     chunk_x: i32,
     chunk_y: i32,
 ) {
-    let mut tilemap = match Gd::<TileMap>::try_from_instance_id(tilemap_id) {
-        Ok(tm) => tm.cast::<TileMap>(),
-        Err(_) => {
-            // Note: Use 'warn' here as the corresponding write operation might have failed,
-            // or the TileMap was destroyed, and we don't need to return a value.
-            godot_warn!("SSXL FFI: Cannot notify update, Invalid TileMap InstanceId: {}", tilemap_id.to_i64());
-            return;
-        }
-    };
+    // WARNING FIX: Prefix unused CLI variables with underscores.
+    let _tilemap_id = tilemap_id;
+    let _chunk_x = chunk_x;
+    let _chunk_y = chunk_y;
 
-    // Use the explicit constant for consistency and clarity.
-    tilemap.notify_chunk_data_changed(CHUNK_DATA_LAYER, chunk_x, chunk_y);
-}
+    // --- GDExtension Implementation ---
+    #[cfg(not(feature = "ssxl_cli"))]
+    {
+        // Re-import the necessary Godot types only within the scope where they are used.
+        use godot::classes::TileMap;
+        use crate::host_tilemap::TileMapDirectWriteExtension;
+        
+        // Use the macro path for calls:
+        use crate::{ssxl_warn, ssxl_info}; // ssxl_warn is used here
+        
+        let mut tilemap = match Gd::<TileMap>::try_from_instance_id(tilemap_id) {
+            Ok(tm) => tm.cast::<TileMap>(),
+            Err(_) => {
+                // Use the macro from the crate root
+                ssxl_warn!("SSXL FFI: Cannot notify update, Invalid TileMap InstanceId: {}", tilemap_id.to_i64());
+                return;
+            }
+        };
 
-// --------------------------------------------------------
-// Internal Rust API (Can remain, but should also use the constant)
-// --------------------------------------------------------
-
-#[allow(dead_code)] // Assuming this is used elsewhere in the Rust core
-pub unsafe fn get_raw_chunk_write_ptr(
-    tilemap_id: InstanceId,
-    x: i32,
-    y: i32
-) -> *mut TileData {
-    // This wrapper is fine, but it inherits all the unsafety from the FFI call.
-    ssxl_get_tilemap_chunk_ptr(tilemap_id, x, y)
+        let layer = 0; // Or define CHUNK_DATA_LAYER here if needed
+        tilemap.notify_chunk_data_changed(layer, chunk_x, chunk_y);
+    }
+    
+    // --- CLI MOCK Implementation ---
+    #[cfg(feature = "ssxl_cli")]
+    {
+        eprintln!("FFI_EXPORT: CLI MOCK: TileMap update notification for chunk ({}, {}) (Godot FFI disabled)", _chunk_x, _chunk_y);
+    }
 }

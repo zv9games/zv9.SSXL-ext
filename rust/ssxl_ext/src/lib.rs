@@ -1,5 +1,8 @@
 use godot::prelude::*;
 use godot::init::{ExtensionLibrary, InitLevel};
+// 🔥 CRITICAL FIX: Removed the conflicting import. The macros are available
+// at the crate root because they are marked #[macro_export] in tools.rs.
+// use crate::{ssxl_error, ssxl_info}; 
 
 // ----------------------------------------------------
 // 1. PURE RUST CORE MODULES
@@ -41,10 +44,10 @@ pub mod generate_ca_simulation;
 pub mod generate_conductor;
 pub mod generate_conductor_state;
 // ✅ CRITICAL FIX: Add the file containing the GenerationManager struct and FFI exports 1 & 2.
-pub mod generate_manager; 
+pub mod generate_manager;
 // ✅ CRITICAL FIX: Add the file containing the final bitmask FFI export (ssxl_ext_bitmask_to_id).
 // Assuming you placed it in a file named generate_utils.rs, which is common for such utilities.
-pub mod generate_utils; 
+pub mod generate_utils;
 
 // ----------------------------------------------------
 // 4. ANIMATION / SIMULATION SUBSYSTEM
@@ -86,15 +89,23 @@ struct SSXLExtension;
 #[gdextension]
 unsafe impl ExtensionLibrary for SSXLExtension {
     
+    // NOTE: The `init` function is typically required here to register all classes with Godot's ClassDB.
+    // E.g., fn init(builder: &mut InitBuilder) { builder.register_class::<YourMainClass>(); }
+    
     fn on_level_init(level: InitLevel) {
         if level == InitLevel::Core {
+            // Core initialization is often empty or uses println!/eprintln! for safety
         }
 
         if level == InitLevel::Scene {
             match host_init::initialize_ssxl_core() {
-                Ok(_) => ssxl_info!("Core resources successfully initialized and workers started."),
+                // 🔥 FINAL FIX: Use the crate root path: crate::ssxl_info!
+                Ok(_) => crate::ssxl_info!("Core resources successfully initialized and workers started."),
                 Err(e) => {
-                    godot_error!("FATAL: SSXL Core failed to initialize. Reason: {}", e);
+                    // 🔥 FINAL FIX: Use the crate root path: crate::ssxl_error!
+                    crate::ssxl_error!("FATAL: SSXL Core failed to initialize. Reason: {}", e);
+                    // It's still safer to use godot_error! here, but only if the error log from ssxl_error! fails to appear.
+                    // godot_error!("FATAL: SSXL Core failed to initialize. Reason: {}", e); 
                 }
             }
         }
@@ -103,7 +114,8 @@ unsafe impl ExtensionLibrary for SSXLExtension {
     fn on_level_deinit(level: InitLevel) {
         if level == InitLevel::Scene {
             host_cleanup::cleanup_ssxl_core();
-            godot_print!("SSXL GDExtension terminated successfully.");
+            // 🔥 FINAL FIX: Use the crate root path: crate::ssxl_info!
+            crate::ssxl_info!("SSXL GDExtension terminated successfully.");
         }
     }
 }

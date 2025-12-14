@@ -5,7 +5,7 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-ssxl_ext = { path = "../ssxl_ext" }
+ssxl_ext = { path = "../ssxl_ext", features = ["ssxl_cli"] }
 flume = "0.12"
 rand = "0.8"
 

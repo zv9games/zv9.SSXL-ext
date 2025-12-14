@@ -14,6 +14,7 @@ pub mod ssxl_testing; // ✅ ADDED: New module for all test implementations
 use std::io;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command; // <--- NEW IMPORT for Command execution
 use tracing::{info, error, warn};
 use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 
@@ -21,6 +22,9 @@ use tracing_subscriber::{self, filter::LevelFilter, prelude::*};
 pub use ssxl_api_scan::print_godot_api_surface;
 // ✅ ADDED: Re-export the single, combined test function
 pub use ssxl_testing::run_grand_unified_test;
+// Re-export launch_godot_project for ssxl_menu.rs
+// REMOVED: This line caused the E0255 error because the function is defined later in this module.
+// pub use launch_godot_project; 
 
 // --- FFI Declarations (Exported by ssxl_ext) ---
 extern "C" {
@@ -34,6 +38,43 @@ extern "C" {
 
 
 // --- RUNTIME BOOT AND UTILITIES ---
+
+/// Public function exposed to the CLI menu to launch the Godot project.
+pub fn launch_godot_project() {
+    // Note: All NBSPs should now be removed.
+
+    info!("Attempting to launch Godot project: ../SSXLtester2...");
+
+    // 🔥 FIX APPLIED: Using the relative path to the Godot executable found in the tester folder.
+    let godot_exe = "../SSXLtester2/Godot_v4.5.1-stable_win64.exe";
+    let project_dir = PathBuf::from("../SSXLtester2");
+    let project_file = project_dir.join("project.godot");
+
+    if !project_file.exists() {
+        error!("❌ Godot Launch Failed: Project file not found at {}. Is the path correct?", project_file.display());
+        return;
+    }
+
+    match Command::new(godot_exe)
+        // 🔥 FIX APPLIED: Changed "--path" to "--editor" to launch the Godot GUI instead of running headless.
+        .arg("--editor") 
+        .arg(&project_dir) // Pass the project directory path
+        .spawn() // Spawn the process and let it run independently
+    {
+        Ok(mut child) => {
+            info!("🚀 Godot launched successfully. Waiting for Godot to close...");
+            // Optionally wait for the child process to finish
+            match child.wait() {
+                Ok(status) => info!("Godot exited with status: {}", status),
+                Err(e) => error!("Error waiting for Godot process: {}", e),
+            }
+        }
+        Err(e) => {
+            error!("❌ Failed to execute Godot. Check executable path: {}. Error: {}", godot_exe, e);
+        }
+    }
+}
+
 
 /// ✅ REAL: Calls the FFI function in ssxl_ext.dll to initialize the engine core.
 fn ssxl_start_runtime() -> bool {
@@ -121,12 +162,12 @@ fn main() {
     
     println!(
         r#"
-                  (__)   
-                  (oo)
-            /------\/
-           / |    ||
-          * ||----||
-            ~~    ~~
+            (__)  
+            (oo)
+      /------\/
+     / |    ||
+    * ||----||
+      ~~    ~~
 SSXL-ext Engine Console Initialized
 "#
     );

@@ -1,32 +1,57 @@
 // rust/SSXL-ext/src/tools.rs
 
 use godot::prelude::*;
+use std::time::Instant;
 
-/// Prints a standard information message to the Godot console.
+// ----------------------------------------------------
+// 1. CUSTOM LOGGING MACROS (CONDITIONALLY COMPILED)
+// ----------------------------------------------------
+
+/// Prints a standard information message.
 #[macro_export]
 macro_rules! ssxl_info {
     ($($arg:tt)*) => ({
-        godot::prelude::godot_print!("INFO [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!())
+        // === CLI MOCK IMPLEMENTATION (Safe) ===
+        #[cfg(feature = "ssxl_cli")]
+        eprintln!("INFO [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        
+        // === GDExtension IMPLEMENTATION ===
+        #[cfg(not(feature = "ssxl_cli"))]
+        godot::prelude::godot_print!("INFO [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
     });
 }
 
-/// Prints a warning message to the Godot console.
+/// Prints a warning message.
 #[macro_export]
 macro_rules! ssxl_warn {
     ($($arg:tt)*) => ({
-        godot::prelude::godot_warn!("WARN [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!())
+        // === CLI MOCK IMPLEMENTATION (Safe) ===
+        #[cfg(feature = "ssxl_cli")]
+        eprintln!("WARN [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        
+        // === GDExtension IMPLEMENTATION ===
+        #[cfg(not(feature = "ssxl_cli"))]
+        godot::prelude::godot_warn!("WARN [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
     });
 }
 
-/// Prints an error message to the Godot console.
+/// Prints an error message.
 #[macro_export]
 macro_rules! ssxl_error {
     ($($arg:tt)*) => ({
-        godot::prelude::godot_error!("ERROR [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!())
+        // === CLI MOCK IMPLEMENTATION (Safe) ===
+        #[cfg(feature = "ssxl_cli")]
+        eprintln!("ERROR [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        
+        // === GDExtension IMPLEMENTATION ===
+        #[cfg(not(feature = "ssxl_cli"))]
+        godot::prelude::godot_error!("ERROR [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
     });
 }
 
-// rust/SSXL-ext/src/tools.rs
+// ----------------------------------------------------
+// 2. COORDINATE UTILITIES
+// ----------------------------------------------------
 
 /// Trait for converting Rust coordinate types to Godot Vector2i.
 pub trait ToGodotVector {
@@ -41,15 +66,12 @@ impl ToGodotVector for (i32, i32) {
     }
 }
 
-// Implementation for the shared_tile::TileData structure (if it holds coordinates)
-// Or for a reference to the chunk position
-// impl ToGodotVector for &ChunkPosition { ... }
-
-// rust/SSXL-ext/src/tools.rs
-
-use std::time::Instant;
+// ----------------------------------------------------
+// 3. PROFILER UTILITY
+// ----------------------------------------------------
 
 /// A simple struct for timing code execution blocks.
+// 🔥 FIX: Added 'pub' to make the struct accessible to other modules
 pub struct Profiler {
     start: Instant,
     name: &'static str,
@@ -58,6 +80,7 @@ pub struct Profiler {
 
 impl Profiler {
     /// Starts a new profiler instance if profiling is globally enabled.
+    // 🔥 FIX: Added 'pub' to make the method accessible
     pub fn start(name: &'static str) -> Self {
         // NOTE: In a real project, 'is_profiling_enabled' would be read from config.rs
         const IS_PROFILING_ENABLED: bool = true;
@@ -75,18 +98,12 @@ impl Drop for Profiler {
     fn drop(&mut self) {
         if self.enabled {
             let duration = self.start.elapsed();
-            // Use standard print/error for micro-profiling to ensure data integrity
+            // This already correctly uses eprintln!
             eprintln!(
-                "PERF [{}]: Execution time: {:.3}ms", 
-                self.name, 
+                "PERF [{}]: Execution time: {:.3}ms",
+                self.name,
                 duration.as_secs_f64() * 1000.0
             );
         }
     }
 }
-
-// Example usage:
-// {
-//     let _p = Profiler::start("CA Simulation Step");
-//     // ... heavy computation here ...
-// } // Duration logged automatically when _p goes out of scope.
