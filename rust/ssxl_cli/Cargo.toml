@@ -1,11 +1,14 @@
+# ssxl_cli/Cargo.toml
 [package]
 name = "ssxl_cli"
 version = "0.1.0"
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
-ssxl_ext = { path = "../ssxl_ext", features = ["ssxl_cli"] }
+# 🎯 CRITICAL FIX: To prevent the Godot class registration panic in the CLI:
+# 1. default-features = false: Disables the 'default' feature (which enables 'godot-binding').
+# 2. features = []: Ensures no Godot-specific features are enabled.
+ssxl_ext = { path = "../ssxl_ext", default-features = false, features = [] }
 flume = "0.12"
 rand = "0.8"
 

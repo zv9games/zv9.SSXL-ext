@@ -1,33 +1,9 @@
-[gd_scene load_steps=8 format=3 uid="uid://cwhh07dy846y7"]
-
-[ext_resource type="Script" uid="uid://bf4m53dvayhbc" path="res://root_scripts/main.gd" id="1_oaegt"]
-[ext_resource type="Script" uid="uid://4g1qywnkcmig" path="res://root_scripts/ssxl_engine.gd" id="2_ga5s8"]
-[ext_resource type="TileSet" uid="uid://b6ts3mi2pbpvq" path="res://pacman_tilemap.tres" id="2_pkfb0"]
-[ext_resource type="Script" uid="uid://ctfnvsx0y2hxr" path="res://root_scripts/ssxl_signals.gd" id="3_47gu4"]
-[ext_resource type="Script" uid="uid://c511dl0orh2d3" path="res://root_scripts/ssxl_oracle.gd" id="3_jyi58"]
-[ext_resource type="Script" uid="uid://cuuqayqgvvtsv" path="res://root_scripts/ssxl_tilemap.gd" id="5_47gu4"]
-[ext_resource type="Script" uid="uid://ctd65mi5eo16e" path="res://root_scripts/camera_2d.gd" id="6_e11vb"]
+[gd_scene format=3 uid="uid://cwhh07dy846y7"]
 
 [node name="main" type="Node"]
-script = ExtResource("1_oaegt")
-atlas_coord = Vector2i(4, 4)
 
 [node name="Camera2D" type="Camera2D" parent="."]
 anchor_mode = 0
 zoom = Vector2(0.5, 0.5)
-script = ExtResource("6_e11vb")
 
-[node name="SSXLTilemap" type="SSXLTilemap" parent="."]
-tile_source_id = 0
-z_index = 1
-tile_set = ExtResource("2_pkfb0")
-script = ExtResource("5_47gu4")
-
-[node name="SSXLOracle" type="SSXLOracle" parent="."]
-script = ExtResource("3_jyi58")
-
-[node name="SSXLEngine" type="SSXLEngine" parent="."]
-script = ExtResource("2_ga5s8")
-
-[node name="SSXLSignals" type="SSXLSignals" parent="."]
-script = ExtResource("3_47gu4")
+[node name="SSXLConductor" type="SSXLConductor" parent="."]

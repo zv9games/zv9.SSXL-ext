@@ -1,8 +1,29 @@
-SSXL-ext is a mythic core — a modular, dimension-agnostic  
-procedural generation engine coded in Rust as a GDExtension  
-for Godot 4.2+ →).
+# 🪶 SSXL‑ext — Manifest v9.1.seed
+### (direct‑write‑to‑tilemap edition)
 
-🪶 Manifest v9.1.seed (direct write to tilemap)
+**SSXL‑ext** is a mythic core — a modular, dimension‑agnostic  
+procedural generation engine coded in **Rust** as a **GDExtension**  
+for **Godot 4.2+**.
+
+## ✅ Required Godot Extension Files (Native Core)
+
+
+SSXL.gdextension  
+SSXL_ext.dll
+
+
+## ✅ Required Plugin Files (Editor‑Side Plugin)
+
+
+addons/<plugin_name>/
+
+plugin.cfg  
+plugin.gd
+SSXL.gd
+
+
+
+
 
 PS C:\zv9\zv9.ssxl-ext\rust> Get-ChildItem -Path "C:\zv9\zv9.ssxl-ext\rust" -Recurse | Select-Object FullName
 
@@ -12,7 +33,7 @@ C:\zv9\zv9.ssxl-ext\rust\loc_reports
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext
 C:\zv9\zv9.ssxl-ext\rust\Cargo.lock
-C:\zv9\zv9.ssxl-ext\rust\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\cargo.toml
 C:\zv9\zv9.ssxl-ext\rust\LOC_scan.ps1
 C:\zv9\zv9.ssxl-ext\rust\manifest.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_config.toml
@@ -30,7 +51,9 @@ C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\build.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\Cargo.toml
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\main.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\run_ssxl.bat
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_api_scan.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_godot.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_menu.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_source_scan.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_testing.rs
@@ -59,11 +82,11 @@ C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_utils.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_anim.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_cleanup.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_commands.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_conductor.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_init.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_poller.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_render.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_state.rs
-C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tick.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tilemap.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tilemap_status.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\lib.rs
@@ -80,6 +103,3 @@ C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_pool.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_rhythm.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\tile_conversion.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\tools.rs
-
-
-PS C:\zv9\zv9.SSXL-ext\rust>

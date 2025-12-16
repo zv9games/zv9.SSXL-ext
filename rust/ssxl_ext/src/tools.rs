@@ -1,23 +1,28 @@
-// rust/SSXL-ext/src/tools.rs
+// rust/SSXL-ext/src/tools.rs (FIXED)
 
+// 🎯 CRITICAL FIX: Gate all Godot-related imports
+#[cfg(feature = "godot-binding")]
 use godot::prelude::*;
+
 use std::time::Instant;
 
 // ----------------------------------------------------
 // 1. CUSTOM LOGGING MACROS (CONDITIONALLY COMPILED)
 // ----------------------------------------------------
 
+// NOTE: These macros are already correctly feature-gated internally.
+
 /// Prints a standard information message.
 #[macro_export]
 macro_rules! ssxl_info {
     ($($arg:tt)*) => ({
-        // === CLI MOCK IMPLEMENTATION (Safe) ===
-        #[cfg(feature = "ssxl_cli")]
-        eprintln!("INFO [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
-        
         // === GDExtension IMPLEMENTATION ===
-        #[cfg(not(feature = "ssxl_cli"))]
-        godot::prelude::godot_print!("INFO [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        #[cfg(feature = "godot-binding")]
+        godot::prelude::godot_print!("INFO [SSXL]: {}", format!($($arg)*));
+        
+        // === CLI/STANDARD IMPLEMENTATION (Fallback) ===
+        #[cfg(not(feature = "godot-binding"))]
+        println!("INFO [SSXL]: {}", format!($($arg)*));
     });
 }
 
@@ -25,13 +30,11 @@ macro_rules! ssxl_info {
 #[macro_export]
 macro_rules! ssxl_warn {
     ($($arg:tt)*) => ({
-        // === CLI MOCK IMPLEMENTATION (Safe) ===
-        #[cfg(feature = "ssxl_cli")]
-        eprintln!("WARN [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        #[cfg(feature = "godot-binding")]
+        godot::prelude::godot_warn!("WARN [SSXL]: {}", format!($($arg)*));
         
-        // === GDExtension IMPLEMENTATION ===
-        #[cfg(not(feature = "ssxl_cli"))]
-        godot::prelude::godot_warn!("WARN [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        #[cfg(not(feature = "godot-binding"))]
+        eprintln!("WARN [SSXL]: {}", format!($($arg)*));
     });
 }
 
@@ -39,13 +42,11 @@ macro_rules! ssxl_warn {
 #[macro_export]
 macro_rules! ssxl_error {
     ($($arg:tt)*) => ({
-        // === CLI MOCK IMPLEMENTATION (Safe) ===
-        #[cfg(feature = "ssxl_cli")]
-        eprintln!("ERROR [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        #[cfg(feature = "godot-binding")]
+        godot::prelude::godot_error!("ERROR [SSXL]: {}", format!($($arg)*));
         
-        // === GDExtension IMPLEMENTATION ===
-        #[cfg(not(feature = "ssxl_cli"))]
-        godot::prelude::godot_error!("ERROR [SSXL]: {} ({}:{})", format!($($arg)*), file!(), line!());
+        #[cfg(not(feature = "godot-binding"))]
+        eprintln!("ERROR [SSXL]: {}", format!($($arg)*));
     });
 }
 
@@ -53,12 +54,22 @@ macro_rules! ssxl_error {
 // 2. COORDINATE UTILITIES
 // ----------------------------------------------------
 
+// 🎯 CRITICAL FIX: Define a mock type for the CLI build (where Vector2i is missing).
+// This is necessary because 'ToGodotVector' is not gated.
+#[cfg(not(feature = "godot-binding"))]
+pub type Vector2i = (i32, i32);
+
+
 /// Trait for converting Rust coordinate types to Godot Vector2i.
+// NOTE: Since this trait is used across the crate (impls are below) but its function 
+// only makes sense in Godot, we keep the trait declaration ungated but the implementation gated.
 pub trait ToGodotVector {
     fn to_godot_vector(&self) -> Vector2i;
 }
 
-// Implementation for the standard (i32, i32) tuple used for chunk positions.
+// 🎯 CRITICAL FIX: Gate the implementation, as it uses Godot's Vector2i::new.
+// If this is not gated, the compiler gets E0433: use of undeclared type `Vector2i`.
+#[cfg(feature = "godot-binding")]
 impl ToGodotVector for (i32, i32) {
     /// Converts a (x, y) tuple into a Godot Vector2i.
     fn to_godot_vector(&self) -> Vector2i {
@@ -71,7 +82,6 @@ impl ToGodotVector for (i32, i32) {
 // ----------------------------------------------------
 
 /// A simple struct for timing code execution blocks.
-// 🔥 FIX: Added 'pub' to make the struct accessible to other modules
 pub struct Profiler {
     start: Instant,
     name: &'static str,
@@ -80,7 +90,6 @@ pub struct Profiler {
 
 impl Profiler {
     /// Starts a new profiler instance if profiling is globally enabled.
-    // 🔥 FIX: Added 'pub' to make the method accessible
     pub fn start(name: &'static str) -> Self {
         // NOTE: In a real project, 'is_profiling_enabled' would be read from config.rs
         const IS_PROFILING_ENABLED: bool = true;
@@ -98,7 +107,7 @@ impl Drop for Profiler {
     fn drop(&mut self) {
         if self.enabled {
             let duration = self.start.elapsed();
-            // This already correctly uses eprintln!
+            // This already correctly uses eprintln! and does not require macro conditionalization.
             eprintln!(
                 "PERF [{}]: Execution time: {:.3}ms",
                 self.name,

@@ -1,0 +1,28 @@
+[threading]
+generation_worker_count = 4
+animation_worker_count = 2
+task_channel_capacity = 4096
+
+[map_settings]
+chunk_size = 32
+map_extent_chunks = 8
+tile_scale_factor = 1.0
+
+[generation]
+world_seed = 5011993
+
+[generation.perlin]
+scale = 250.0
+octaves = 3
+persistence = 0.5
+lacunarity = 2.0
+threshold = 0.0
+
+[generation.ca]
+death_limit = 4
+birth_limit = 5
+steps = 5
+
+[animation]
+simulation_fps = 30
+fluid_damping_factor = 0.95

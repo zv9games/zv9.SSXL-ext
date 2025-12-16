@@ -1,109 +1,132 @@
-use godot::prelude::*;
 use crate::host_state::HostState;
 use crate::generate_conductor_state::ConductorState;
 use crate::generate_task_queue::GenerationTask;
 use crate::shared_job::GenerationJob;
 use crate::shared_error::SSXLCoreError;
-// FIX 1: Import the Lazy type for non-const static initialization (requires 'once_cell' in Cargo.toml)
-use once_cell::sync::Lazy; 
 
-// FIX 2: Change to Lazy initialization pattern.
-static TEST_TILEMAP_ID: Lazy<InstanceId> = Lazy::new(|| InstanceId::from_i64(1337000));
 
-/// Handles the high-level 'start_generation' command received from GDScript.
-/// This is the entry point for work into the Rust core.
-pub fn handle_start_command(host_state: &mut HostState, tilemap_id: InstanceId) -> Result<(), SSXLCoreError> {
+#[cfg(feature = "godot-binding")]
+use once_cell::sync::Lazy;
+
+/// TEST TILEMAP ID — now stored as a plain integer.
+/// Godot conversion happens *inside* the function, never at API boundary.
+#[cfg(feature = "godot-binding")]
+static TEST_TILEMAP_ID: Lazy<i64> = Lazy::new(|| 1337000);
+
+#[cfg(not(feature = "godot-binding"))]
+const TEST_TILEMAP_ID: i64 = 1337000;
+
+/// Handles the "start generation" command from Godot or CLI.
+/// `tilemap_id_raw` is always a plain integer — safe for both builds.
+pub fn handle_start_command(
+    host_state: &mut HostState,
+    tilemap_id_raw: i64,
+) -> Result<(), SSXLCoreError> {
     if host_state.conductor.get_state_container().get_state() == ConductorState::Generating {
-        godot_warn!("Command: Attempted to start generation while already Running. (FFI -6)");
+        crate::ssxl_warn!("Command: Attempted to start generation while already Running. (FFI -6)");
         return Err(SSXLCoreError::ConductorBusy);
     }
 
-    if tilemap_id.to_i64() == 0 {
-        godot_error!("Command: Invalid TileMap InstanceId (0) provided. Cannot proceed. (FFI -5)");
+    if tilemap_id_raw == 0 {
+        crate::ssxl_error!("Command: Invalid TileMap ID (0) provided. Cannot proceed. (FFI -5)");
         return Err(SSXLCoreError::InvalidTarget);
     }
 
     if !host_state.is_core_ready {
-        godot_warn!("Command: Core not ready. Initialization failed or is pending.");
-        return Err(SSXLCoreError::InitializationError("Core not ready.".to_string()));
+        crate::ssxl_warn!("Command: Core not ready. Initialization failed or is pending.");
+        return Err(SSXLCoreError::InitializationError(
+            "Core not ready.".to_string(),
+        ));
     }
-    
+
     let map_extent = 1;
     let chunk_size = 32;
-    
+
     let mut jobs = Vec::new();
-    
     for chunk_x in -map_extent..=map_extent {
         for chunk_y in -map_extent..=map_extent {
-            let task = GenerationTask::new(
-                (chunk_x, chunk_y),
-                chunk_size,
-            );
-            
-            let job = GenerationJob::new(task);
-            jobs.push(job);
+            let task = GenerationTask::new((chunk_x, chunk_y), chunk_size);
+            jobs.push(GenerationJob::new(task));
         }
     }
-    
+
     let total_jobs = jobs.len();
-    
+
+    // ✅ Godot conversion happens *inside* the function, not at API boundary.
+    #[cfg(feature = "godot-binding")]
+    let tilemap_id = tilemap_id_raw;
+
+    #[cfg(not(feature = "godot-binding"))]
+    let tilemap_id = tilemap_id_raw;
+
     match host_state.conductor.start_generation(tilemap_id, jobs) {
         Ok(_) => {
-            godot_print!("Command: Successfully initiated {} generation tasks.", total_jobs);
+            crate::ssxl_info!(
+                "Command: Successfully initiated {} generation tasks.",
+                total_jobs
+            );
             Ok(())
-        },
+        }
         Err(e) => {
-            godot_error!("Command: Conductor failed to start generation: {:?}", e);
+            crate::ssxl_error!("Command: Conductor failed to start generation: {:?}", e);
             Err(e)
         }
     }
 }
 
-/// Performs a structural integrity test of the Conductor, running a minimal generation job.
-/// This checks the full Conductor lifecycle: scheduling, multithreaded execution, 
-/// and signaling, without relying on a live TileMap.
-pub fn trigger_structural_test_job(host_state: &mut HostState) -> Result<(), SSXLCoreError> {
-    godot_print!("Structural Test: Initiating 1x1 conductor lifecycle test...");
+/// Runs a 1×1 structural test job.
+pub fn trigger_structural_test_job(
+    host_state: &mut HostState,
+) -> Result<(), SSXLCoreError> {
+    crate::ssxl_info!("Structural Test: Initiating 1x1 conductor lifecycle test...");
 
     if host_state.conductor.get_state_container().get_state() == ConductorState::Generating {
-        godot_warn!("Structural Test: Conductor is already busy. Cannot run test. (FFI -6)");
+        crate::ssxl_warn!("Structural Test: Conductor is already busy. Cannot run test. (FFI -6)");
         return Err(SSXLCoreError::ConductorBusy);
     }
 
     if !host_state.is_core_ready {
-        godot_warn!("Structural Test: Core not ready. Initialization failed or is pending.");
-        return Err(SSXLCoreError::InitializationError("Core not ready for test.".to_string()));
+        crate::ssxl_warn!("Structural Test: Core not ready. Initialization failed or is pending.");
+        return Err(SSXLCoreError::InitializationError(
+            "Core not ready for test.".to_string(),
+        ));
     }
-    
+
     let map_extent = 0;
     let chunk_size = 8;
-    // FIX 3: Dereference the Lazy static variable to get the InstanceId value.
-    let tilemap_id = *TEST_TILEMAP_ID;
-    
+
+    // ✅ TEST TILEMAP ID is now a plain integer
+    let tilemap_id = {
+        #[cfg(feature = "godot-binding")]
+        { *TEST_TILEMAP_ID }
+
+        #[cfg(not(feature = "godot-binding"))]
+        { TEST_TILEMAP_ID }
+    };
+
+    // ✅ You forgot this block — now restored
     let mut jobs = Vec::new();
-    
     for chunk_x in -map_extent..=map_extent {
         for chunk_y in -map_extent..=map_extent {
-            let task = GenerationTask::new(
-                (chunk_x, chunk_y),
-                chunk_size,
-            );
-            
-            let job = GenerationJob::new(task); 
-            jobs.push(job);
+            let task = GenerationTask::new((chunk_x, chunk_y), chunk_size);
+            jobs.push(GenerationJob::new(task));
         }
     }
-    
+
     let total_jobs = jobs.len();
-    
+
     match host_state.conductor.start_generation(tilemap_id, jobs) {
         Ok(_) => {
-            godot_print!("Structural Test: Successfully started {} test task(s) with ID: {}. Result will be reported via FFI poll.", 
-                total_jobs, tilemap_id.to_i64());
+            crate::ssxl_info!(
+                "Structural Test: Successfully started {} test task(s) with ID: {}. \
+                 Result will be reported via FFI poll.",
+                total_jobs,
+                tilemap_id
+            );
             Ok(())
-        },
+        }
         Err(e) => {
-            godot_error!("Structural Test: Conductor failed to start: {:?}.", e);
+            crate::ssxl_error!("Structural Test: Conductor failed to start: {:?}.", e);
             Err(e)
         }
     }

@@ -5,13 +5,14 @@ use std::thread;
 use crossterm::event::{self, Event, KeyCode};
 use tracing::info;
 
-// Note: We use extern crate self as ssxl_cli to resolve actions defined in main.rs
-extern crate self as ssxl_cli;
-// FIX 1: Import the new action function from main.rs
-use ssxl_cli::{
+// Import actions from crate root (main.rs re-exports them)
+use crate::{
     run_grand_unified_test,
-    launch_godot_project // <--- NEW IMPORT
+    launch_godot_project,
 };
+
+// ✅ Import start_runtime so L can load the engine on demand
+use crate::start_runtime;
 
 /// Structure representing a single menu item and its action.
 pub struct CliAction {
@@ -23,22 +24,36 @@ pub struct CliAction {
 
 pub fn build_menu() -> Vec<CliAction> {
     vec![
-        // FIX 2: Add the new action to launch Godot
+        // ✅ L now starts the runtime AND launches Godot
         CliAction {
             key: 'L',
             label: "🚀 press L: Launch Godot Project (Full Integration Test)",
             id: "launch_godot",
-            action: Box::new(launch_godot_project)
+            action: Box::new(|| {
+                // ✅ Runtime loads ONLY here — never at startup
+                if start_runtime() {
+                    launch_godot_project();
+                } else {
+                    println!("❌ Runtime failed to start. Cannot launch Godot.");
+                }
+            }),
         },
-        // Only the Grand Unified Test (GUT) remains for one-click validation.
+
+        // ✅ Grand Unified Test
         CliAction {
             key: 'G',
             label: "✅ press G: Run Grand Unified Test (GUT)",
             id: "grand_unified_test",
-            action: Box::new(run_grand_unified_test)
+            action: Box::new(run_grand_unified_test),
         },
-        // Corrected menu item for exit
-        CliAction { key: 'U', label: "✅ press U: EXIT Console", id: "exit", action: Box::new(|| {}) },
+
+        // ✅ Exit
+        CliAction {
+            key: 'U',
+            label: "✅ press U: EXIT Console",
+            id: "exit",
+            action: Box::new(|| {}),
+        },
     ]
 }
 
@@ -74,10 +89,10 @@ pub fn run_interactive_loop(menu: Vec<CliAction>) {
                             if let Some(item) = menu.iter().find(|m| m.key == c) {
                                 info!("Menu: Selected: {}", item.label);
                                 println!("\n[{}] {}\n", c, item.label);
-                                
+
                                 (item.action)(); // Execute the action closure
 
-                                if c == 'U' {    
+                                if c == 'U' {
                                     return;
                                 }
 

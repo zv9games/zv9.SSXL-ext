@@ -1,13 +1,8 @@
-// rust/SSXL-ext/src/host_poller.rs
+// rust/SSXL-ext/src/host_poller.rs (FIXED)
 
 use crate::generate_conductor::GenerateConductor;
-// REMOVED: unused import `crate::generate_conductor_state::ConductorState;`
 use crate::bridge_signals;
-// Removed unused import: use crate::host_state::get_host_state;
-// Reason: Avoids unnecessary locking and retrieval of the global HostState 
-
-use crate::ssxl_info; 
-// REMOVED: unused import `ssxl_error` (error logging is now handled inside Conductor)
+use crate::ssxl_info;
 
 /// The main polling routine, called once per Godot frame (typically from `host_tick.rs`).
 /// Its primary responsibility is to pull completed work from the background thread,
@@ -24,18 +19,23 @@ pub fn poll_conductor_status(conductor: &GenerateConductor) {
     }
 
     // 2. State Transition Monitoring and Signal Broadcast (Lifecycle Guard)
-    
+    //
     // `generation_completed` indicates the Conductor has internally flipped its state to Finished,
     // and all chunks are written. Now, we must emit the signal exactly once.
     if generation_completed {
         // This call implements the CRITICAL single-emission guard.
-        // It uses Conductor's internal AtomicBool to ensure the signal is broadcast only on the 
-        // *first* frame it finishes, providing robust lifecycle management.
         if let Some(tilemap_id) = conductor.try_finalize_and_get_target_id() {
-            ssxl_info!("Poller: All chunks rendered. Emitting final signal for ID: {}", tilemap_id.to_i64());
+
+            // Unified ID model: tilemap_id is already an i64 in both builds.
+            let id_for_logging: i64 = tilemap_id;
+
+            ssxl_info!(
+                "Poller: All chunks rendered. Emitting final signal for ID: {}",
+                id_for_logging
+            );
             
             // Broadcast the signal back to GDScript, closing the loop.
-            // This is the signal-driven hook for GDScript orchestration.
+            // Note: bridge_signals::emit_generation_finished expects the same InstanceType
             bridge_signals::emit_generation_finished(tilemap_id);
         }
         // If try_finalize_and_get_target_id() returns None, the signal was already sent 
