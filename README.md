@@ -1,4 +1,4 @@
-# 🚀 SSXL-ext 9.0: Conductor Genesis
+# 🚀 SSXL-ext 9.1: Conductor Genesis
 
 ![SSXL-ext Banner](SSXL-ext.png)
 
@@ -12,7 +12,7 @@
 
 This update marks the establishment of the **Conductor Runtime**, the engine's centralized, thread-safe manager, powered by **Tokio** and **Rayon**. This is the **crypto-coded memory** that prevents systemic entropy and ensures fair, balanced resource usage.
 
-### Key Breakthroughs (Version 9.0)
+### Key Breakthroughs (Version 9.1)
 
 * **⚡️ Asynchronous Tempo**: We utilize **Tokio's `spawn_blocking`** to offload heavy **CPU-bound generation** tasks from the primary async loop. This guarantees responsive I/O while the world is forged.
 * **🛠️ Bulldozer Parallelism**: Large generation requests are executed via **Rayon's parallel iterators (`par_iter`)** within the blocking task, distributing chunk processing across all available cores at maximum **tempo**.
@@ -34,7 +34,7 @@ This update marks the establishment of the **Conductor Runtime**, the engine's c
 
 The codebase is engineered to be modular and auditable, allowing rapid development toward **project completion**.
 
-| Module | Purpose | **9.0 Enhancement** |
+| Module | Purpose | **9.1 Enhancement** |
 | :--- | :--- | :--- |
 | `ssxl_generate` | ⚙️ Core generation logic and the **Conductor** runtime. | Centralized state management & Rayon integration. |
 | `ssxl_cache` | 💾 In-memory chunk storage and retrieval. | **Thread-safe** `AtomicResource` implementation. |
@@ -62,7 +62,7 @@ cargo build --release
 # Open the Godot project tester (SSXL_engine_tester) and run!
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
-# ║             SSXL-ext 9.0 – THE NOOB-FRIENDLY "WHAT CHANGED" GUIDE          ║
+# ║             SSXL-ext 9.1 – THE NOOB-FRIENDLY "WHAT CHANGED" GUIDE          ║
 # ║                  (One giant copy-paste block – ready to ship)              ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
@@ -75,7 +75,7 @@ class_name SSXL9NoobBible
 # ──────────────────────────────────────────────────────────────────────────────
 # THE ONE-SENTENCE SUMMARY
 # ──────────────────────────────────────────────────────────────────────────────
-# "SSXL-ext 9.0 is now so fast that the world generation can't keep up with the player anymore."
+# "SSXL-ext 9.1 is now so fast that the world generation can't keep up with the player anymore."
 
 # ──────────────────────────────────────────────────────────────────────────────
 # WHAT ACTUALLY CHANGED (Marketing → English)
@@ -130,7 +130,7 @@ func _process(_delta):
 # You are now officially living in the future.
 
 # ──────────────────────────────────────────────────────────────────────────────
-# WHAT'S COMING IN 9.1 (already cooking)
+# WHAT'S COMING IN 9.1 (already here)
 # ──────────────────────────────────────────────────────────────────────────────
 var next_level_insanity = [
 	"Rust writes directly to Godot TileMap → zero deserialization",
@@ -144,7 +144,7 @@ var next_level_insanity = [
 # ──────────────────────────────────────────────────────────────────────────────
 var final_verdict = """
 8.x = "Pretty fast, stutters if you sprint"
-9.0 = "Impossible to make it stutter even if you try"
+9.1 = "Impossible to make it stutter even if you try"
 
 You can now ship the infinite procedural masterpiece you've been dreaming of.
 Nobody will ever know it's just a TileMap with a Rust demon doing all the work.
@@ -155,4 +155,4 @@ Welcome to the endgame.
 # ──────────────────────────────────────────────────────────────────────────────
 # YOU ARE NOW READY TO SHIP
 # ──────────────────────────────────────────────────────────────────────────────
-print("SSXL-ext 9.0 loaded. Reality may now bend to your will.")
+print("SSXL-ext 9.1 loaded. Reality may now bend to your will.")
