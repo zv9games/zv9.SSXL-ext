@@ -12,6 +12,8 @@ func _init():
         self.quit(1)
         return
 
+    print_api(c)
+
     var signals := c.get_signal_list()
     var names := signals.map(func(s): return s.name)
 
@@ -72,3 +74,29 @@ func _on_event(event):
     received_event = true
     received_payload = event
     print("📡 ssxl_event received:", event)
+
+
+func print_api(c):
+    print("\n=== SSXL-EXT API (AUTO-DISCOVERED) ===")
+
+    var signal_list = c.get_signal_list()
+    var method_list = c.get_method_list()
+
+    print("Total Signals: %s" % signal_list.size())
+    print("Total Methods: %s" % method_list.size())
+
+    print("\nSignals:")
+    for s in signal_list:
+        var args = []
+        for a in s.args:
+            args.append("%s: %s" % [a.name, a.type])
+        print("  - %s(%s)" % [s.name, ", ".join(args)])
+
+    print("\nMethods:")
+    for m in method_list:
+        var args = []
+        for a in m.args:
+            args.append("%s: %s" % [a.name, a.type])
+        print("  - %s(%s)" % [m.name, ", ".join(args)])
+
+    print("\n=== END API ===\n")
