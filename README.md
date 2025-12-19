@@ -30,17 +30,159 @@ This update marks the establishment of the **Conductor Runtime**, the engine's c
 
 ---
 
-## 📦 Project Structure: A Crystalline Core
+## 📦 Project Structure: A Crystalline Core (SSXL‑ext 9.1)
 
-The codebase is engineered to be modular and auditable, allowing rapid development toward **project completion**.
+The SSXL‑ext workspace is a modular Rust architecture composed of two primary crates:
 
-| Module | Purpose | **9.1 Enhancement** |
-| :--- | :--- | :--- |
-| `ssxl_generate` | ⚙️ Core generation logic and the **Conductor** runtime. | Centralized state management & Rayon integration. |
-| `ssxl_cache` | 💾 In-memory chunk storage and retrieval. | **Thread-safe** `AtomicResource` implementation. |
-| `ssxl_engine_ffi` | 🔗 Raw C FFI layer for data exchange with the host. | **Safe memory allocation/deallocation contract.** |
-| `ssxl_sync` | 🔄 Atomic primitives and worker thread management. | Core component enabling **Conductor Genesis**. |
-| `ssxl_godot` | 🎮 High-level Godot API bindings (`ssxl_engine.rs`). | API ready for synchronous tile application. |
+- **`ssxl_ext`** — the engine core (conductor, workers, sync, CA, Perlin, animation, FFI, host integration)
+- **`ssxl_cli`** — the orchestrator (menus, config loader, API scanner, headless Godot runner, test harness)
+
+This structure ensures deterministic behavior, clean separation of concerns, and rapid iteration toward the full SSXL Monolith.
+
+---
+
+# 🧊 Core Modules (Conceptual Overview)
+
+| Module | Purpose | 9.1 Enhancement |
+|-------|---------|-----------------|
+| **`ssxl_ext`** | 🧠 Engine core: conductor, workers, sync, CA, Perlin, animation, FFI, host integration. | Unified Conductor architecture, SyncPool, HostState, deterministic worker lifecycle. |
+| **`ssxl_cli`** | 🖥️ Developer interface: menus, config loader, API scanner, headless Godot runner, test harness. | Tank Mode, GUT runner, API registry scanner, config validator. |
+| **`manifest.rs`** | 📜 API manifest for documentation and drift detection. | Auto-scanned by CLI. |
+| **`ssxl_config.toml`** | ⚙️ Runtime configuration for workers, animation, generation. | Fully validated at engine startup. |
+| **`SSXL_forward.rs` / `SSXL_manual.rs`** | 🧩 Developer utilities and scaffolding. | Used for debugging and forward declarations. |
+
+---
+
+# 🧠 Crate: `ssxl_ext` — The Engine Core
+
+### 1. Conductor & Runtime
+- `generate_conductor.rs`
+- `generate_conductor_state.rs`
+- `generate_conductor_sync.rs`
+- `generate_manager.rs`
+- `generate_runtime.rs`
+- `generate_task_queue.rs`
+- `host_conductor.rs`
+- `host_state.rs`
+- `rhythm_manager.rs`
+- `sync_pool.rs`
+- `sync_rhythm.rs`
+
+**Purpose:** Worker orchestration, state management, sync, lifecycle.
+
+---
+
+### 2. Generation Logic
+- `generate_perlin.rs`
+- `generate_ca.rs`
+- `generate_ca_simulation.rs`
+- `generate_batch_processor.rs`
+- `shared_chunk.rs`
+- `shared_tile.rs`
+- `tile_conversion.rs`
+
+**Purpose:** Procedural generation, CA simulation, Perlin noise, chunk pipelines.
+
+---
+
+### 3. Animation Pipeline
+- `animate_conductor.rs`
+- `animate_worker.rs`
+- `animate_events.rs`
+- `host_anim.rs`
+
+**Purpose:** Animation worker pool, frame simulation, fluid damping, animation events.
+
+---
+
+### 4. Host Integration (Godot)
+- `host_api.rs`
+- `host_commands.rs`
+- `host_init.rs`
+- `host_cleanup.rs`
+- `host_poller.rs`
+- `host_render.rs`
+- `host_tilemap.rs`
+- `host_tilemap_status.rs`
+- `host_signals.rs`
+
+**Purpose:** GDExtension bridge: tilemap updates, signals, rendering hooks, lifecycle.
+
+---
+
+### 5. FFI & Bridge Layer
+- `bridge_ffi.rs`
+- `bridge_signals.rs`
+- `bridge_oracle.rs`
+
+**Purpose:** Raw C FFI, safe memory contracts, signal routing, host callbacks.
+
+---
+
+### 6. Shared Types & Utilities
+- `shared_config.rs`
+- `shared_error.rs`
+- `shared_job.rs`
+- `shared_math.rs`
+- `shared_message.rs`
+- `shared_types.rs`
+- `math.rs`
+- `tools.rs`
+- `cache.rs`
+
+**Purpose:** Shared structs, math helpers, error types, job definitions, message formats, caching.
+
+---
+
+# 🖥️ Crate: `ssxl_cli` — The Orchestrator
+
+### 1. Entry & Menu
+- `main.rs`
+- `ssxl_menu.rs`
+
+**Purpose:** Interactive CLI menu for running tests, launching Godot, scanning API.
+
+---
+
+### 2. Godot Integration
+- `godot_headless.rs`
+- `ssxl_godot.rs`
+
+**Purpose:** Launches Godot in headless mode, runs Tank Mode, manages process I/O.
+
+---
+
+### 3. Testing & Validation
+- `ssxl_testing.rs`
+- `pipeline.rs`
+
+**Purpose:** Tank Mode, GUT runner, test orchestration.
+
+---
+
+### 4. API & Source Scanning
+- `ssxl_api_scan.rs`
+- `ssxl_source_scan.rs`
+- `manifest.rs` (root)
+
+**Purpose:** Detects API drift, generates documentation, validates exposed methods.
+
+---
+
+### 5. Config & Runtime
+- `ssxl_config.rs`
+- `ssxl_config.toml` (root)
+
+**Purpose:** Loads, validates, and applies runtime configuration.
+
+---
+
+### 6. Misc Utilities
+- `run_ssxl.bat`
+- `verbose.rs`
+- `SSXL_forward.rs`
+- `SSXL_manual.rs`
+- `SSXL_noob_survival_guide.gd`
 
 ---
 
@@ -50,9 +192,15 @@ The codebase is engineered to be modular and auditable, allowing rapid developme
 
 * Rust (latest stable)
 * Godot 4.2+
-* Set `GODOT4_BIN` environment variable (required for the GDExtension build system).
 
 ### Build Instructions
+
+
+
+lol
+
+
+
 
 ```bash
 # Build the Rust core and GDExtension
