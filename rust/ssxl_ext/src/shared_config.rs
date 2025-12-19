@@ -1,9 +1,5 @@
-// rust/SSXL-ext/src/shared_config.rs
-
 use serde::{Deserialize, Serialize};
 
-/// Combines all settings relevant for the procedural generation workers.
-/// This struct is passed via the GenerationTask to the sync_pool.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct GenerationConfig {
     pub perlin: PerlinNoiseConfig,
@@ -21,7 +17,6 @@ impl Default for GenerationConfig {
     }
 }
 
-/// Configuration for the Fractal Brownian Motion (FBM) noise function.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct PerlinNoiseConfig {
     pub scale: f64,
@@ -43,7 +38,6 @@ impl Default for PerlinNoiseConfig {
     }
 }
 
-/// Configuration for the Cellular Automata simulation rules.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct CellularAutomataConfig {
     pub death_limit: u8,
@@ -61,16 +55,10 @@ impl Default for CellularAutomataConfig {
     }
 }
 
-// rust/SSXL-ext/src/shared_config.rs
-
-/// Configuration for all thread pools and concurrency limits.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct ThreadingConfig {
-    // Number of dedicated workers for one-time generation (sync_pool.rs)
     pub generation_worker_count: u32,
-    // Number of dedicated workers for continuous animation/simulation (animate_worker.rs)
     pub animation_worker_count: u32,
-    // Max number of tasks/chunks allowed in the main generation queue
     pub task_channel_capacity: usize,
 }
 
@@ -84,14 +72,9 @@ impl Default for ThreadingConfig {
     }
 }
 
-// rust/SSXL-ext/src/shared_config.rs
-
-/// Configuration defining the physical layout of the world chunks.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct MapSettingsConfig {
-    // The size (edge length) of a single chunk (e.g., 32 -> 32x32 tiles)
     pub chunk_size: u32,
-    // The initial number of chunks to generate from the center (0,0) outward (e.g., 8 -> 17x17 grid)
     pub map_extent_chunks: i32,
     pub tile_scale_factor: f32,
 }
@@ -106,12 +89,9 @@ impl Default for MapSettingsConfig {
     }
 }
 
-// rust/SSXL-ext/src/shared_config.rs
-
-/// Configuration for the continuous simulation and animation workers.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub struct AnimationConfig {
-    // The desired speed of the simulation loop, decoupled from Godot's FPS.
+    pub worker_count: usize,
     pub simulation_fps: u32,
     pub fluid_damping_factor: f32,
 }
@@ -119,7 +99,8 @@ pub struct AnimationConfig {
 impl Default for AnimationConfig {
     fn default() -> Self {
         Self {
-            simulation_fps: 30, // 30Hz simulation loop
+            worker_count: 2,
+            simulation_fps: 30,
             fluid_damping_factor: 0.95,
         }
     }

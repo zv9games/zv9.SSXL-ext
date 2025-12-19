@@ -1,189 +1,213 @@
-// rust/SSXL-ext/src/host_conductor.rs (UNIFIED AND FIXED)
-
-// 🎯 CRITICAL FIX: Gate all Godot imports
+// ----------------------------------------------------
+// Godot binding imports
+// ----------------------------------------------------
 #[cfg(feature = "godot-binding")]
 use godot::prelude::*;
-
 #[cfg(feature = "godot-binding")]
 use godot::classes::{Node, TileMap};
-
 #[cfg(feature = "godot-binding")]
 use godot::builtin::{GString, VarDictionary};
 
-// --- Imports from host_tick.rs ---
-// 🎯 FIX 2: Gate core logic imports that are only used within the Godot-bound SSXLConductor implementation.
+// ----------------------------------------------------
+// Internal engine imports
+// ----------------------------------------------------
 #[cfg(feature = "godot-binding")]
-use crate::host_poller::poll_conductor_status;
+use crate::host_poller::{poll_conductor_status, ConductorEvents};
 #[cfg(feature = "godot-binding")]
-use crate::host_state::{get_host_state, get_host_state_mut, HostState};
+use crate::host_state::{get_host_state, HostState};
 #[cfg(feature = "godot-binding")]
 use crate::generate_conductor::GenerateConductor;
-#[cfg(feature = "godot-binding")]
-use crate::host_commands;
-#[cfg(feature = "godot-binding")]
-use crate::host_tilemap_status;
-// ---------------------------------
 
 // ----------------------------------------------------
-// 🎯 GDExtension Implementation
+// Public re-export for other modules
 // ----------------------------------------------------
+#[cfg(feature = "godot-binding")]
+pub use self::ssxl_conductor_impl::SSXLConductor;
 
-// 🎯 CRITICAL FIX: Add a non-gated struct/impl block to satisfy dependencies 
-// in other files when godot-binding is disabled.
+// ----------------------------------------------------
+// Stub for non-Godot builds
+// ----------------------------------------------------
 #[cfg(not(feature = "godot-binding"))]
 pub struct SSXLConductor {}
+
 #[cfg(not(feature = "godot-binding"))]
 impl SSXLConductor {}
 
+// ----------------------------------------------------
+// Godot-facing conductor implementation
+// ----------------------------------------------------
 #[cfg(feature = "godot-binding")]
-#[derive(GodotClass)]
-#[class(base = Node)]
-pub struct SSXLConductor {
-    // Fields from the old host_conductor.rs (API State)
-    tilemap_target: Option<Gd<TileMap>>,
-    signal_target: Option<Gd<Node>>,
-    active_generator_id: String,
+mod ssxl_conductor_impl {
+    use super::*;
 
-    #[base]
-    base: Base<Node>,
-}
+    #[derive(GodotClass)]
+    #[class(base = Node)]
+    pub struct SSXLConductor {
+        pub tilemap_target: Option<Gd<TileMap>>,
+        pub signal_target: Option<Gd<Node>>,
+        pub active_generator_id: String,
 
-#[cfg(feature = "godot-binding")]
-#[godot_api]
-impl INode for SSXLConductor {
-    fn init(base: Base<Node>) -> Self {
-        crate::ssxl_info!("SSXLConductor initialized.");
-        Self {
-            tilemap_target: None,
-            signal_target: None,
-            active_generator_id: "none".to_owned(),
-            base,
-        }
-    }
-    
-    fn ready(&mut self) {
-        self.base_mut().set_process(true);
+        #[base]
+        pub base: Base<Node>,
     }
 
-    /// The Godot engine's main loop update function (from host_tick.rs).
-    fn process(&mut self, _delta: f64) {
-        let host_state: &HostState = match get_host_state() {
-            Ok(state) => state,
-            Err(e) => {
-                crate::ssxl_error!(
-                    "SSXL Process Error: HostState not initialized in _process: {:?}",
-                    e
-                );
-                return;
+    #[godot_api]
+    impl INode for SSXLConductor {
+        fn init(base: Base<Node>) -> Self {
+            crate::ssxl_info!("SSXLConductor initialized.");
+            Self {
+                tilemap_target: None,
+                signal_target: None,
+                active_generator_id: "none".to_owned(),
+                base,
             }
-        };
-        
-        if host_state.is_core_ready {
-            let conductor: &GenerateConductor = &host_state.conductor;
-            poll_conductor_status(conductor);
+        }
+
+        fn ready(&mut self) {
+            self.base_mut().set_process(true);
+        }
+
+        fn exit_tree(&mut self) {
+            if let Err(e) = crate::host_cleanup::shutdown_ssxl_runtime() {
+                crate::ssxl_error!("CRITICAL: Runtime cleanup failed during exit_tree: {:?}", e);
+            }
+            self.base_mut().set_process(false);
+            crate::ssxl_info!("SSXLConductor terminated.");
+        }
+
+        fn process(&mut self, _delta: f64) {
+            let host_state: &mut HostState = match get_host_state() {
+                Ok(state) => state,
+                Err(e) => {
+                    crate::ssxl_error!(
+                        "SSXL Process Error: HostState not initialized in _process: {:?}",
+                        e
+                    );
+
+                    self.emit_generation_error(&format!(
+                        "HostState not initialized in _process: {:?}",
+                        e
+                    ));
+                    return;
+                }
+            };
+
+            if host_state.is_core_ready {
+                let conductor: &mut GenerateConductor = &mut host_state.conductor;
+                let events: ConductorEvents = poll_conductor_status(conductor);
+                self.poll_and_emit_signals(conductor, &events);
+            } else {
+                self.emit_conductor_idle();
+                self.base_mut().set_process(false);
+            }
         }
     }
-}
 
-#[cfg(feature = "godot-binding")]
-#[godot_api]
-impl SSXLConductor {
-    // --- API Functions from host_conductor.rs ---
-    
-    #[func]
-    pub fn set_tilemap(&mut self, tilemap: Gd<TileMap>) {
-        self.tilemap_target = Some(tilemap);
-        crate::ssxl_info!(
-            "TileMap target successfully registered: {:?}",
-            self.tilemap_target.as_ref().unwrap().instance_id()
+    #[godot_api]
+    impl SSXLConductor {
+        // ----------------------------------------------------
+        // ✅ Existing signals
+        // ----------------------------------------------------
+        #[signal]
+        fn conductor_ready();
+
+        #[signal]
+        fn conductor_idle();
+
+        #[signal]
+        fn generation_started(tilemap_id: i64, total_chunks: i32);
+
+        #[signal]
+        fn chunk_rendered(completed: i32, total: i32);
+
+        #[signal]
+        fn chunk_failed(error: GString);
+
+        #[signal]
+        fn generation_progress(
+            completed: i32,
+            total: i32,
+            metrics: VarDictionary,
         );
-    }
 
-    #[func]
-    pub fn initialize_runtime_shell(&mut self, signal_receiver: Gd<Node>) {
-        self.signal_target = Some(signal_receiver);
-        crate::ssxl_info!("Runtime shell initialization requested. Signal target registered.");
-    }
+        #[signal]
+        fn generation_finished(tilemap_id: i64);
 
-    #[func]
-    pub fn set_generator(&mut self, id: GString) {
-        self.active_generator_id = id.to_string();
-        crate::ssxl_info!("Generator set to: {}", self.active_generator_id);
-    }
+        #[signal]
+        fn generation_error(message: GString);
 
-    #[func]
-    pub fn build_map(&mut self, config: VarDictionary) -> bool {
-        crate::ssxl_info!("Received request to build map with config: {:?}", config);
+        #[signal]
+        fn debug_event(message: GString);
 
-        if self.tilemap_target.is_none() {
-            crate::ssxl_error!("FATAL: Cannot build map. TileMap target is missing.");
-            return false;
+        // ----------------------------------------------------
+        // ✅ NEW: SSXL universal event bus signal (fixed)
+        // ----------------------------------------------------
+        #[signal]
+        fn ssxl_event(event: VarDictionary);
+
+        // ----------------------------------------------------
+        // ✅ NEW: Test method for headless Godot integration (fixed)
+        // ----------------------------------------------------
+        #[func]
+        pub fn test_emit_event(&mut self) {
+            let mut d = VarDictionary::new();
+            let _ = d.insert("type", "rust_test_event");
+            let _ = d.insert("ok", true);
+
+            self.base_mut().emit_signal("ssxl_event", &[d.to_variant()]);
         }
-        true
-    }
 
-    #[func]
-    pub fn get_status(&self) -> GString {
-        "Running - Waiting for build_map".into()
-    }
-
-    #[func]
-    pub fn get_active_generator_id(&self) -> GString {
-        (&self.active_generator_id).into() 
-    }
-
-    #[func]
-    pub fn oracle_tick(&self, _delta: f32) {
-        if let Some(_tilemap) = &self.tilemap_target {
-            // Placeholder for future oracle_tick logic
+        // ----------------------------------------------------
+        // Existing API methods
+        // ----------------------------------------------------
+        #[func]
+        pub fn set_tilemap(&mut self, tilemap: Gd<TileMap>) {
+            self.api_set_tilemap(tilemap);
         }
-    }
 
-    #[func]
-    pub fn get_metrics(&self) -> VarDictionary {
-        VarDictionary::new()
-    }
-
-    // --- API Functions from host_tick.rs ---
-    
-    /// Public method called by GDScript to kick off generation.
-    /// Uses a unified i64 ID model: InstanceId is converted to i64 and passed through.
-    #[func]
-    fn start_generation(&mut self, target_tilemap: Gd<Node>) -> bool {
-        let host_state_mut = match get_host_state_mut() {
-            Ok(state) => state,
-            Err(e) => {
-                crate::ssxl_error!(
-                    "HostState not ready for start_generation command: {:?}",
-                    e
-                );
-                return false;
-            }
-        };
-
-        let tilemap_id = target_tilemap.instance_id();
-
-        // Unified ID model: use i64 at the boundary, not u64.
-        let tilemap_id_i64 = tilemap_id.to_i64();
-
-        match host_commands::handle_start_command(host_state_mut, tilemap_id_i64) {
-            Ok(_) => true,
-            Err(e) => {
-                crate::ssxl_error!("Failed to start generation: {:?}", e);
-                false
-            }
+        #[func]
+        pub fn initialize_runtime_shell(&mut self, signal_receiver: Gd<Node>) {
+            self.api_initialize_runtime_shell(signal_receiver);
         }
-    }
 
-    /// Public method called by GDScript to get the current generation status.
-    #[func]
-    fn get_status_report(&self) -> VarDictionary {
-        match get_host_state() {
-            Ok(state) => host_tilemap_status::get_status_report_dict(state),
-            Err(e) => {
-                crate::ssxl_error!("Failed to get status report: {:?}", e);
-                VarDictionary::new()
-            }
+        #[func]
+        pub fn set_generator(&mut self, id: GString) {
+            self.api_set_generator(id);
+        }
+
+        #[func]
+        pub fn build_map(&mut self, config: VarDictionary) -> bool {
+            self.api_build_map(config)
+        }
+
+        #[func]
+        pub fn get_status(&self) -> GString {
+            self.api_get_status()
+        }
+
+        #[func]
+        pub fn get_active_generator_id(&self) -> GString {
+            self.api_get_active_generator_id()
+        }
+
+        #[func]
+        pub fn oracle_tick(&self, delta: f32) {
+            self.api_oracle_tick(delta);
+        }
+
+        #[func]
+        pub fn get_metrics(&self) -> VarDictionary {
+            self.api_get_metrics()
+        }
+
+        #[func]
+        pub fn start_generation(&mut self, target_tilemap: Gd<Node>) -> bool {
+            self.api_start_generation(target_tilemap)
+        }
+
+        #[func]
+        pub fn get_status_report(&self) -> VarDictionary {
+            self.api_get_status_report()
         }
     }
 }

@@ -3,7 +3,7 @@ use godot::prelude::*;
 #[cfg(feature = "godot-binding")]
 use godot::classes::Engine;
 
-use crate::generate_conductor::InstanceType;
+use crate::shared_types::InstanceType;   // ✅ FIXED: correct import
 
 #[cfg(feature = "godot-binding")]
 pub fn emit_generation_finished(tilemap_id: InstanceType) {
@@ -16,5 +16,8 @@ pub fn emit_generation_finished(tilemap_id: InstanceType) {
 
 #[cfg(not(feature = "godot-binding"))]
 pub fn emit_generation_finished(tilemap_id: InstanceType) {
-    eprintln!("INFO: CLI Mode - Skipped emitting generation_finished signal for ID: {}", tilemap_id);
+    eprintln!(
+        "INFO: CLI Mode - Skipped emitting generation_finished signal for ID: {}",
+        tilemap_id
+    );
 }

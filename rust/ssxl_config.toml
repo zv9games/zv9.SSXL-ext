@@ -26,3 +26,6 @@ steps = 5
 [animation]
 simulation_fps = 30
 fluid_damping_factor = 0.95
+
+[godot]
+binary = "c:/zv9/zv9.SSXL-ext/SSXLtester2/Godot_v4.5.1-stable_win64.exe"

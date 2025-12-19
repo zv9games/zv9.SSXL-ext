@@ -1,14 +1,8 @@
-// -----------------------------------------------------------------------------
-// Godot-only imports
-// -----------------------------------------------------------------------------
 #[cfg(feature = "godot-binding")]
 use godot::prelude::*;
 #[cfg(feature = "godot-binding")]
 use godot::obj::InstanceId;
 
-// -----------------------------------------------------------------------------
-// CLI fallback: use a plain integer for tilemap IDs
-// -----------------------------------------------------------------------------
 #[cfg(not(feature = "godot-binding"))]
 type RawInstanceId = i64;
 
@@ -17,11 +11,9 @@ use crate::shared_tile::TileData;
 #[cfg(feature = "godot-binding")]
 const CHUNK_DATA_LAYER: i32 = 0;
 
-// -----------------------------------------------------------------------------
-// FFI: ssxl_get_tilemap_chunk_ptr
-// -----------------------------------------------------------------------------
+#[cfg(feature = "godot-binding")]
+use crate::host_tilemap::TileMapDirectWriteExtension;
 
-// ✅ GODOT SIGNATURE
 #[cfg(feature = "godot-binding")]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
@@ -30,7 +22,6 @@ pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
     chunk_y: i32,
 ) -> *mut TileData {
     use godot::classes::TileMap;
-    use crate::host_tilemap::TileMapDirectWriteExtension;
 
     let tilemap_id = InstanceId::from_i64(tilemap_id_raw);
 
@@ -55,10 +46,9 @@ pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
         );
     }
 
-    raw_ptr
+    raw_ptr as *mut TileData
 }
 
-// ✅ CLI SIGNATURE
 #[cfg(not(feature = "godot-binding"))]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
@@ -74,11 +64,6 @@ pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
     std::ptr::null_mut()
 }
 
-// -----------------------------------------------------------------------------
-// FFI: ssxl_notify_chunk_updated
-// -----------------------------------------------------------------------------
-
-// ✅ GODOT SIGNATURE
 #[cfg(feature = "godot-binding")]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_notify_chunk_updated(
@@ -87,7 +72,6 @@ pub unsafe extern "C" fn ssxl_notify_chunk_updated(
     chunk_y: i32,
 ) {
     use godot::classes::TileMap;
-    use crate::host_tilemap::TileMapDirectWriteExtension;
 
     let tilemap_id = InstanceId::from_i64(tilemap_id_raw);
 
@@ -105,7 +89,6 @@ pub unsafe extern "C" fn ssxl_notify_chunk_updated(
     tilemap.notify_chunk_data_changed(CHUNK_DATA_LAYER, chunk_x, chunk_y);
 }
 
-// ✅ CLI SIGNATURE
 #[cfg(not(feature = "godot-binding"))]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_notify_chunk_updated(

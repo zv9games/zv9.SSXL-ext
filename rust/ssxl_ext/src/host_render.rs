@@ -1,5 +1,3 @@
-// 🎯 CRITICAL FIX: Gate Godot imports
-
 use flume::Receiver;
 use crate::shared_chunk::Chunk;
 use crate::generate_conductor_state::ConductorStateContainer;
@@ -10,19 +8,16 @@ use crate::generate_conductor_state::ConductorState;
 #[cfg(feature = "godot-binding")]
 use crate::host_tilemap::render_chunk_direct;
 
+
 #[cfg(feature = "godot-binding")]
 const MAX_CHUNKS_PER_FRAME: u32 = 16;
 
-/// Manages the rendering budget for completed chunks.
-/// Called by the Host Poller on the Godot main thread.
 #[cfg(feature = "godot-binding")]
 pub fn render_available_chunks(
     tilemap_id_raw: i64,
     chunk_receiver: &Receiver<Chunk>,
     state_container: &ConductorStateContainer,
 ) -> (u32, bool) {
-
-
     let mut chunks_rendered_this_frame = 0;
 
     while chunks_rendered_this_frame < MAX_CHUNKS_PER_FRAME {
@@ -62,7 +57,6 @@ pub fn render_available_chunks(
     (chunks_rendered_this_frame, is_finished)
 }
 
-/// CLI fallback — no Godot, no InstanceId, no rendering.
 #[cfg(not(feature = "godot-binding"))]
 pub fn render_available_chunks(
     _tilemap_id: i64,

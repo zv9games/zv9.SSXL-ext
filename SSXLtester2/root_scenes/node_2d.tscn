@@ -1,9 +1,16 @@
-[gd_scene format=3 uid="uid://cwhh07dy846y7"]
+[gd_scene load_steps=3 format=3 uid="uid://cwhh07dy846y7"]
+
+[ext_resource type="Script" uid="uid://bf4m53dvayhbc" path="res://root_scripts/main.gd" id="1_oaegt"]
+[ext_resource type="Script" uid="uid://ca5hhsplw0ycs" path="res://root_scripts/ssxl_controller.gd" id="2_oaegt"]
 
 [node name="main" type="Node"]
+script = ExtResource("1_oaegt")
 
 [node name="Camera2D" type="Camera2D" parent="."]
 anchor_mode = 0
 zoom = Vector2(0.5, 0.5)
 
 [node name="SSXLConductor" type="SSXLConductor" parent="."]
+
+[node name="SSXLController" type="Node" parent="."]
+script = ExtResource("2_oaegt")

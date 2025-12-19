@@ -8,7 +8,7 @@ use godot::init::{ExtensionLibrary, InitLevel};
 pub mod tools;
 pub mod math;
 pub mod config;
-
+pub mod shared_types;
 pub mod cache;
 pub mod sync_pool;
 pub mod sync_rhythm;
@@ -49,7 +49,11 @@ pub mod host_render;
 pub mod host_commands;
 pub mod host_tilemap;
 pub mod host_tilemap_status;
+pub mod host_signals;
+pub mod host_api;
 pub mod tile_conversion;
+#[macro_use]
+pub mod api_registry;
 
 
 #[cfg(feature = "godot-binding")]
@@ -59,13 +63,20 @@ struct SSXLExtension;
 #[gdextension]
 unsafe impl ExtensionLibrary for SSXLExtension {
     fn on_level_init(level: InitLevel) {
-        if level == InitLevel::Scene {
-            match host_init::initialize_ssxl_core() {
-                Ok(_) => crate::ssxl_info!("Core resources successfully initialized and workers started."),
-                Err(e) => crate::ssxl_error!("FATAL: SSXL Core failed to initialize. Reason: {}", e),
-            }
-        }
-    }
+		if level == InitLevel::Scene {
+			match host_init::initialize_ssxl_core() {
+				Ok(_) => crate::ssxl_info!(
+					"Core resources successfully initialized and workers started."
+				),
+				Err(e) => crate::ssxl_error!(
+					"FATAL: SSXL Core failed to initialize. Reason: {}",
+					e
+				),
+			}
+		}
+	}
+
+
 
     fn on_level_deinit(level: InitLevel) {
         if level == InitLevel::Scene {

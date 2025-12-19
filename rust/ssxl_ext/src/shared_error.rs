@@ -5,6 +5,9 @@ pub enum SSXLCoreError {
     #[error("Core state uninitialized: HostState singleton is not yet set.")]
     UninitializedState,
 
+    #[error("Core state uninitialized: HostState singleton is not yet set.")]
+    NotInitialized,
+
     #[error("Core initialization failed: {0}")]
     InitializationError(String),
 
@@ -32,11 +35,9 @@ pub enum SSXLCoreError {
     #[error("Mathematical boundary error: {0}")]
     MathError(String),
 
-    // ✅ Updated: no more InstanceId terminology
     #[error("Target TileMap ID is invalid (0).")]
     InvalidTarget,
 
-    // ✅ Updated: now refers to plain integer IDs
     #[error("TileMap ID '{0}' is invalid or null.")]
     InvalidInstance(i64),
 
@@ -51,6 +52,7 @@ impl SSXLCoreError {
     pub fn to_ffi_code(&self) -> isize {
         match self {
             SSXLCoreError::UninitializedState => -2,
+            SSXLCoreError::NotInitialized => -2,
             SSXLCoreError::InvalidTarget => -5,
             SSXLCoreError::ConductorBusy => -6,
             _ => {

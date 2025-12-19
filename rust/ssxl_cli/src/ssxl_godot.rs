@@ -6,27 +6,34 @@ const GODOT_PROJECT: &str = "../SSXLtester2/project.godot";
 
 pub fn launch_godot_project() {
     let project_path = PathBuf::from(GODOT_PROJECT);
+    let godot_exe_path = PathBuf::from(GODOT_EXE);
 
-    // ✅ FIX: Avoid returning a reference to a temporary PathBuf
-    let project_dir_buf = project_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(".."));
+    // ✅ Validate Godot executable exists
+    if !godot_exe_path.exists() {
+        error!("Godot executable not found at {}.", GODOT_EXE);
+        return;
+    }
 
-    let project_dir = project_dir_buf.as_path();
-
+    // ✅ Validate project file exists
     if !project_path.exists() {
         error!("Godot project not found at {}.", GODOT_PROJECT);
         return;
     }
 
+    // ✅ Compute project directory safely
+    let project_dir = project_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".."));
+
     info!("Launching Godot editor...");
 
-    match Command::new(GODOT_EXE)
+    let spawn_result = Command::new(&godot_exe_path)
         .arg("--editor")
-        .arg(project_dir)
-        .spawn()
-    {
+        .arg(&project_dir)
+        .spawn();
+
+    match spawn_result {
         Ok(mut child) => {
             info!("Godot launched. Waiting for editor to close...");
             if let Err(e) = child.wait() {

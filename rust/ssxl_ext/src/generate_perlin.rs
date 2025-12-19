@@ -7,7 +7,6 @@ use noise::{Fbm, Perlin, NoiseFn, MultiFractal};
 
 /// Holds the initialized noise generator and configuration.
 pub struct NoiseGenerator {
-    // Fbm (Fractal Brownian Motion) is typically used for complex terrain.
     fbm: Fbm<Perlin>,
     config: PerlinNoiseConfig,
 }
@@ -24,53 +23,54 @@ impl NoiseGenerator {
     }
 }
 
-// rust/SSXL-ext/src/generate_perlin.rs
-
 /// Generates the base noise map for a specific chunk.
-/// This is one of the initial steps inside the ThreadPool's worker execution.
+/// TANK MODE: Seamless across all chunk boundaries.
 pub fn generate_noise_map(
-    mut chunk: Chunk, 
+    mut chunk: Chunk,
     generator: &NoiseGenerator
 ) -> Result<Chunk, String> {
-    
-    let chunk_x = chunk.position.0;
-    let chunk_y = chunk.position.1;
-    let size = chunk.size as i32;
-    let scale = generator.config.scale;
+
+    let chunk_x = chunk.position.0; // i32
+    let chunk_y = chunk.position.1; // i32
+    let s = chunk.size;             // u32
+
+    // ✅ Tank-mode frequency: decoupled from chunk size
+    let frequency = 0.01;
+
     let threshold = generator.config.threshold;
 
-    // Use a dense Vec for speed, matching the TileData layout.
-    chunk.tiles.resize( (size * size) as usize, TileData::default() );
+    // ✅ Allocate tile buffer using u32 math (no signed overflow)
+    let total = (s * s) as usize;
+    chunk.tiles.resize(total, TileData::default());
 
-    for local_y in 0..size {
-        for local_x in 0..size {
-            // 1. Calculate the World Coordinates (Crucial for continuity)
-            // This translates local chunk coordinates into continuous world coordinates.
-            let world_x = (chunk_x * size) + local_x;
-            let world_y = (chunk_y * size) + local_y;
-            
-            // 2. Sample the Noise Function
+    // ✅ Iterate using u32, convert to i32 only for world coords
+    for ly in 0..s {
+        for lx in 0..s {
+
+            // ✅ 1. Compute world coordinates using correct types
+            let world_x = chunk_x * s as i32 + lx as i32;
+            let world_y = chunk_y * s as i32 + ly as i32;
+
+            // ✅ 2. Sample noise using frequency (NOT scale)
             let noise_value = generator.fbm.get([
-                world_x as f64 / scale, 
-                world_y as f64 / scale
+                world_x as f64 * frequency,
+                world_y as f64 * frequency,
             ]);
 
-            // 3. Map Value to Tile Data
+            // ✅ 3. Convert noise to tile data
             let tile_data = if noise_value > threshold {
-                // Above threshold: Solid / Wall (the target for CA refinement)
                 TileData {
-                    tile_id: 1, // Wall tile ID
+                    tile_id: 1,
                     atlas_coords: 0,
                     rotation_flags: 0,
-                    custom_data: (noise_value * 255.0).abs().round() as u8, // Store raw density
+                    custom_data: (noise_value * 255.0).abs().round() as u8,
                 }
             } else {
-                // Below threshold: Air / Floor
-                TileData::default() 
+                TileData::default()
             };
-            
-            // 4. Write to Chunk Buffer
-            let index = (local_y * size + local_x) as usize;
+
+            // ✅ 4. Write tile using u32 indexing (no signed math)
+            let index = (ly * s + lx) as usize;
             chunk.tiles[index] = tile_data;
         }
     }

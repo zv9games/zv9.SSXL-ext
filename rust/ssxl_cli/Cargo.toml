@@ -8,7 +8,7 @@ edition = "2021"
 # 🎯 CRITICAL FIX: To prevent the Godot class registration panic in the CLI:
 # 1. default-features = false: Disables the 'default' feature (which enables 'godot-binding').
 # 2. features = []: Ensures no Godot-specific features are enabled.
-ssxl_ext = { path = "../ssxl_ext", default-features = false, features = [] }
+ssxl_ext = { path = "../ssxl_ext", default-features = false, features = ["godot-binding"] }
 flume = "0.12"
 rand = "0.8"
 
@@ -17,3 +17,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 crossterm = "0.27"
 walkdir = "2.5"
+syn = { version = "2.0", features = ["full", "visit"] }
+toml = "0.9.10"
+serde = { version = "1.0.228", features = ["derive"] }
