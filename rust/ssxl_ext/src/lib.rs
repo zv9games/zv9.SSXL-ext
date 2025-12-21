@@ -1,9 +1,9 @@
+// Only pull in Godot when we're building the Godot binding.
 #[cfg(feature = "godot-binding")]
 use godot::prelude::*;
 
 #[cfg(feature = "godot-binding")]
 use godot::init::{ExtensionLibrary, InitLevel};
-
 
 pub mod tools;
 pub mod math;
@@ -52,9 +52,13 @@ pub mod host_tilemap_status;
 pub mod host_signals;
 pub mod host_api;
 pub mod tile_conversion;
+
 #[macro_use]
 pub mod api_registry;
 
+// Native Godot TileMap bridge for SSXL (only when building the Godot binding).
+#[cfg(feature = "godot-binding")]
+pub mod ssxl_tilemap;
 
 #[cfg(feature = "godot-binding")]
 struct SSXLExtension;
@@ -63,20 +67,18 @@ struct SSXLExtension;
 #[gdextension]
 unsafe impl ExtensionLibrary for SSXLExtension {
     fn on_level_init(level: InitLevel) {
-		if level == InitLevel::Scene {
-			match host_init::initialize_ssxl_core() {
-				Ok(_) => crate::ssxl_info!(
-					"Core resources successfully initialized and workers started."
-				),
-				Err(e) => crate::ssxl_error!(
-					"FATAL: SSXL Core failed to initialize. Reason: {}",
-					e
-				),
-			}
-		}
-	}
-
-
+        if level == InitLevel::Scene {
+            match host_init::initialize_ssxl_core() {
+                Ok(_) => crate::ssxl_info!(
+                    "Core resources successfully initialized and workers started."
+                ),
+                Err(e) => crate::ssxl_error!(
+                    "FATAL: SSXL Core failed to initialize. Reason: {}",
+                    e
+                ),
+            }
+        }
+    }
 
     fn on_level_deinit(level: InitLevel) {
         if level == InitLevel::Scene {

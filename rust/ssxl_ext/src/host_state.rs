@@ -58,6 +58,10 @@ pub fn init_host_state(
         rhythm_manager: RhythmManager::new(),
         is_core_ready: true,
         tilemap_id: create_null_instance_id(),
+
+        // ✅ Default world dimensions; will be overridden by api_build_map()
+        world_width: 0,
+        world_height: 0,
     };
 
     HOST_SINGLETON.set(Some(new_state)).map_err(|_| {
@@ -73,6 +77,10 @@ pub struct HostState {
     pub rhythm_manager: RhythmManager,
     pub is_core_ready: bool,
     pub tilemap_id: InstanceType,
+
+    /// ✅ World dimensions in cells, driven by Godot (ssxl_controller)
+    pub world_width: i32,
+    pub world_height: i32,
 }
 
 pub fn shutdown_host_state() -> Result<(), SSXLCoreError> {

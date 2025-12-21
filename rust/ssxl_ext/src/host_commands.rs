@@ -19,6 +19,9 @@ pub fn handle_start_command(
     host_state: &mut HostState,
     tilemap_id_raw: i64,
 ) -> Result<(), SSXLCoreError> {
+    // ----------------------------------------------------
+    // ✅ Safety checks
+    // ----------------------------------------------------
     if host_state.conductor.get_state_container().get_state() == ConductorState::Generating {
         return Err(SSXLCoreError::ConductorBusy);
     }
@@ -31,18 +34,33 @@ pub fn handle_start_command(
         return Err(SSXLCoreError::InitializationError("Core not ready.".to_string()));
     }
 
-    let map_extent = 1;
-    let chunk_size = 32;
+    // ----------------------------------------------------
+    // ✅ Dynamic world size (set by api_build_map)
+    // ----------------------------------------------------
+    let world_w = host_state.world_width.max(1);
+    let world_h = host_state.world_height.max(1);
 
+    // ✅ Chunk size from map_settings (correct location)
+    let chunk_size_i32 = host_state.config.map_settings.chunk_size as i32;
+    let chunk_size_u32 = chunk_size_i32 as u32;
+
+    // Compute number of chunks needed
+    let chunks_x = (world_w + chunk_size_i32 - 1) / chunk_size_i32;
+    let chunks_y = (world_h + chunk_size_i32 - 1) / chunk_size_i32;
+
+    // ----------------------------------------------------
+    // ✅ Build jobs dynamically
+    // ----------------------------------------------------
     let seed = host_state.config.generation.world_seed;
     let config = Arc::new(host_state.config.generation.clone());
 
     let mut jobs = Vec::new();
-    for chunk_x in -map_extent..=map_extent {
-        for chunk_y in -map_extent..=map_extent {
+
+    for cx in 0..chunks_x {
+        for cy in 0..chunks_y {
             let task = GenerationTask::new(
-                (chunk_x, chunk_y),
-                chunk_size,
+                (cx, cy),
+                chunk_size_u32,
                 seed,
                 config.clone(),
             );
@@ -50,8 +68,10 @@ pub fn handle_start_command(
         }
     }
 
+    // ----------------------------------------------------
+    // ✅ Start generation
+    // ----------------------------------------------------
     let tilemap_id = tilemap_id_raw;
-
     host_state.conductor.start_generation(tilemap_id, jobs)
 }
 
@@ -69,7 +89,7 @@ pub fn trigger_structural_test_job(
     }
 
     let map_extent = 0;
-    let chunk_size = 8;
+    let chunk_size = 8u32;
 
     let tilemap_id = {
         #[cfg(feature = "godot-binding")]

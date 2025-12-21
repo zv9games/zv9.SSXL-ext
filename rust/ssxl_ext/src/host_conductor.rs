@@ -43,9 +43,18 @@ mod ssxl_conductor_impl {
     #[derive(GodotClass)]
     #[class(base = Node)]
     pub struct SSXLConductor {
-        pub tilemap_target: Option<Gd<TileMap>>,
+        /// ✅ Stores a generic Node, not a TileMap.
+        /// This allows SSXLTileMap (native Rust class) to be passed in.
+        pub tilemap_target: Option<Gd<Node>>,
+
         pub signal_target: Option<Gd<Node>>,
         pub active_generator_id: String,
+
+        /// Tracks whether we've already emitted `conductor_ready`
+        pub has_emitted_ready: bool,
+
+        /// Tracks whether we've already emitted `generation_finished`
+        pub has_emitted_finished: bool,
 
         #[base]
         pub base: Base<Node>,
@@ -59,6 +68,8 @@ mod ssxl_conductor_impl {
                 tilemap_target: None,
                 signal_target: None,
                 active_generator_id: "none".to_owned(),
+                has_emitted_ready: false,
+                has_emitted_finished: false,
                 base,
             }
         }
@@ -69,7 +80,10 @@ mod ssxl_conductor_impl {
 
         fn exit_tree(&mut self) {
             if let Err(e) = crate::host_cleanup::shutdown_ssxl_runtime() {
-                crate::ssxl_error!("CRITICAL: Runtime cleanup failed during exit_tree: {:?}", e);
+                crate::ssxl_error!(
+                    "CRITICAL: Runtime cleanup failed during exit_tree: {:?}",
+                    e
+                );
             }
             self.base_mut().set_process(false);
             crate::ssxl_info!("SSXLConductor terminated.");
@@ -93,6 +107,12 @@ mod ssxl_conductor_impl {
             };
 
             if host_state.is_core_ready {
+                if !self.has_emitted_ready {
+                    crate::ssxl_info!("SSXLConductor: core ready, emitting conductor_ready.");
+                    self.emit_conductor_ready();
+                    self.has_emitted_ready = true;
+                }
+
                 let conductor: &mut GenerateConductor = &mut host_state.conductor;
                 let events: ConductorEvents = poll_conductor_status(conductor);
                 self.poll_and_emit_signals(conductor, &events);
@@ -106,7 +126,7 @@ mod ssxl_conductor_impl {
     #[godot_api]
     impl SSXLConductor {
         // ----------------------------------------------------
-        // ✅ Existing signals
+        // Signals
         // ----------------------------------------------------
         #[signal]
         fn conductor_ready();
@@ -139,29 +159,27 @@ mod ssxl_conductor_impl {
         #[signal]
         fn debug_event(message: GString);
 
-        // ----------------------------------------------------
-        // ✅ NEW: SSXL universal event bus signal (fixed)
-        // ----------------------------------------------------
         #[signal]
         fn ssxl_event(event: VarDictionary);
 
         // ----------------------------------------------------
-        // ✅ NEW: Test method for headless Godot integration (fixed)
+        // Test method
         // ----------------------------------------------------
         #[func]
         pub fn test_emit_event(&mut self) {
             let mut d = VarDictionary::new();
             let _ = d.insert("type", "rust_test_event");
             let _ = d.insert("ok", true);
-
             self.base_mut().emit_signal("ssxl_event", &[d.to_variant()]);
         }
 
         // ----------------------------------------------------
-        // Existing API methods
+        // API methods
         // ----------------------------------------------------
+
+        /// Accepts Gd<Node>, not Gd<TileMap>
         #[func]
-        pub fn set_tilemap(&mut self, tilemap: Gd<TileMap>) {
+        pub fn set_tilemap(&mut self, tilemap: Gd<Node>) {
             self.api_set_tilemap(tilemap);
         }
 
@@ -202,6 +220,9 @@ mod ssxl_conductor_impl {
 
         #[func]
         pub fn start_generation(&mut self, target_tilemap: Gd<Node>) -> bool {
+            // You can optionally reset flags here if you want
+            // self.has_emitted_ready = false;
+            // self.has_emitted_finished = false;
             self.api_start_generation(target_tilemap)
         }
 

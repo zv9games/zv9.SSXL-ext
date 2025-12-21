@@ -1,3 +1,4 @@
+// Only compile this when building the Godot binding.
 #[cfg(feature = "godot-binding")]
 use godot::prelude::*;
 #[cfg(feature = "godot-binding")]
@@ -11,9 +12,15 @@ use crate::shared_tile::TileData;
 #[cfg(feature = "godot-binding")]
 const CHUNK_DATA_LAYER: i32 = 0;
 
+// ✅ We now import the native SSXLTileMap class, not the old trait.
 #[cfg(feature = "godot-binding")]
-use crate::host_tilemap::TileMapDirectWriteExtension;
+use crate::ssxl_tilemap::SSXLTileMap;
 
+//
+// ──────────────────────────────────────────────────────────────────────────────
+//   FFI: ssxl_get_tilemap_chunk_ptr
+// ──────────────────────────────────────────────────────────────────────────────
+//
 #[cfg(feature = "godot-binding")]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
@@ -21,26 +28,30 @@ pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
     chunk_x: i32,
     chunk_y: i32,
 ) -> *mut TileData {
-    use godot::classes::TileMap;
-
     let tilemap_id = InstanceId::from_i64(tilemap_id_raw);
 
-    let mut tilemap = match Gd::<TileMap>::try_from_instance_id(tilemap_id) {
-        Ok(tm) => tm.cast::<TileMap>(),
+    // ✅ Try to retrieve the SSXLTileMap instance
+    let mut tilemap = match Gd::<SSXLTileMap>::try_from_instance_id(tilemap_id) {
+        Ok(tm) => tm,
         Err(_) => {
             crate::ssxl_error!(
-                "SSXL FFI: Failed to retrieve TileMap object for ID {}",
+                "SSXL FFI: Failed to retrieve SSXLTileMap object for ID {}",
                 tilemap_id_raw
             );
             return std::ptr::null_mut();
         }
     };
 
-    let raw_ptr = tilemap.get_raw_chunk_data_ptr(CHUNK_DATA_LAYER, chunk_x, chunk_y);
+    // ✅ Call the native Rust method directly
+    let raw_ptr = tilemap.bind_mut().get_raw_chunk_data_ptr(
+        CHUNK_DATA_LAYER,
+        chunk_x,
+        chunk_y,
+    );
 
     if raw_ptr.is_null() {
         crate::ssxl_error!(
-            "SSXL FFI: Godot returned NULL pointer for chunk ({}, {})",
+            "SSXL FFI: SSXLTileMap returned NULL pointer for chunk ({}, {})",
             chunk_x,
             chunk_y
         );
@@ -49,6 +60,11 @@ pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
     raw_ptr as *mut TileData
 }
 
+//
+// ──────────────────────────────────────────────────────────────────────────────
+//   CLI fallback (no Godot binding)
+// ──────────────────────────────────────────────────────────────────────────────
+//
 #[cfg(not(feature = "godot-binding"))]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
@@ -64,6 +80,11 @@ pub unsafe extern "C" fn ssxl_get_tilemap_chunk_ptr(
     std::ptr::null_mut()
 }
 
+//
+// ──────────────────────────────────────────────────────────────────────────────
+//   FFI: ssxl_notify_chunk_updated
+// ──────────────────────────────────────────────────────────────────────────────
+//
 #[cfg(feature = "godot-binding")]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_notify_chunk_updated(
@@ -71,24 +92,31 @@ pub unsafe extern "C" fn ssxl_notify_chunk_updated(
     chunk_x: i32,
     chunk_y: i32,
 ) {
-    use godot::classes::TileMap;
-
     let tilemap_id = InstanceId::from_i64(tilemap_id_raw);
 
-    let mut tilemap = match Gd::<TileMap>::try_from_instance_id(tilemap_id) {
-        Ok(tm) => tm.cast::<TileMap>(),
+    // ✅ Retrieve SSXLTileMap, not TileMap
+    let mut tilemap = match Gd::<SSXLTileMap>::try_from_instance_id(tilemap_id) {
+        Ok(tm) => tm,
         Err(_) => {
             crate::ssxl_warn!(
-                "SSXL FFI: Cannot notify update — invalid TileMap ID {}",
+                "SSXL FFI: Cannot notify update — invalid SSXLTileMap ID {}",
                 tilemap_id_raw
             );
             return;
         }
     };
 
-    tilemap.notify_chunk_data_changed(CHUNK_DATA_LAYER, chunk_x, chunk_y);
+    // ✅ Call the native Rust method
+    tilemap
+        .bind_mut()
+        .notify_chunk_data_changed(CHUNK_DATA_LAYER, chunk_x, chunk_y);
 }
 
+//
+// ──────────────────────────────────────────────────────────────────────────────
+//   CLI fallback
+// ──────────────────────────────────────────────────────────────────────────────
+//
 #[cfg(not(feature = "godot-binding"))]
 #[no_mangle]
 pub unsafe extern "C" fn ssxl_notify_chunk_updated(

@@ -10,9 +10,6 @@ use crate::shared_message::GenerationDataMessage;
 use crate::config::GlobalConfig;
 use crate::generate_runtime;
 
-// --- FIX: Removed the import for Godot-dependent logging macros
-// use crate::{ssxl_info, ssxl_error};
-
 // --------------------------------------------------------------------------
 // --- Worker Structures ---
 // --------------------------------------------------------------------------
@@ -32,41 +29,63 @@ impl Worker {
         // The worker needs a reference to the global configuration
         config: Arc<GlobalConfig>,
     ) -> Worker {
-        // Clone the necessary handles for the new thread
         let sender_clone = chunk_sender.clone();
         
         let handle = thread::spawn(move || {
+            eprintln!("[worker {}] spawned and entering loop.", id);
+
             // Loop until the channel is disconnected (which signals shutdown)
             while let Ok(job) = task_receiver.recv() {
-                
+                eprintln!(
+                    "[worker {}] received job for chunk {:?}, step {:?}",
+                    id,
+                    job.id,
+                    job.current_step
+                );
+
                 // --- EXECUTE FULL GENERATION RUNTIME ---
+                eprintln!(
+                    "[worker {}] starting run_generation_job for chunk {:?}",
+                    id,
+                    job.id
+                );
                 let final_result = generate_runtime::run_generation_job(job, &config.generation);
+                eprintln!(
+                    "[worker {}] run_generation_job finished with result: {:?}",
+                    id,
+                    final_result.as_ref().map(|c| c.position)
+                );
 
                 // --- FINISHER DELIVERY ---
-                // Send the final result (Completed Chunk or Failure Message) back to the Conductor.
                 let message = match final_result {
                     Ok(completed_chunk) => {
-                        // Using eprintln! for standard thread logging
-                        eprintln!("INFO: Worker {} completed job {:?}", id, completed_chunk.position);
+                        eprintln!(
+                            "[worker {}] completed job for chunk {:?}",
+                            id,
+                            completed_chunk.position
+                        );
                         GenerationDataMessage::CompletedChunk(completed_chunk)
-                    },
+                    }
                     Err(e) => {
-                        // Using eprintln! for standard thread logging
-                        eprintln!("ERROR: Worker {} failed job: {:?}", id, e);
+                        eprintln!("[worker {}] failed job: {:?}", id, e);
                         GenerationDataMessage::JobFailure(e)
                     }
                 };
 
                 // Non-blocking delivery of the result back to the Conductor's main thread poller.
                 if let Err(e) = sender_clone.send(message) {
-                    // The main thread is no longer listening; break the loop and shut down.
-                    // Using eprintln! for standard thread logging
-                    eprintln!("ERROR: Worker {} failed to send result: {}. Conductor likely shut down.", id, e);
+                    eprintln!(
+                        "[worker {}] failed to send result: {}. Conductor likely shut down.",
+                        id,
+                        e
+                    );
                     break; 
                 }
+
+                eprintln!("[worker {}] finished cycle and waiting for next job.", id);
             }
-            // Using eprintln! for standard thread logging
-            eprintln!("INFO: Worker {} shutting down.", id);
+
+            eprintln!("[worker {}] shutting down (task channel closed).", id);
         });
 
         Worker { id, handle: Some(handle) }
@@ -92,10 +111,9 @@ pub struct SyncPool {
 impl SyncPool {
     /// Creates a new SyncPool and spawns the specified number of workers.
     /// Returns the Conductor's receiving channel for completed work.
-    /// 
+    ///
     /// Returns: (SyncPool instance, Receiver for completed chunks)
     pub fn new(num_workers: usize, config: Arc<GlobalConfig>) -> (Self, Receiver<GenerationDataMessage>) {
-        
         // --- 1. Setup Channels ---
         let (task_sender, task_receiver_final_handle) = flume::unbounded();
         let task_receiver_arc = Arc::new(task_receiver_final_handle.clone());
@@ -112,7 +130,11 @@ impl SyncPool {
             ));
         }
 
-        eprintln!("INFO: Started SyncPool with {} dedicated workers.", num_workers);
+        // This one runs on the main thread, so SSXL logging is safe if you want:
+        eprintln!(
+            "INFO: Started SyncPool with {} dedicated workers.",
+            num_workers
+        );
         
         let pool = SyncPool { 
             workers, 
@@ -126,41 +148,29 @@ impl SyncPool {
     
     /// Submits a new generation job to the worker pool.
     pub fn submit_job(&self, job: GenerationJob) -> Result<(), flume::SendError<GenerationJob>> {
+        eprintln!(
+            "DEBUG: Submitting job for chunk {:?} at step {:?} to worker pool.",
+            job.id,
+            job.current_step
+        );
         self.task_sender.send(job)
     }
     
-    // ✅ FIX E0599: Implemented the method required by GenerationManager.
     /// Retrieves the current status of the worker pool (worker count and queue size).
     pub fn get_status(&self) -> (usize, usize) {
         let worker_count = self.workers.len();
-        // flume::Sender::len() reports the number of messages currently waiting in the queue.
         let queue_size = self.task_sender.len();
         (worker_count, queue_size)
     }
-
-    // ❌ REMOVED: The shutdown method that takes `self` (ownership) is removed here 
-    // to resolve E0507 in GenerationManager. Cleanup will be done by the owner 
-    // when the struct is dropped, or via a public, static cleanup method.
-    /*
-    pub fn shutdown(self) {
-        // ... shutdown logic ...
-    }
-    */
 }
-
-// NOTE: To ensure threads are properly joined upon cleanup (which is essential
-// for clean shutdown), we re-introduce the shutdown logic using a static method 
-// or implement the Drop trait. Since `GenerationManager` is fixed to no longer 
-// call `shutdown(&self)`, we defer the joining/cleanup to the host layer 
-// responsible for owning and dropping the SyncPool instance.
-// However, since the original code contained the join logic, we will define a 
-// static `cleanup` function that takes ownership for the host to call.
 
 impl SyncPool {
     /// Signals workers to stop and waits for all threads to finish (clean shutdown).
     /// This method takes ownership and is intended to be called when the pool is 
     /// no longer needed by the owning structure.
     pub fn cleanup(self) {
+        eprintln!("INFO: SyncPool.cleanup() called. Dropping channels and joining workers...");
+
         // Drop all senders and the receiver handle. This signals to workers to exit their loops.
         drop(self.task_sender);
         drop(self._task_receiver_final_handle);
@@ -169,8 +179,13 @@ impl SyncPool {
         // Wait for all worker threads to finish.
         for mut worker in self.workers.into_iter() {
             if let Some(handle) = worker.handle.take() {
-                if let Err(e) = handle.join() {
-                    eprintln!("ERROR: Worker {} thread join failed: {:?}", worker.id, e);
+                match handle.join() {
+                    Ok(()) => {
+                        eprintln!("INFO: Worker {} thread joined successfully.", worker.id);
+                    }
+                    Err(e) => {
+                        eprintln!("ERROR: Worker {} thread join failed: {:?}", worker.id, e);
+                    }
                 }
             }
         }

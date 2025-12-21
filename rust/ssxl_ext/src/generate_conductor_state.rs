@@ -1,5 +1,3 @@
-// rust/SSXL-ext/src/generate_conductor_state.rs
-
 use std::fmt;
 use std::sync::Mutex;
 // --- FIX: Import logging macros from the crate root ---
@@ -12,9 +10,8 @@ use crate::ssxl_info;
 /// Defines the current operational status of the Generation Conductor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConductorState {
-    /// Initial state, awaiting a command to start. (Previously Idle)
-	Idle,
-    Ready, // <<< FIX: Renamed 'Idle' to 'Ready' to satisfy generate_conductor.rs
+    /// Initial state before any build_map() call.
+    Ready,          // ✅ Conductor begins ready to accept a build_map() + start_generation()
     /// The worker pool is actively generating chunks.
     Generating,
     /// Generation is complete, but the final cleanup/signals are pending.
@@ -45,7 +42,7 @@ pub struct GenerationMetrics {
     /// The number of jobs that failed during processing.
     pub failed_jobs: u32,
     /// The instantaneous speed of processing (e.g., chunks per second).
-    pub current_throughput: f32, 
+    pub current_throughput: f32,
 }
 
 impl Default for GenerationMetrics {
@@ -75,8 +72,8 @@ pub struct ConductorStateContainer {
 impl ConductorStateContainer {
     pub fn new() -> Self {
         ConductorStateContainer {
-            // FIX: Initialize to the 'Ready' state
-            state: Mutex::new(ConductorState::Idle),
+            // ✅ FIX: Conductor starts in Ready state so build_map() → start_generation() works
+            state: Mutex::new(ConductorState::Ready),
             metrics: Mutex::new(GenerationMetrics::default()),
         }
     }
@@ -108,7 +105,6 @@ impl ConductorStateContainer {
     /// Atomic update: Increments the count of completed chunks.
     pub fn increment_completed_chunks(&self) {
         self.metrics.lock().unwrap().completed_chunks += 1;
-        // Logic for throughput calculation would also be here
     }
 
     /// Atomic update: Increments the count of failed jobs.

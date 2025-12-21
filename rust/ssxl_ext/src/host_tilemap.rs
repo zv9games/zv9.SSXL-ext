@@ -1,41 +1,19 @@
 use godot::prelude::*;
-use godot::classes::TileMap;
 use crate::shared_chunk::Chunk;
 use crate::shared_error::SSXLCoreError;
 use crate::shared_tile::TileData;
 use crate::bridge_ffi::{ssxl_get_tilemap_chunk_ptr, ssxl_notify_chunk_updated};
 
-pub trait TileMapDirectWriteExtension {
-    fn get_raw_chunk_data_ptr(&mut self, layer: i32, cx: i32, cy: i32) -> *mut u8;
-    fn notify_chunk_data_changed(&mut self, layer: i32, cx: i32, cy: i32);
-}
+/// NOTE:
+/// The old TileMapDirectWriteExtension trait is removed.
+/// SSXLTileMap is now a native Godot class, so we call the FFI bridge directly.
 
-impl TileMapDirectWriteExtension for Gd<TileMap> {
-    fn get_raw_chunk_data_ptr(&mut self, layer: i32, cx: i32, cy: i32) -> *mut u8 {
-        self.call(
-            "get_raw_chunk_data_ptr",
-            &[
-                Variant::from(layer as i64),
-                Variant::from(cx as i64),
-                Variant::from(cy as i64),
-            ],
-        )
-        .to::<*mut u8>()
-    }
-
-    fn notify_chunk_data_changed(&mut self, layer: i32, cx: i32, cy: i32) {
-        let _ = self.call(
-            "notify_chunk_data_changed",
-            &[
-                Variant::from(layer as i64),
-                Variant::from(cx as i64),
-                Variant::from(cy as i64),
-            ],
-        );
-    }
-}
-
+/// Render a chunk by:
+/// 1. Asking SSXLTileMap for a raw pointer to the chunk buffer
+/// 2. Copying TileData into that buffer
+/// 3. Notifying SSXLTileMap that the chunk changed
 pub fn render_chunk_direct(tilemap_id_raw: i64, chunk: Chunk) -> Result<(), SSXLCoreError> {
+    // SAFETY: FFI call into Godot to retrieve the chunk pointer
     let dest_ptr = unsafe {
         ssxl_get_tilemap_chunk_ptr(
             tilemap_id_raw,
@@ -60,6 +38,7 @@ pub fn render_chunk_direct(tilemap_id_raw: i64, chunk: Chunk) -> Result<(), SSXL
         }
     }
 
+    // SAFETY: Notify Godot that the chunk buffer was updated
     unsafe {
         ssxl_notify_chunk_updated(
             tilemap_id_raw,

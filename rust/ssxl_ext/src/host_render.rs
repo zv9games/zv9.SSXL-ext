@@ -5,9 +5,9 @@ use crate::generate_conductor_state::ConductorStateContainer;
 #[cfg(feature = "godot-binding")]
 use crate::generate_conductor_state::ConductorState;
 
+// ✅ Updated import — now uses the native SSXLTileMap pipeline
 #[cfg(feature = "godot-binding")]
 use crate::host_tilemap::render_chunk_direct;
-
 
 #[cfg(feature = "godot-binding")]
 const MAX_CHUNKS_PER_FRAME: u32 = 16;

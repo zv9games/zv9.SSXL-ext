@@ -5,7 +5,7 @@ use godot::prelude::*;
 #[cfg(feature = "godot-binding")]
 use godot::builtin::{GString, VarDictionary};
 #[cfg(feature = "godot-binding")]
-use godot::classes::{Node, TileMap};
+use godot::classes::Node;
 
 #[cfg(feature = "godot-binding")]
 use crate::export_api;
@@ -17,6 +17,10 @@ use crate::host_commands;
 use crate::host_tilemap_status;
 #[cfg(feature = "godot-binding")]
 use crate::host_conductor::SSXLConductor;
+#[cfg(feature = "godot-binding")]
+use crate::generate_conductor_state::ConductorState;
+#[cfg(feature = "godot-binding")]
+use crate::ssxl_tilemap::SSXLTileMap;
 
 #[cfg(feature = "godot-binding")]
 impl SSXLConductor {
@@ -24,13 +28,26 @@ impl SSXLConductor {
     // Internal API helpers (called by #[func] wrappers)
     // ----------------------------------------------------
 
-    pub fn api_set_tilemap(&mut self, tilemap: Gd<TileMap>) {
-        export_api!("set_tilemap(tilemap: TileMap)");
-        self.tilemap_target = Some(tilemap);
-        crate::ssxl_info!(
-            "TileMap target successfully registered: {:?}",
-            self.tilemap_target.as_ref().unwrap().instance_id()
-        );
+    pub fn api_set_tilemap(&mut self, tilemap: Gd<Node>) {
+        export_api!("set_tilemap(tilemap: Node)");
+
+        if let Ok(_ssxl_tm) = tilemap.clone().try_cast::<SSXLTileMap>() {
+            self.tilemap_target = Some(tilemap.clone());
+            crate::ssxl_info!(
+                "TileMap target successfully registered: {:?}",
+                self.tilemap_target
+                    .as_ref()
+                    .unwrap()
+                    .instance_id()
+            );
+        } else {
+            crate::ssxl_error!(
+                "api_set_tilemap: Expected SSXLTileMap, but received a different node type."
+            );
+            self.emit_generation_error(
+                "set_tilemap failed: target must be an SSXLTileMap node."
+            );
+        }
     }
 
     pub fn api_initialize_runtime_shell(&mut self, signal_receiver: Gd<Node>) {
@@ -47,19 +64,77 @@ impl SSXLConductor {
 
     pub fn api_build_map(&mut self, config: VarDictionary) -> bool {
         export_api!("build_map(config: Dictionary)");
-        crate::ssxl_info!("Received request to build map with config: {:?}", config);
+        crate::ssxl_info!(
+            "Received request to build map with config: {:?}",
+            config
+        );
 
         if self.tilemap_target.is_none() {
             crate::ssxl_error!("FATAL: Cannot build map. TileMap target is missing.");
             self.emit_generation_error("Cannot build map: TileMap target is missing.");
             return false;
         }
+
+        // ✅ Extract width/height from Godot config and store in HostState
+        match get_host_state_mut() {
+            Ok(host_state) => {
+                if let Some(w) = config.get("width").and_then(|v| v.try_to::<i64>().ok()) {
+                    host_state.world_width = w as i32;
+                }
+                if let Some(h) = config.get("height").and_then(|v| v.try_to::<i64>().ok()) {
+                    host_state.world_height = h as i32;
+                }
+
+                crate::ssxl_info!(
+                    "World size set from Godot: {} x {}",
+                    host_state.world_width,
+                    host_state.world_height
+                );
+
+                // ✅ Mark conductor as Ready
+                let conductor = &host_state.conductor;
+                let state_container = conductor.get_state_container();
+                state_container.transition_to(ConductorState::Ready);
+
+                crate::ssxl_info!("Conductor state set to Ready after build_map().");
+            }
+            Err(e) => {
+                crate::ssxl_error!(
+                    "HostState not available during build_map; cannot set conductor Ready: {:?}",
+                    e
+                );
+                self.emit_generation_error(&format!(
+                    "HostState not available during build_map: {:?}",
+                    e
+                ));
+                return false;
+            }
+        }
+
         true
     }
 
+    // ----------------------------------------------------
+    // ✅ Real conductor state returned to Godot
+    // ----------------------------------------------------
+
     pub fn api_get_status(&self) -> GString {
         export_api!("get_status() -> String");
-        "Running - Waiting for build_map".into()
+
+        match get_host_state() {
+            Ok(state) => {
+                let conductor = &state.conductor;
+                let real_state = conductor.get_state_container().get_state();
+                GString::from(&format!("{}", real_state))
+            }
+            Err(e) => {
+                crate::ssxl_error!(
+                    "Failed to retrieve HostState in get_status(): {:?}",
+                    e
+                );
+                GString::from("Error")
+            }
+        }
     }
 
     pub fn api_get_active_generator_id(&self) -> GString {
@@ -101,7 +176,6 @@ impl SSXLConductor {
 
         match host_commands::handle_start_command(host_state_mut, tilemap_id) {
             Ok(_) => {
-                // Total chunks unknown here — poller will update progress.
                 self.emit_generation_started(tilemap_id, 0);
                 true
             }

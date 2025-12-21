@@ -1,22 +1,24 @@
-[gd_scene load_steps=4 format=3 uid="uid://b41u5k6701dor"]
+[gd_scene load_steps=5 format=3 uid="uid://b41u5k6701dor"]
 
 [ext_resource type="Script" uid="uid://bf4m53dvayhbc" path="res://root_scripts/main.gd" id="1_y374o"]
 [ext_resource type="Script" uid="uid://ca5hhsplw0ycs" path="res://root_scripts/ssxl_controller.gd" id="2_w5n1r"]
-[ext_resource type="TileSet" uid="uid://b6ts3mi2pbpvq" path="res://pacman_tilemap.tres" id="3_w5n1r"]
+[ext_resource type="TileSet" uid="uid://b6ts3mi2pbpvq" path="res://pacman_tilemap.tres" id="3_kwdps"]
+[ext_resource type="Script" uid="uid://cuuqayqgvvtsv" path="res://root_scripts/ssxl_tilemap.gd" id="4_kwdps"]
 
 [node name="main" type="Node"]
 script = ExtResource("1_y374o")
-
-[node name="Camera2D" type="Camera2D" parent="."]
-anchor_mode = 0
-zoom = Vector2(0.5, 0.5)
 
 [node name="SSXLConductor" type="SSXLConductor" parent="."]
 
 [node name="SSXLController" type="Node" parent="."]
 script = ExtResource("2_w5n1r")
-override_tile_id = 0
+map_width = 2000
+map_height = 2000
 
-[node name="TileMap" type="TileMap" parent="."]
-tile_set = ExtResource("3_w5n1r")
-format = 2
+[node name="SSXLTileMap" type="SSXLTileMap" parent="."]
+tile_set = ExtResource("3_kwdps")
+script = ExtResource("4_kwdps")
+
+[node name="Camera2D" type="Camera2D" parent="SSXLTileMap"]
+anchor_mode = 0
+zoom = Vector2(0.01, 0.01)

@@ -94,7 +94,11 @@ impl SSXLConductor {
         let completed = metrics.completed_chunks as i32;
 
         if total > 0 {
-            self.emit_conductor_ready();
+            // ✅ SPAM BLOCKER: Only emit conductor_ready once per generation cycle
+            if !self.has_emitted_ready {
+                self.emit_conductor_ready();
+                self.has_emitted_ready = true;
+            }
 
             let mut dict = VarDictionary::new();
             let _ = dict.insert("completed", completed.to_variant());
@@ -114,9 +118,11 @@ impl SSXLConductor {
                 self.emit_chunk_rendered(completed, total);
             }
 
-            if events.generation_completed {
+            // ✅ NEW SPAM BLOCKER: Only emit generation_finished once
+            if events.generation_completed && !self.has_emitted_finished {
                 let tilemap_id = events.finalized_tilemap_id.unwrap_or(-1);
                 self.emit_generation_finished(tilemap_id);
+                self.has_emitted_finished = true;
             }
         } else {
             self.emit_conductor_idle();
