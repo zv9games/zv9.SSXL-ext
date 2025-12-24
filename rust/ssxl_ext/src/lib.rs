@@ -1,10 +1,15 @@
-// Only pull in Godot when we're building the Godot binding.
+// ------------------------------------------------------------
+// Godot binding imports (only when building the Godot binding)
+// ------------------------------------------------------------
 #[cfg(feature = "godot-binding")]
 use godot::prelude::*;
 
 #[cfg(feature = "godot-binding")]
 use godot::init::{ExtensionLibrary, InitLevel};
 
+// ------------------------------------------------------------
+// Core engine modules
+// ------------------------------------------------------------
 pub mod tools;
 pub mod math;
 pub mod config;
@@ -56,10 +61,19 @@ pub mod tile_conversion;
 #[macro_use]
 pub mod api_registry;
 
-// Native Godot TileMap bridge for SSXL (only when building the Godot binding).
+// ------------------------------------------------------------
+// ✅ PLAN B RENDERER MODULE (must be exported for Godot to see it)
+// ------------------------------------------------------------
 #[cfg(feature = "godot-binding")]
-pub mod ssxl_tilemap;
+pub mod renderer;
 
+#[cfg(feature = "godot-binding")]
+pub mod ssxl_chunk_buffer;
+
+
+// ------------------------------------------------------------
+// GDExtension entry point
+// ------------------------------------------------------------
 #[cfg(feature = "godot-binding")]
 struct SSXLExtension;
 

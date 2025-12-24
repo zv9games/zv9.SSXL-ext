@@ -15,10 +15,36 @@ static TEST_TILEMAP_ID: Lazy<i64> = Lazy::new(|| 1337000);
 #[cfg(not(feature = "godot-binding"))]
 const TEST_TILEMAP_ID: i64 = 1337000;
 
+// ----------------------------------------------------
+// ✅ PLAN B HOOKS
+// These are no-ops for now, but they are the correct
+// architectural insertion points for your custom renderer.
+// ----------------------------------------------------
+fn planb_renderer_begin_world(
+    _host_state: &mut HostState,
+    _world_w: i32,
+    _world_h: i32,
+    _chunk_size: u32,
+    _chunks_x: i32,
+    _chunks_y: i32,
+) {
+    // Example future logic:
+    // host_state.renderer.begin_world(world_w, world_h, chunk_size, chunks_x, chunks_y);
+}
+
+fn planb_renderer_reset(_host_state: &mut HostState) {
+    // Example future logic:
+    // host_state.renderer.reset();
+}
+
+// ----------------------------------------------------
+// ✅ Start Command (Dynamic World Generation)
+// ----------------------------------------------------
 pub fn handle_start_command(
     host_state: &mut HostState,
     tilemap_id_raw: i64,
 ) -> Result<(), SSXLCoreError> {
+
     // ----------------------------------------------------
     // ✅ Safety checks
     // ----------------------------------------------------
@@ -40,13 +66,26 @@ pub fn handle_start_command(
     let world_w = host_state.world_width.max(1);
     let world_h = host_state.world_height.max(1);
 
-    // ✅ Chunk size from map_settings (correct location)
+    // ✅ Chunk size from map_settings
     let chunk_size_i32 = host_state.config.map_settings.chunk_size as i32;
     let chunk_size_u32 = chunk_size_i32 as u32;
 
     // Compute number of chunks needed
     let chunks_x = (world_w + chunk_size_i32 - 1) / chunk_size_i32;
     let chunks_y = (world_h + chunk_size_i32 - 1) / chunk_size_i32;
+
+    // ----------------------------------------------------
+    // ✅ PLAN B: Reset renderer + begin world
+    // ----------------------------------------------------
+    planb_renderer_reset(host_state);
+    planb_renderer_begin_world(
+        host_state,
+        world_w,
+        world_h,
+        chunk_size_u32,
+        chunks_x,
+        chunks_y,
+    );
 
     // ----------------------------------------------------
     // ✅ Build jobs dynamically
@@ -75,9 +114,13 @@ pub fn handle_start_command(
     host_state.conductor.start_generation(tilemap_id, jobs)
 }
 
+// ----------------------------------------------------
+// ✅ Structural Test Job (1 chunk)
+// ----------------------------------------------------
 pub fn trigger_structural_test_job(
     host_state: &mut HostState,
 ) -> Result<(), SSXLCoreError> {
+
     if host_state.conductor.get_state_container().get_state() == ConductorState::Generating {
         return Err(SSXLCoreError::ConductorBusy);
     }
@@ -101,6 +144,19 @@ pub fn trigger_structural_test_job(
 
     let seed = host_state.config.generation.world_seed;
     let config = Arc::new(host_state.config.generation.clone());
+
+    // ----------------------------------------------------
+    // ✅ PLAN B: Reset renderer + begin world (1 chunk)
+    // ----------------------------------------------------
+    planb_renderer_reset(host_state);
+    planb_renderer_begin_world(
+        host_state,
+        1,
+        1,
+        chunk_size,
+        1,
+        1,
+    );
 
     let mut jobs = Vec::new();
     for chunk_x in -map_extent..=map_extent {

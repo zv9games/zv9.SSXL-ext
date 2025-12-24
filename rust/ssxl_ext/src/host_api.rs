@@ -19,8 +19,6 @@ use crate::host_tilemap_status;
 use crate::host_conductor::SSXLConductor;
 #[cfg(feature = "godot-binding")]
 use crate::generate_conductor_state::ConductorState;
-#[cfg(feature = "godot-binding")]
-use crate::ssxl_tilemap::SSXLTileMap;
 
 #[cfg(feature = "godot-binding")]
 impl SSXLConductor {
@@ -28,26 +26,20 @@ impl SSXLConductor {
     // Internal API helpers (called by #[func] wrappers)
     // ----------------------------------------------------
 
-    pub fn api_set_tilemap(&mut self, tilemap: Gd<Node>) {
-        export_api!("set_tilemap(tilemap: Node)");
+    /// Plan B: this is now a generic render target node, not a TileMap.
+    pub fn api_set_tilemap(&mut self, target_node: Gd<Node>) {
+        export_api!("set_tilemap(target: Node)");
 
-        if let Ok(_ssxl_tm) = tilemap.clone().try_cast::<SSXLTileMap>() {
-            self.tilemap_target = Some(tilemap.clone());
-            crate::ssxl_info!(
-                "TileMap target successfully registered: {:?}",
-                self.tilemap_target
-                    .as_ref()
-                    .unwrap()
-                    .instance_id()
-            );
-        } else {
-            crate::ssxl_error!(
-                "api_set_tilemap: Expected SSXLTileMap, but received a different node type."
-            );
-            self.emit_generation_error(
-                "set_tilemap failed: target must be an SSXLTileMap node."
-            );
-        }
+        // In Plan B we do not require a specific Godot type here.
+        self.tilemap_target = Some(target_node.clone());
+
+        crate::ssxl_info!(
+            "Render target node successfully registered: instance_id={:?}",
+            self.tilemap_target
+                .as_ref()
+                .unwrap()
+                .instance_id()
+        );
     }
 
     pub fn api_initialize_runtime_shell(&mut self, signal_receiver: Gd<Node>) {
@@ -70,8 +62,8 @@ impl SSXLConductor {
         );
 
         if self.tilemap_target.is_none() {
-            crate::ssxl_error!("FATAL: Cannot build map. TileMap target is missing.");
-            self.emit_generation_error("Cannot build map: TileMap target is missing.");
+            crate::ssxl_error!("FATAL: Cannot build map. Render target node is missing.");
+            self.emit_generation_error("Cannot build map: render target node is missing.");
             return false;
         }
 
@@ -145,7 +137,7 @@ impl SSXLConductor {
     pub fn api_oracle_tick(&self, _delta: f32) {
         export_api!("oracle_tick(delta: float)");
         if self.tilemap_target.is_some() {
-            // Placeholder for future oracle_tick logic
+            // Placeholder for future oracle_tick logic (Plan B-friendly).
         }
     }
 
@@ -154,8 +146,9 @@ impl SSXLConductor {
         VarDictionary::new()
     }
 
+    /// Plan B: `target_tilemap` is now the render target node (e.g. SSXLRenderer).
     pub fn api_start_generation(&mut self, target_tilemap: Gd<Node>) -> bool {
-        export_api!("start_generation(target_tilemap: Node) -> bool");
+        export_api!("start_generation(target: Node) -> bool");
 
         let host_state_mut = match get_host_state_mut() {
             Ok(state) => state,
@@ -172,11 +165,11 @@ impl SSXLConductor {
             }
         };
 
-        let tilemap_id = target_tilemap.instance_id().to_i64();
+        let target_id = target_tilemap.instance_id().to_i64();
 
-        match host_commands::handle_start_command(host_state_mut, tilemap_id) {
+        match host_commands::handle_start_command(host_state_mut, target_id) {
             Ok(_) => {
-                self.emit_generation_started(tilemap_id, 0);
+                self.emit_generation_started(target_id, 0);
                 true
             }
             Err(e) => {

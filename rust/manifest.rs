@@ -21,6 +21,10 @@ plugin.cfg
 plugin.gd
 SSXL.gd
 
+step 1 cargo build -p ssxl_ext --release --features godot-binding
+step 2 cargo run -p ssxl_cli --release
+
+
 
 
 
@@ -42,16 +46,19 @@ C:\zv9\zv9.ssxl-ext\rust\SSXL_noob_survival_guide.gd
 C:\zv9\zv9.ssxl-ext\rust\verbose.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\godot_headless.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\main.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\pipeline.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\run_ssxl.bat
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_api_scan.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_config.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_godot.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_menu.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_source_scan.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_testing.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_conductor.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_events.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_worker.rs
@@ -95,10 +102,17 @@ C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_math.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_message.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_tile.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_types.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\ssxl_chunk_buffer.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_pool.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_rhythm.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\tile_conversion.rs
 C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\tools.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\atlas.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\chunk_mesh.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\mesh_builder.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\mesh_upload.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\mod.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\renderer_node.rs
 
 
 PS C:\zv9\zv9.SSXL-ext\rust>

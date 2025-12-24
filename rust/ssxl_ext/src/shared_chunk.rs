@@ -23,10 +23,13 @@ impl Chunk {
     /// Initializes a new, empty chunk with the required size and position.
     pub fn new(position: ChunkCoords, size: u32) -> Self {
         let capacity = (size * size) as usize;
+
         Self {
             position,
             size,
-            tiles: Vec::with_capacity(capacity),
+            // IMPORTANT FIX:
+            // Pre-fill the tile buffer so generator steps can safely write into it.
+            tiles: vec![TileData::default(); capacity],
             contains_assets: false,
         }
     }
@@ -51,7 +54,7 @@ impl Chunk {
     }
 
     // -------------------------------------------------------------------------
-    // ✅ NEW HELPERS FOR HALO-BASED CA
+    // Helpers for halo-based CA
     // -------------------------------------------------------------------------
 
     /// Converts local chunk coordinates (0..size) into world coordinates.

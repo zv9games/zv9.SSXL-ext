@@ -4,7 +4,7 @@
 #[cfg(feature = "godot-binding")]
 use godot::prelude::*;
 #[cfg(feature = "godot-binding")]
-use godot::classes::{Node, TileMap};
+use godot::classes::{Node};
 #[cfg(feature = "godot-binding")]
 use godot::builtin::{GString, VarDictionary};
 
@@ -43,17 +43,23 @@ mod ssxl_conductor_impl {
     #[derive(GodotClass)]
     #[class(base = Node)]
     pub struct SSXLConductor {
-        /// ✅ Stores a generic Node, not a TileMap.
-        /// This allows SSXLTileMap (native Rust class) to be passed in.
+        /// Stores a generic Node, not a TileMap.
+        /// In Plan B, this is expected to be an SSXL renderer node,
+        /// not a Godot TileMap.
         pub tilemap_target: Option<Gd<Node>>,
 
+        /// Optional node that receives signals/events.
         pub signal_target: Option<Gd<Node>>,
+
+        /// Identifier for the active generator backend.
         pub active_generator_id: String,
 
         /// Tracks whether we've already emitted `conductor_ready`
+        /// for the current generation lifecycle.
         pub has_emitted_ready: bool,
 
         /// Tracks whether we've already emitted `generation_finished`
+        /// for the current generation lifecycle.
         pub has_emitted_finished: bool,
 
         #[base]
@@ -177,7 +183,8 @@ mod ssxl_conductor_impl {
         // API methods
         // ----------------------------------------------------
 
-        /// Accepts Gd<Node>, not Gd<TileMap>
+        /// Accepts Gd<Node>, not Gd<TileMap>.
+        /// In Plan B, this should be your SSXL renderer node.
         #[func]
         pub fn set_tilemap(&mut self, tilemap: Gd<Node>) {
             self.api_set_tilemap(tilemap);
@@ -218,11 +225,13 @@ mod ssxl_conductor_impl {
             self.api_get_metrics()
         }
 
+        /// Plan B hook: each new generation cycle resets the
+        /// signal emission guards so `conductor_ready` and
+        /// `generation_finished` are emitted once per run.
         #[func]
         pub fn start_generation(&mut self, target_tilemap: Gd<Node>) -> bool {
-            // You can optionally reset flags here if you want
-            // self.has_emitted_ready = false;
-            // self.has_emitted_finished = false;
+            self.has_emitted_ready = false;
+            self.has_emitted_finished = false;
             self.api_start_generation(target_tilemap)
         }
 

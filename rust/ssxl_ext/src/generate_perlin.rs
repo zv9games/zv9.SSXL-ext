@@ -1,9 +1,7 @@
-// rust/SSXL-ext/src/generate_perlin.rs
-
 use crate::shared_config::PerlinNoiseConfig;
 use crate::shared_chunk::Chunk;
 use crate::shared_tile::TileData;
-use noise::{Fbm, Perlin, NoiseFn, MultiFractal};
+use noise::{Fbm, Perlin, MultiFractal};
 
 /// Holds the initialized noise generator and configuration.
 pub struct NoiseGenerator {
@@ -23,53 +21,48 @@ impl NoiseGenerator {
     }
 }
 
-/// Generates the base noise map for a specific chunk.
-/// TANK MODE: Seamless across all chunk boundaries.
+/// Checkerboard generator (replaces Perlin for debugging).
 pub fn generate_noise_map(
     mut chunk: Chunk,
-    generator: &NoiseGenerator
+    _generator: &NoiseGenerator,
 ) -> Result<Chunk, String> {
 
-    let chunk_x = chunk.position.0; // i32
-    let chunk_y = chunk.position.1; // i32
-    let s = chunk.size;             // u32
+    // Real atlas tile IDs (u16!)
+    const TILE_BLACK: u16 = 430; // (14, 13)
+    const TILE_BLUE:  u16 = 431; // (15, 13)
 
-    // ✅ Tank-mode frequency: decoupled from chunk size
-    let frequency = 0.01;
-
-    let threshold = generator.config.threshold;
-
-    // ✅ Allocate tile buffer using u32 math (no signed overflow)
+    let s = chunk.size;
     let total = (s * s) as usize;
+
+    // Ensure tile buffer is sized
     chunk.tiles.resize(total, TileData::default());
 
-    // ✅ Iterate using u32, convert to i32 only for world coords
+    let mut debug_first = true;
+
     for ly in 0..s {
         for lx in 0..s {
 
-            // ✅ 1. Compute world coordinates using correct types
-            let world_x = chunk_x * s as i32 + lx as i32;
-            let world_y = chunk_y * s as i32 + ly as i32;
+            // Global checkerboard (continues across chunks)
+            let world_x = chunk.position.0 * s as i32 + lx as i32;
+            let world_y = chunk.position.1 * s as i32 + ly as i32;
 
-            // ✅ 2. Sample noise using frequency (NOT scale)
-            let noise_value = generator.fbm.get([
-                world_x as f64 * frequency,
-                world_y as f64 * frequency,
-            ]);
+            let is_even = ((world_x + world_y) % 2) == 0;
 
-            // ✅ 3. Convert noise to tile data
-            let tile_data = if noise_value > threshold {
-                TileData {
-                    tile_id: 1,
-                    atlas_coords: 0,
-                    rotation_flags: 0,
-                    custom_data: (noise_value * 255.0).abs().round() as u8,
-                }
-            } else {
-                TileData::default()
+            let tile_data = TileData {
+                tile_id: if is_even { TILE_BLACK } else { TILE_BLUE },
+                atlas_coords: 0,
+                rotation_flags: 0,
+                custom_data: 0,
             };
 
-            // ✅ 4. Write tile using u32 indexing (no signed math)
+            if debug_first {
+                eprintln!(
+                    "[Checkerboard] DEBUG first tile: world=({}, {}) local=({}, {}) tile_id={}",
+                    world_x, world_y, lx, ly, tile_data.tile_id
+                );
+                debug_first = false;
+            }
+
             let index = (ly * s + lx) as usize;
             chunk.tiles[index] = tile_data;
         }

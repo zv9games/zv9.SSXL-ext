@@ -84,6 +84,33 @@ impl SSXLConductor {
         );
     }
 
+    // ----------------------------------------------------
+    // ✅ PLAN B HOOKS (SSXL Renderer Integration)
+    // ----------------------------------------------------
+
+    /// Called when a chunk has been generated and is ready for rendering.
+    /// In Plan B, this will forward raw tile data to your custom renderer.
+    fn push_chunk_to_renderer(
+        &mut self,
+        _conductor: &GenerateConductor,
+        _events: &ConductorEvents,
+    ) {
+        // ✅ PLAN B: This is where your renderer receives chunk data.
+        // Example (future):
+        // if let Some(renderer) = &self.tilemap_target {
+        //     renderer.bind_mut().apply_chunk_mesh(...);
+        // }
+    }
+
+    /// Called once when the entire generation is complete.
+    /// In Plan B, this finalizes the mesh, batching, or GPU upload.
+    fn finalize_renderer_output(&mut self) {
+        // ✅ PLAN B: Finalize mesh, upload to GPU, build chunk instances, etc.
+    }
+
+    // ----------------------------------------------------
+    // Main signal + renderer pipeline
+    // ----------------------------------------------------
     pub fn poll_and_emit_signals(
         &mut self,
         conductor: &GenerateConductor,
@@ -100,6 +127,12 @@ impl SSXLConductor {
                 self.has_emitted_ready = true;
             }
 
+            // ✅ PLAN B: Forward chunk data to renderer
+            if events.chunks_rendered > 0 {
+                self.push_chunk_to_renderer(conductor, events);
+            }
+
+            // ✅ Emit progress
             let mut dict = VarDictionary::new();
             let _ = dict.insert("completed", completed.to_variant());
             let _ = dict.insert("total", total.to_variant());
@@ -120,6 +153,9 @@ impl SSXLConductor {
 
             // ✅ NEW SPAM BLOCKER: Only emit generation_finished once
             if events.generation_completed && !self.has_emitted_finished {
+                // ✅ PLAN B: Finalize renderer output
+                self.finalize_renderer_output();
+
                 let tilemap_id = events.finalized_tilemap_id.unwrap_or(-1);
                 self.emit_generation_finished(tilemap_id);
                 self.has_emitted_finished = true;
