@@ -30,10 +30,11 @@ pub fn simulate_ca(chunk: Chunk, _rules: CaRules) -> Result<Chunk, String> {
 }
 
 /// Checks the state (e.g., TileID) to determine if a tile is "live" (a wall/solid).
+#[allow(dead_code)]
 fn is_live(tile: TileData) -> bool {
     tile.tile_id > 0
 }
-
+#[allow(dead_code)]
 fn make_live_tile() -> TileData {
     TileData {
         tile_id: 1,
@@ -42,7 +43,7 @@ fn make_live_tile() -> TileData {
         custom_data: 0,
     }
 }
-
+#[allow(dead_code)]
 fn make_dead_tile() -> TileData {
     TileData {
         tile_id: 0,
@@ -53,6 +54,7 @@ fn make_dead_tile() -> TileData {
 }
 
 /// Chunk‑local neighbor count (unused now, but kept for future CA re‑enable).
+#[allow(dead_code)]
 fn count_live_neighbors_chunk_local(
     tiles: &[TileData],
     size: usize,

@@ -24,6 +24,123 @@ SSXL.gd
 step 1 cargo build -p ssxl_ext --release --features godot-binding
 step 2 cargo run -p ssxl_cli --release
 
+================================================================================
+SSXL‑EXT PROJECT STRUCTURE — ORGANIZED BY SUBSYSTEM
+================================================================================
+
+──────────────────────────────────────────────────────────────────────────────
+TOP‑LEVEL PROJECT FILES
+──────────────────────────────────────────────────────────────────────────────
+C:\zv9\zv9.ssxl-ext\rust\cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\Cargo.lock
+C:\zv9\zv9.ssxl-ext\rust\manifest.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_config.toml
+C:\zv9\zv9.ssxl-ext\rust\LOC_scan.ps1
+C:\zv9\zv9.ssxl-ext\rust\SSXL_forward.rs
+C:\zv9\zv9.ssxl-ext\rust\SSXL_manual.rs
+C:\zv9\zv9.ssxl-ext\rust\SSXL_noob_survival_guide.gd
+C:\zv9\zv9.ssxl-ext\rust\verbose.rs
+
+================================================================================
+CLI SUBSYSTEM (ssxl_cli)
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\main.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\pipeline.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_menu.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_godot.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_config.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_api_scan.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_source_scan.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\ssxl_testing.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\godot_headless.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_cli\src\run_ssxl.bat
+
+================================================================================
+CORE ENGINE SUBSYSTEM (ssxl_ext root)
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\Cargo.toml
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\lib.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\config.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\cache.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\tools.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\api_registry.rs
+
+================================================================================
+GENERATION PIPELINE (workers, conductor, CA, Perlin, post‑processing)
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_manager.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_conductor.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_conductor_state.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_conductor_sync.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_task_queue.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_batch_processor.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_runtime.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_perlin.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_ca.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_ca_simulation.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\generate_anim_conductor.rs
+
+================================================================================
+HOST / GODOT BRIDGE (Godot <-> Rust)
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_init.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_api.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_render.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_commands.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_conductor.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_poller.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_state.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_signals.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_cleanup.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tilemap.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\host_tilemap_status.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\bridge_ffi.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\bridge_oracle.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\bridge_signals.rs
+
+================================================================================
+RENDERER SUBSYSTEM (GPU, mesh, atlas, renderer node)
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\mod.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\renderer_node.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\atlas.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\chunk_mesh.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\mesh_builder.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\renderer\mesh_upload.rs
+
+================================================================================
+ANIMATION SUBSYSTEM
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_conductor.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_events.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\animate_worker.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\rhythm_manager.rs
+
+================================================================================
+SHARED TYPES / MATH / DATA STRUCTURES
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_chunk.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_config.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_error.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_job.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_math.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_message.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_tile.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\shared_types.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\tile_conversion.rs
+
+================================================================================
+SYNC / THREADING SUBSYSTEM
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_pool.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\sync_rhythm.rs
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\ssxl_chunk_buffer.rs
+
+================================================================================
+MISC / LEGACY / ROOT FOLDER
+================================================================================
+C:\zv9\zv9.ssxl-ext\rust\ssxl_ext\src\math.rs
 
 
 

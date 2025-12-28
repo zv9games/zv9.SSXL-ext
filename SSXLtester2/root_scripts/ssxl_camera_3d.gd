@@ -1,7 +1,7 @@
 extends Camera3D
 
 @export var move_speed := 10.0
-@export var fast_speed := 40.0
+@export var fast_speed := 80.0
 @export var mouse_sensitivity := 0.002
 @export var zoom_speed := 5.0
 

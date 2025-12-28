@@ -8,9 +8,9 @@ use crate::shared_tile::TileData;
 /// SSXLChunkBuffer (formerly SSXLTileMap)
 ///
 /// This node:
-/// ✅ Owns per‑chunk TileData buffers
-/// ✅ Exposes raw pointers for SSXL core writes
-/// ❗ Emits signals *only after data is written*, not on allocation
+/// - Owns per‑chunk TileData buffers
+/// - Exposes raw pointers for SSXL core writes
+/// - Emits signals *only after data is written*, not on allocation
 /// ------------------------------------------------------------
 #[derive(GodotClass)]
 #[class(base = Node)]
@@ -70,7 +70,7 @@ impl SSXLChunkBuffer {
 
     // ------------------------------------------------------------
     // Raw pointer access for SSXL core
-    // (NO SIGNALS EMITTED HERE ANYMORE)
+    // (NO SIGNALS EMITTED HERE)
     // ------------------------------------------------------------
     #[func]
     pub fn get_raw_chunk_data_ptr(&mut self, _layer: i32, cx: i32, cy: i32) -> *mut u8 {
@@ -84,27 +84,9 @@ impl SSXLChunkBuffer {
 
         if buf.len() < chunk_area {
             buf.resize(chunk_area, TileData::default());
-            godot_print!(
-                "DEBUG: Allocated chunk buffer ({}, {}) with {} tiles",
-                cx,
-                cy,
-                chunk_area
-            );
         }
 
-        let ptr = buf.as_mut_ptr() as *mut u8;
-
-        godot_print!(
-            "DEBUG: get_raw_chunk_data_ptr -> chunk ({}, {}) ptr={:?}",
-            cx,
-            cy,
-            ptr
-        );
-
-        // ❌ Removed early chunk_ready signal
-        // (Renderer must NOT react before data is written)
-
-        ptr
+        buf.as_mut_ptr() as *mut u8
     }
 
     // ------------------------------------------------------------
@@ -155,24 +137,7 @@ impl SSXLChunkBuffer {
     // Rust-only accessors for the renderer
     // ------------------------------------------------------------
     pub fn get_chunk_slice(&self, cx: i32, cy: i32) -> Option<&[TileData]> {
-        let slice = self.chunk_buffers.get(&(cx, cy))?;
-
-        godot_print!(
-            "DEBUG: get_chunk_slice ({}, {}) -> {} tiles",
-            cx,
-            cy,
-            slice.len()
-        );
-
-        let first = slice.get(0).cloned().unwrap_or_default();
-        godot_print!(
-            "DEBUG: first tile in chunk ({}, {}) = {:?}",
-            cx,
-            cy,
-            first
-        );
-
-        Some(slice.as_slice())
+        self.chunk_buffers.get(&(cx, cy)).map(|v| v.as_slice())
     }
 
     pub fn get_chunk_slice_mut(&mut self, cx: i32, cy: i32) -> Option<&mut [TileData]> {

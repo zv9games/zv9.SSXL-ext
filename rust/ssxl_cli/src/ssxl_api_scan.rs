@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use crossterm::{cursor::MoveTo};
 
 use tracing::info;
 use walkdir::WalkDir;
@@ -35,7 +34,7 @@ struct ClassApi {
 /// Now anchored so it never overwrites the scene or menu.
 pub fn print_godot_api_surface(menu_y: u16) {
     use crossterm::{cursor::MoveTo, execute, terminal::{Clear, ClearType}};
-    use std::io::{self, Write};
+    use std::io;
 
     info!("Scanning SSXL-ext source for exported Godot API...");
 

@@ -6,6 +6,7 @@ use godot::builtin::{
 };
 
 use crate::renderer::chunk_mesh::ChunkMesh;
+use crate::config::DEBUG_MESH_UPLOAD;
 
 pub struct MeshUpload;
 
@@ -13,44 +14,61 @@ impl MeshUpload {
     pub fn upload_chunk_mesh(
         chunk_mesh: &mut ChunkMesh,
         chunk_size: i32,
+        world_origin: Vector3,
         scenario: Rid,
-    ) -> Rid {
+        material_rid: Rid,
+    ) -> (Rid, Rid) {
         let mut rs = RenderingServer::singleton();
 
-        // If this mesh has no geometry, free any existing RIDs and return an invalid RID.
-        if chunk_mesh.is_empty() {
-            godot_warn!(
-                "DEBUG MeshUpload: chunk ({}, {}) EMPTY — freeing RIDs",
-                chunk_mesh.cx, chunk_mesh.cy
+        // ------------------------------------------------------------
+        // Validate material RID
+        // ------------------------------------------------------------
+        if !material_rid.is_valid() {
+            godot_error!(
+                "MeshUpload: INVALID material_rid {:?} for chunk ({}, {})",
+                material_rid,
+                chunk_mesh.cx,
+                chunk_mesh.cy
             );
-            MeshUpload::free_chunk_mesh(chunk_mesh);
-            return Rid::new(0);
+            return (Rid::new(0), Rid::new(0));
         }
 
         // ------------------------------------------------------------
-        // Ensure ArrayMesh RID exists
+        // If empty, free and bail
+        // ------------------------------------------------------------
+        if chunk_mesh.is_empty() {
+            if DEBUG_MESH_UPLOAD {
+                godot_print!(
+                    "MeshUpload: chunk ({}, {}) EMPTY — freeing RIDs",
+                    chunk_mesh.cx, chunk_mesh.cy
+                );
+            }
+            MeshUpload::free_chunk_mesh(chunk_mesh);
+            return (Rid::new(0), Rid::new(0));
+        }
+
+        // ------------------------------------------------------------
+        // Ensure mesh RID
         // ------------------------------------------------------------
         let mesh_rid = match chunk_mesh.mesh_rid {
-            Some(rid) => {
-                godot_print!(
-                    "DEBUG MeshUpload: reusing mesh_rid={:?} for chunk ({}, {})",
-                    rid, chunk_mesh.cx, chunk_mesh.cy
-                );
-                rid
-            }
+            Some(rid) => rid,
             None => {
                 let rid = rs.mesh_create();
                 chunk_mesh.mesh_rid = Some(rid);
-                godot_print!(
-                    "DEBUG MeshUpload: created NEW mesh_rid={:?} for chunk ({}, {})",
-                    rid, chunk_mesh.cx, chunk_mesh.cy
-                );
+
+                if DEBUG_MESH_UPLOAD {
+                    godot_print!(
+                        "MeshUpload: created mesh_rid {:?} for chunk ({}, {})",
+                        rid, chunk_mesh.cx, chunk_mesh.cy
+                    );
+                }
+
                 rid
             }
         };
 
         // ------------------------------------------------------------
-        // Build PackedArrays
+        // Build arrays
         // ------------------------------------------------------------
         let verts = PackedVector3Array::from_iter(chunk_mesh.vertices.iter().copied());
         let uvs = PackedVector2Array::from_iter(chunk_mesh.uvs.iter().copied());
@@ -59,65 +77,68 @@ impl MeshUpload {
         let verts_var = Variant::from(verts);
         let uvs_var = Variant::from(uvs);
         let indices_var = Variant::from(indices);
-        let nil = Variant::nil();
 
-        // ------------------------------------------------------------
-        // Build surface array for mesh_add_surface_from_arrays
-        // ------------------------------------------------------------
         const ARRAY_MAX: usize = 13;
         const ARRAY_VERTEX: usize = 0;
         const ARRAY_TEX_UV: usize = 4;
         const ARRAY_INDEX: usize = 12;
 
         let mut surface = VarArray::new();
-        surface.resize(ARRAY_MAX, &nil);
+        let fill = Variant::from(()); // dummy
+        surface.resize(ARRAY_MAX, &fill);
         surface.set(ARRAY_VERTEX, &verts_var);
         surface.set(ARRAY_TEX_UV, &uvs_var);
         surface.set(ARRAY_INDEX, &indices_var);
 
         // ------------------------------------------------------------
-        // Upload to GPU
+        // Upload surface (no instance yet!)
         // ------------------------------------------------------------
         rs.mesh_clear(mesh_rid);
         rs.mesh_add_surface_from_arrays(mesh_rid, PrimitiveType::TRIANGLES, &surface);
 
-        // DEBUG: surface count after upload
-        let surf_count = rs.mesh_get_surface_count(mesh_rid);
-        godot_print!(
-            "DEBUG MeshUpload: mesh_rid={:?} now has {} surfaces (verts={}, indices={})",
-            mesh_rid,
-            surf_count,
-            chunk_mesh.vertices.len(),
-            chunk_mesh.indices.len()
-        );
+        // ------------------------------------------------------------
+        // Assign material BEFORE creating instance RID
+        // ------------------------------------------------------------
+        if DEBUG_MESH_UPLOAD {
+            godot_print!(
+                "MeshUpload: setting material_rid={:?} on mesh_rid={:?} surface=0 (chunk {}, {})",
+                material_rid,
+                mesh_rid,
+                chunk_mesh.cx,
+                chunk_mesh.cy
+            );
+        }
+        rs.mesh_surface_set_material(mesh_rid, 0, material_rid);
 
-        if surf_count == 0 {
-            godot_warn!(
-                "DEBUG MeshUpload: WARNING — mesh_rid={:?} has NO SURFACES. Material will appear NULL.",
-                mesh_rid
+        if DEBUG_MESH_UPLOAD {
+            godot_print!(
+                "MeshUpload: uploaded mesh for chunk ({}, {}) verts={} indices={}",
+                chunk_mesh.cx,
+                chunk_mesh.cy,
+                chunk_mesh.vertices.len(),
+                chunk_mesh.indices.len()
             );
         }
 
         // ------------------------------------------------------------
-        // Ensure instance RID exists
+        // Create instance RID *after* material is valid
         // ------------------------------------------------------------
         let instance_rid = match chunk_mesh.instance_rid {
-            Some(rid) => {
-                godot_print!(
-                    "DEBUG MeshUpload: reusing instance_rid={:?} for chunk ({}, {})",
-                    rid, chunk_mesh.cx, chunk_mesh.cy
-                );
-                rid
-            }
+            Some(rid) => rid,
             None => {
                 let rid = rs.instance_create();
                 chunk_mesh.instance_rid = Some(rid);
-                godot_print!(
-                    "DEBUG MeshUpload: created NEW instance_rid={:?} for chunk ({}, {})",
-                    rid, chunk_mesh.cx, chunk_mesh.cy
-                );
+
                 rs.instance_set_base(rid, mesh_rid);
                 rs.instance_set_scenario(rid, scenario);
+
+                if DEBUG_MESH_UPLOAD {
+                    godot_print!(
+                        "MeshUpload: created instance_rid {:?} for chunk ({}, {})",
+                        rid, chunk_mesh.cx, chunk_mesh.cy
+                    );
+                }
+
                 rid
             }
         };
@@ -125,36 +146,47 @@ impl MeshUpload {
         // ------------------------------------------------------------
         // Position chunk
         // ------------------------------------------------------------
-        let offset = chunk_mesh.world_offset(chunk_size);
+        let offset = chunk_mesh.world_offset(chunk_size, world_origin);
         let transform = Transform3D::new(Basis::IDENTITY, offset);
         rs.instance_set_transform(instance_rid, transform);
 
-        godot_print!(
-            "DEBUG MeshUpload: instance_rid={:?} transform set to {:?}",
-            instance_rid,
-            offset
-        );
+        if DEBUG_MESH_UPLOAD {
+            godot_print!(
+                "MeshUpload: positioned chunk ({}, {}) at {:?}",
+                chunk_mesh.cx,
+                chunk_mesh.cy,
+                offset
+            );
+        }
 
         chunk_mesh.mark_clean();
-        mesh_rid
+
+        (mesh_rid, instance_rid)
     }
 
     pub fn free_chunk_mesh(chunk_mesh: &mut ChunkMesh) {
         let mut rs = RenderingServer::singleton();
 
         if let Some(inst) = chunk_mesh.instance_rid.take() {
-            godot_print!(
-                "DEBUG MeshUpload: freeing instance_rid={:?} for chunk ({}, {})",
-                inst, chunk_mesh.cx, chunk_mesh.cy
-            );
             rs.free_rid(inst);
+
+            if DEBUG_MESH_UPLOAD {
+                godot_print!(
+                    "MeshUpload: freed instance_rid {:?} for chunk ({}, {})",
+                    inst, chunk_mesh.cx, chunk_mesh.cy
+                );
+            }
         }
+
         if let Some(mesh) = chunk_mesh.mesh_rid.take() {
-            godot_print!(
-                "DEBUG MeshUpload: freeing mesh_rid={:?} for chunk ({}, {})",
-                mesh, chunk_mesh.cx, chunk_mesh.cy
-            );
             rs.free_rid(mesh);
+
+            if DEBUG_MESH_UPLOAD {
+                godot_print!(
+                    "MeshUpload: freed mesh_rid {:?} for chunk ({}, {})",
+                    mesh, chunk_mesh.cx, chunk_mesh.cy
+                );
+            }
         }
     }
 }

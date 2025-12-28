@@ -1,18 +1,17 @@
 use crate::shared_job::{GenerationJob, JobStep};
 use crate::generate_perlin;
 use crate::generate_ca;
+use crate::generate_map; // ✅ NEW: checkerboard tile mapping
 use crate::shared_error::SSXLCoreError;
 use crate::shared_config::GenerationConfig;
 use std::mem;
 
 /// Executes the next required step for the given GenerationJob.
 ///
-/// This version is CA‑ready: the CA call is isolated so we can later
-/// replace it with a neighbor‑aware / halo‑based CA without touching
-/// the rest of the pipeline.
-///
-/// IMPORTANT: This function runs on worker threads and MUST NOT touch
-/// Godot bindings or use ssxl_* logging. Only pure Rust + `eprintln!`.
+/// IMPORTANT:
+/// - Runs on worker threads
+/// - MUST NOT touch Godot bindings
+/// - Only pure Rust + `eprintln!`
 pub fn process_generation_job(
     mut job: GenerationJob,
     config: &GenerationConfig,
@@ -35,7 +34,6 @@ pub fn process_generation_job(
                 config.world_seed,
             );
 
-            // Move out chunk data for processing.
             let chunk_to_process = mem::take(&mut job.chunk_data);
             eprintln!(
                 "[batch] job {:?} NoiseGeneration starting on chunk at {:?}",
@@ -45,6 +43,7 @@ pub fn process_generation_job(
 
             let perlin_result =
                 generate_perlin::generate_noise_map(chunk_to_process, &generator);
+
             eprintln!(
                 "[batch] job {:?} NoiseGeneration result = {:?}",
                 job.id,
@@ -76,7 +75,9 @@ pub fn process_generation_job(
                 chunk_to_process.position
             );
 
-            let ca_result = generate_ca::simulate_ca(chunk_to_process, config.ca.into());
+            let ca_result =
+                generate_ca::simulate_ca(chunk_to_process, config.ca.into());
+
             eprintln!(
                 "[batch] job {:?} CARefinement result = {:?}",
                 job.id,
@@ -96,13 +97,21 @@ pub fn process_generation_job(
         }
 
         // ------------------------------------------------------------
-        // STEP 3: POST‑PROCESSING
+        // STEP 3: POST‑PROCESSING (Tile Mapping)
         // ------------------------------------------------------------
         JobStep::PostProcessing => {
             eprintln!(
-                "[batch] job {:?} → PostProcessing (no-op placeholder)",
+                "[batch] job {:?} → PostProcessing (checkerboard tile mapping)",
                 job.id
             );
+
+            let chunk_to_process = mem::take(&mut job.chunk_data);
+
+            // ✅ NEW: Apply global checkerboard using atlas tiles 430 and 431
+            let mapped = generate_map::apply_tile_mapping(chunk_to_process);
+
+            job.chunk_data = mapped;
+
             Ok(())
         }
 
@@ -126,30 +135,37 @@ pub fn process_generation_job(
         Ok(_) => {
             let prev = job.current_step;
             job.advance_step();
+
             eprintln!(
                 "[batch] job {:?} step advanced {:?} -> {:?}",
                 job.id,
                 prev,
                 job.current_step
             );
+
             eprintln!(
                 "[batch] EXIT job {:?} with success at new step {:?}",
                 job.id,
                 job.current_step
             );
+
             Ok(job)
         }
+
         Err(e) => {
             eprintln!(
                 "[batch] job {:?} failed at step {:?}, marking Failed",
                 job.id,
                 job.current_step
             );
+
             job.current_step = JobStep::Failed;
+
             eprintln!(
                 "[batch] EXIT job {:?} with error, state = Failed",
                 job.id
             );
+
             Err(e)
         }
     }

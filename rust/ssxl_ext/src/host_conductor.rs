@@ -4,7 +4,7 @@
 #[cfg(feature = "godot-binding")]
 use godot::prelude::*;
 #[cfg(feature = "godot-binding")]
-use godot::classes::{Node};
+use godot::classes::Node;
 #[cfg(feature = "godot-binding")]
 use godot::builtin::{GString, VarDictionary};
 
@@ -39,6 +39,7 @@ impl SSXLConductor {}
 #[cfg(feature = "godot-binding")]
 mod ssxl_conductor_impl {
     use super::*;
+    use crate::config::DEBUG_CONDUCTOR;
 
     #[derive(GodotClass)]
     #[class(base = Node)]
@@ -69,7 +70,10 @@ mod ssxl_conductor_impl {
     #[godot_api]
     impl INode for SSXLConductor {
         fn init(base: Base<Node>) -> Self {
-            crate::ssxl_info!("SSXLConductor initialized.");
+            if DEBUG_CONDUCTOR {
+                crate::ssxl_info!("SSXLConductor initialized.");
+            }
+
             Self {
                 tilemap_target: None,
                 signal_target: None,
@@ -86,19 +90,24 @@ mod ssxl_conductor_impl {
 
         fn exit_tree(&mut self) {
             if let Err(e) = crate::host_cleanup::shutdown_ssxl_runtime() {
+                // Errors are always printed
                 crate::ssxl_error!(
                     "CRITICAL: Runtime cleanup failed during exit_tree: {:?}",
                     e
                 );
             }
             self.base_mut().set_process(false);
-            crate::ssxl_info!("SSXLConductor terminated.");
+
+            if DEBUG_CONDUCTOR {
+                crate::ssxl_info!("SSXLConductor terminated.");
+            }
         }
 
         fn process(&mut self, _delta: f64) {
             let host_state: &mut HostState = match get_host_state() {
                 Ok(state) => state,
                 Err(e) => {
+                    // Errors are always printed
                     crate::ssxl_error!(
                         "SSXL Process Error: HostState not initialized in _process: {:?}",
                         e
@@ -114,7 +123,11 @@ mod ssxl_conductor_impl {
 
             if host_state.is_core_ready {
                 if !self.has_emitted_ready {
-                    crate::ssxl_info!("SSXLConductor: core ready, emitting conductor_ready.");
+                    if DEBUG_CONDUCTOR {
+                        crate::ssxl_info!(
+                            "SSXLConductor: core ready, emitting conductor_ready."
+                        );
+                    }
                     self.emit_conductor_ready();
                     self.has_emitted_ready = true;
                 }

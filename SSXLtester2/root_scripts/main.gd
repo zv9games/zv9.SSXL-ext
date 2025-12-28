@@ -1,66 +1,101 @@
 extends Node
 class_name SSXLMain
 
-@export var world_width: int = 256
-@export var world_height: int = 256
-@export var chunk_size: int = 32
-@export var auto_start: bool = true
-
-@onready var conductor: SSXLConductor = $SSXLConductor
 @onready var controller: SSXLController = $SSXLController
-@onready var chunk_buffer: SSXLChunkBuffer = $SSXLChunkBuffer
-@onready var renderer: SSXLRendererGD = $Node3D/SSXLRenderer
+@onready var conductor: SSXLConductor = $SSXLConductor
+@onready var renderer: SSXLRenderer = $Node3D/SSXLRenderer
+@onready var chunk_buffer: SSXLChunkBuffer = $SSXLChunkBuffer   # still exists, but no longer used by renderer
 
-func _ready():
-	# Aim the camera at the world origin
-	$Camera3D.look_at(Vector3(0, 0, 0), Vector3.UP)
+@export var world_w: int = 100
+@export var world_h: int = 100
+@export var chunk_size: int = 32
 
-	print("Renderer world3d:", renderer.get_world_3d())
-	print("Conductor has method:", conductor.has_method("start_generation"))
+# Optional: user-assigned material (no longer required for renderer)
+@export var world_material: Material
+
+var _gen_start_ms: int = 0
+
+func _ready() -> void:
 	print("Main: initializing SSXL pipeline...")
+	print("Main: renderer type =", typeof(renderer), " class_name =", renderer.get_class())
 
-	# Controller ← Conductor
+	# Conductor → Controller signals
 	conductor.conductor_ready.connect(controller._on_conductor_ready)
-	conductor.generation_started.connect(controller._on_generation_started)
+	conductor.generation_started.connect(_on_generation_started)
 	conductor.generation_progress.connect(controller._on_generation_progress)
-	conductor.chunk_rendered.connect(controller._on_chunk_rendered)
-	conductor.generation_finished.connect(controller._on_generation_finished)
+	conductor.generation_finished.connect(self._on_generation_finished)
 	conductor.generation_error.connect(controller._on_generation_error)
-	conductor.debug_event.connect(controller._on_debug_event)
-	conductor.ssxl_event.connect(controller._on_ssxl_event)
-
-	# ChunkBuffer → Main
-	chunk_buffer.chunk_ready.connect(_on_chunk_ready)
-	chunk_buffer.chunk_updated.connect(_on_chunk_ready)
-
-	# Renderer gets the chunk buffer
-	renderer.set_chunk_buffer(chunk_buffer)
 
 	print("Main: SSXL pipeline ready.")
-
-	if auto_start:
-		_start_demo_world()
+	_start_demo_world()
 
 
-func _start_demo_world():
+func _start_demo_world() -> void:
 	print("Main: Auto-starting demo world...")
 
-	renderer.set_chunk_size(chunk_size)
-	renderer.begin_world(world_width, world_height, chunk_size)
+	controller.setup_world_metrics(world_w, world_h)
 
-	# Wait one frame so renderer gets a Scenario RID
-	await get_tree().process_frame
+	# IMPORTANT:
+	# Do NOT override the renderer material here unless explicitly provided.
+	if world_material != null:
+		renderer.set_material(world_material)
 
-	conductor.start_generation(chunk_buffer)
+	# Initialize renderer world
+	renderer.begin_world(world_w, world_h, chunk_size)
 
+	# Register the RENDERER as the tilemap/render target (CRITICAL)
+	conductor.set_tilemap(renderer)
 
-func _on_chunk_ready(cx: int, cy: int):
-	if not renderer.is_inside_tree():
-		print("Renderer not ready yet, skipping chunk.")
+	var config: Dictionary = {
+		"width": world_w,
+		"height": world_h,
+		"chunk_size": chunk_size
+	}
+
+	var ok_build: bool = conductor.build_map(config)
+	if not ok_build:
+		push_error("Main: conductor.build_map(config) failed.")
 		return
 
-	if renderer.get_world_3d() == null:
-		print("Renderer has no World3D, skipping chunk.")
-		return
+	var ok: bool = conductor.start_generation(renderer)
+	if not ok:
+		push_error("Main: conductor.start_generation(renderer) returned false.")
 
-	renderer.apply_chunk(cx, cy)
+
+# Accept the signal’s arguments, but ignore them.
+func _on_generation_started(_a = null, _b = null) -> void:
+	_gen_start_ms = Time.get_ticks_msec()
+	print("Main: Generation started at", _gen_start_ms, "ms.")
+
+
+func _on_generation_finished(tilemap_id: int) -> void:
+	var end_ms: int = Time.get_ticks_msec()
+	var elapsed_ms: int = max(1, end_ms - _gen_start_ms)
+
+	# Convert to minutes + seconds
+	var total_seconds: float = float(elapsed_ms) / 1000.0
+	var minutes: int = int(total_seconds) / 60
+	var seconds: float = total_seconds - float(minutes * 60)
+
+	var total_tiles: int = world_w * world_h
+
+	# Chunks needed to cover the world
+	var chunks_x: int = (world_w + chunk_size - 1) / chunk_size
+	var chunks_y: int = (world_h + chunk_size - 1) / chunk_size
+	var total_chunks: int = chunks_x * chunks_y
+
+	var tiles_per_ms: float = float(total_tiles) / float(elapsed_ms)
+	var tiles_per_sec: float = tiles_per_ms * 1000.0
+
+	print("Main: Generation finished. Building chunk meshes...")
+	print("Main: All chunks applied.")
+
+	print("---- SSXL Metrics ----")
+	print("World size: ", world_w, "x", world_h, " tiles")
+	print("Chunk size: ", chunk_size, "x", chunk_size, " tiles")
+	print("Chunks:     ", chunks_x, "x", chunks_y, " = ", total_chunks)
+	print("Total tiles:", total_tiles)
+	print("Time:       ", elapsed_ms, " ms (", minutes, " min ", seconds, " sec )")
+	print("Tiles/ms:   ", tiles_per_ms)
+	print("Tiles/sec:  ", tiles_per_sec)
+	print("----------------------")

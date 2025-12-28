@@ -38,6 +38,11 @@ pub mod generate_conductor;
 pub mod generate_conductor_state;
 pub mod generate_manager;
 
+// ------------------------------------------------------------
+// NEW: Tile mapping / debug checkerboard generator
+// ------------------------------------------------------------
+pub mod generate_map;
+
 pub mod animate_events;
 pub mod animate_worker;
 pub mod animate_conductor;
@@ -62,14 +67,13 @@ pub mod tile_conversion;
 pub mod api_registry;
 
 // ------------------------------------------------------------
-// ✅ PLAN B RENDERER MODULE (must be exported for Godot to see it)
+// PLAN B RENDERER MODULE (must be exported for Godot to see it)
 // ------------------------------------------------------------
 #[cfg(feature = "godot-binding")]
 pub mod renderer;
 
 #[cfg(feature = "godot-binding")]
 pub mod ssxl_chunk_buffer;
-
 
 // ------------------------------------------------------------
 // GDExtension entry point

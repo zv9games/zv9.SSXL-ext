@@ -3,6 +3,7 @@ use godot::prelude::*;
 use crate::renderer::chunk_mesh::ChunkMesh;
 use crate::renderer::atlas::SSXLAtlas;
 use crate::shared_tile::TileData;
+use crate::config::DEBUG_MESH_BUILDER;   // <-- global debug toggle
 
 /// ------------------------------------------------------------
 /// SSXL Mesh Builder (Plan B)
@@ -24,12 +25,22 @@ impl MeshBuilder {
         chunk_size: i32,
         atlas: &SSXLAtlas,
     ) {
+        // ------------------------------------------------------------
+        // Debug print
+        // ------------------------------------------------------------
+        if DEBUG_MESH_BUILDER {
+            godot_print!(
+                "MeshBuilder: building chunk ({}, {}) with {} tiles",
+                chunk_mesh.cx,
+                chunk_mesh.cy,
+                tiles.len()
+            );
+        }
+
         chunk_mesh.clear();
 
         let tile_size = self.tile_size;
         let tiles_per_side = chunk_size as usize;
-
-        let mut printed_first = false;
 
         for local_y in 0..tiles_per_side {
             for local_x in 0..tiles_per_side {
@@ -40,47 +51,24 @@ impl MeshBuilder {
 
                 let tile = tiles[idx];
 
-                if tile.tile_id == 0 {
+                // ------------------------------------------------------------
+                // FIXED: skip only if atlas_coords == 0 (true empty tile)
+                // ------------------------------------------------------------
+                if tile.atlas_coords == 0 {
                     continue;
                 }
 
-                // ------------------------------------------------------------
-                // DEBUG: tile ID sanity check
-                // ------------------------------------------------------------
-                if tile.tile_id < 0 {
-                    godot_warn!(
-                        "DEBUG MeshBuilder: INVALID tile_id={} at ({}, {})",
-                        tile.tile_id, local_x, local_y
-                    );
-                }
-
-                // ------------------------------------------------------------
                 // Compute world-space quad position (XZ plane)
-                // ------------------------------------------------------------
                 let x0 = (local_x as f32) * tile_size;
                 let z0 = (local_y as f32) * tile_size;
                 let x1 = x0 + tile_size;
                 let z1 = z0 + tile_size;
 
-                // ------------------------------------------------------------
-                // Fetch UVs from atlas
-                // ------------------------------------------------------------
-                let uv = atlas.get_uv(tile.tile_id as usize);
+                // UV lookup uses atlas_coords
+                let atlas_index = tile.atlas_coords as usize;
+                let uv = atlas.get_uv(atlas_index);
 
-                // ------------------------------------------------------------
-                // DEBUG: UV sanity check
-                // ------------------------------------------------------------
-                if uv.uv_min.x < 0.0 || uv.uv_min.y < 0.0 ||
-                   uv.uv_max.x > 1.0 || uv.uv_max.y > 1.0 {
-                    godot_warn!(
-                        "DEBUG MeshBuilder: UV OUT OF RANGE for tile_id={} -> min={:?}, max={:?}",
-                        tile.tile_id, uv.uv_min, uv.uv_max
-                    );
-                }
-
-                // ------------------------------------------------------------
                 // Push quad vertices (floor at y = 0)
-                // ------------------------------------------------------------
                 let base_index = chunk_mesh.vertices.len() as u32;
 
                 let v0 = Vector3::new(x0, 0.0, z0);
@@ -93,6 +81,7 @@ impl MeshBuilder {
                 chunk_mesh.vertices.push(v2);
                 chunk_mesh.vertices.push(v3);
 
+                // UVs
                 let uv0 = uv.uv_min;
                 let uv1 = Vector2::new(uv.uv_max.x, uv.uv_min.y);
                 let uv2 = uv.uv_max;
@@ -103,36 +92,7 @@ impl MeshBuilder {
                 chunk_mesh.uvs.push(uv2);
                 chunk_mesh.uvs.push(uv3);
 
-                // ------------------------------------------------------------
-                // DEBUG: Print the first tile's geometry + UVs
-                // ------------------------------------------------------------
-                if !printed_first {
-                    printed_first = true;
-
-                    godot_print!(
-                        "DEBUG MeshBuilder: first tile at ({}, {}), tile_id={}",
-                        local_x, local_y, tile.tile_id
-                    );
-
-                    godot_print!(
-                        "DEBUG MeshBuilder: atlas UV rect = min={:?}, max={:?}",
-                        uv.uv_min, uv.uv_max
-                    );
-
-                    godot_print!(
-                        "DEBUG MeshBuilder: first 4 vertices = {:?}, {:?}, {:?}, {:?}",
-                        v0, v1, v2, v3
-                    );
-
-                    godot_print!(
-                        "DEBUG MeshBuilder: first 4 UVs = {:?}, {:?}, {:?}, {:?}",
-                        uv0, uv1, uv2, uv3
-                    );
-                }
-
-                // ------------------------------------------------------------
                 // Push indices (two triangles)
-                // ------------------------------------------------------------
                 chunk_mesh.indices.extend_from_slice(&[
                     base_index,
                     base_index + 1,
@@ -145,30 +105,15 @@ impl MeshBuilder {
         }
 
         // ------------------------------------------------------------
-        // DEBUG: Summary of geometry
+        // Debug print
         // ------------------------------------------------------------
-        godot_print!(
-            "DEBUG MeshBuilder: chunk ({}, {}) built -> verts={} uvs={} indices={}",
-            chunk_mesh.cx,
-            chunk_mesh.cy,
-            chunk_mesh.vertices.len(),
-            chunk_mesh.uvs.len(),
-            chunk_mesh.indices.len()
-        );
-
-        if chunk_mesh.vertices.is_empty() {
-            godot_warn!(
-                "DEBUG MeshBuilder: chunk ({}, {}) has NO GEOMETRY — material will appear NULL",
+        if DEBUG_MESH_BUILDER {
+            godot_print!(
+                "MeshBuilder: finished chunk ({}, {}) verts={} indices={}",
                 chunk_mesh.cx,
-                chunk_mesh.cy
-            );
-        }
-
-        if chunk_mesh.indices.is_empty() {
-            godot_warn!(
-                "DEBUG MeshBuilder: chunk ({}, {}) has NO INDICES — surface will be empty",
-                chunk_mesh.cx,
-                chunk_mesh.cy
+                chunk_mesh.cy,
+                chunk_mesh.vertices.len(),
+                chunk_mesh.indices.len()
             );
         }
 

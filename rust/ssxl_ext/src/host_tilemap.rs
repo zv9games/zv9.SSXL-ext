@@ -1,101 +1,50 @@
 use crate::shared_chunk::Chunk;
 use crate::shared_error::SSXLCoreError;
-use crate::shared_tile::TileData;
-use crate::bridge_ffi::{ssxl_get_tilemap_chunk_ptr, ssxl_notify_chunk_updated};
+use crate::config::DEBUG_HOST_TILEMAP;
 
-/// Render a chunk by:
-/// 1. Asking SSXLChunkBuffer for a raw pointer to the chunk buffer
-/// 2. Copying TileData into that buffer
-/// 3. Notifying SSXLChunkBuffer that the chunk changed
-pub fn render_chunk_direct(tilemap_id_raw: i64, chunk: Chunk) -> Result<(), SSXLCoreError> {
-    // Debug: inspect first source tile in the Chunk coming from the worker
-    if let Some(first) = chunk.tiles.get(0) {
+use godot::prelude::*;
+use godot::obj::{Gd, InstanceId};
+
+use crate::renderer::renderer_node::SSXLRenderer;
+
+/// Render a chunk by calling into the SSXLRenderer node.
+/// This replaces the old TileMap pointer-copy pipeline entirely.
+pub fn render_chunk_direct(renderer_id_raw: i64, chunk: Chunk) -> Result<(), SSXLCoreError> {
+    if DEBUG_HOST_TILEMAP {
         eprintln!(
-            "[host_tilemap] SRC first tile for chunk ({}, {}): {:?}",
+            "[host_tilemap] ENTER render_chunk_direct: chunk=({}, {}), tiles={}",
             chunk.position.0,
             chunk.position.1,
-            first
-        );
-    } else {
-        eprintln!(
-            "[host_tilemap] SRC chunk ({}, {}) has EMPTY tiles vec!",
-            chunk.position.0,
-            chunk.position.1
+            chunk.tiles.len()
         );
     }
 
-    // SAFETY: FFI call into Godot to retrieve the chunk pointer
-    let dest_ptr = unsafe {
-        ssxl_get_tilemap_chunk_ptr(
-            tilemap_id_raw,
-            chunk.position.0,
-            chunk.position.1,
-        )
-    };
+    // Convert raw i64 → InstanceId → Gd<Object>
+    let instance_id = InstanceId::from_i64(renderer_id_raw);
+    let obj: Gd<Object> = Gd::from_instance_id(instance_id);
 
-    if dest_ptr.is_null() {
+    // Your Godot-Rust version: cast() returns Gd<SSXLRenderer> directly
+    let mut renderer: Gd<SSXLRenderer> = obj.cast();
+
+    let cx = chunk.position.0;
+    let cy = chunk.position.1;
+
+    if DEBUG_HOST_TILEMAP {
         eprintln!(
-            "[host_tilemap] ERROR: ssxl_get_tilemap_chunk_ptr returned NULL for chunk ({}, {})",
-            chunk.position.0,
-            chunk.position.1
-        );
-        return Err(SSXLCoreError::InvalidInstance(tilemap_id_raw));
-    }
-
-    let tile_count = chunk.tiles.len();
-
-    eprintln!(
-        "[host_tilemap] DEST ptr for chunk ({}, {}) = {:?}, copying {} tiles",
-        chunk.position.0,
-        chunk.position.1,
-        dest_ptr,
-        tile_count
-    );
-
-    if tile_count > 0 {
-        unsafe {
-            // Interpret the destination pointer as a TileData slice
-            let dest_slice_before: &[TileData] =
-                std::slice::from_raw_parts(dest_ptr as *const TileData, tile_count);
-
-            eprintln!(
-                "[host_tilemap] DEST first tile BEFORE copy for chunk ({}, {}): {:?}",
-                chunk.position.0,
-                chunk.position.1,
-                dest_slice_before.get(0)
-            );
-
-            // Perform the copy
-            std::ptr::copy_nonoverlapping(
-                chunk.tiles.as_ptr() as *const TileData,
-                dest_ptr,
-                tile_count,
-            );
-
-            let dest_slice_after: &[TileData] =
-                std::slice::from_raw_parts(dest_ptr as *const TileData, tile_count);
-
-            eprintln!(
-                "[host_tilemap] DEST first tile AFTER copy for chunk ({}, {}): {:?}",
-                chunk.position.0,
-                chunk.position.1,
-                dest_slice_after.get(0)
-            );
-        }
-    } else {
-        eprintln!(
-            "[host_tilemap] WARNING: chunk ({}, {}) has 0 tiles; nothing to copy.",
-            chunk.position.0,
-            chunk.position.1
+            "[host_tilemap] Calling SSXLRenderer.apply_chunk({}, {}), tiles={}",
+            cx,
+            cy,
+            chunk.tiles.len()
         );
     }
 
-    // SAFETY: Notify Godot that the chunk buffer was updated
-    unsafe {
-        ssxl_notify_chunk_updated(
-            tilemap_id_raw,
-            chunk.position.0,
-            chunk.position.1,
+    // Pass tile data as a slice (CRITICAL)
+    renderer.bind_mut().apply_chunk(cx, cy, &chunk.tiles);
+
+    if DEBUG_HOST_TILEMAP {
+        eprintln!(
+            "[host_tilemap] apply_chunk({}, {}) completed",
+            cx, cy
         );
     }
 

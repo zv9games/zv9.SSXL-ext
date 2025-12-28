@@ -1,15 +1,18 @@
-[gd_scene load_steps=6 format=3 uid="uid://b41u5k6701dor"]
+[gd_scene load_steps=8 format=3 uid="uid://b41u5k6701dor"]
 
 [ext_resource type="Script" uid="uid://bf4m53dvayhbc" path="res://root_scripts/main.gd" id="1_y374o"]
 [ext_resource type="Script" uid="uid://cjjg38y4dnxph" path="res://root_scripts/ssxl_camera_3d.gd" id="2_al6xd"]
 [ext_resource type="Script" uid="uid://ca5hhsplw0ycs" path="res://root_scripts/ssxl_controller.gd" id="2_w5n1r"]
 [ext_resource type="Script" uid="uid://da74gbpiaiy51" path="res://root_scripts/ssxl_chunk_buffer.gd" id="4_3lhfi"]
-[ext_resource type="Script" uid="uid://ca1xu61aljfap" path="res://root_scripts/ssxl_renderer.gd" id="5_kvte3"]
+[ext_resource type="Script" uid="uid://ca1xu61aljfap" path="res://root_scripts/ssxl_renderer.gd" id="5_3lhfi"]
+[ext_resource type="Script" uid="uid://brvgldq5ta7v5" path="res://root_scripts/renderer_view.gd" id="6_3lhfi"]
+
+[sub_resource type="Environment" id="Environment_3lhfi"]
 
 [node name="main" type="Node"]
 script = ExtResource("1_y374o")
-world_width = 8000
-world_height = 8000
+world_w = 2000
+world_h = 2000
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 10, 10)
@@ -26,7 +29,10 @@ script = ExtResource("4_3lhfi")
 [node name="Node3D" type="Node3D" parent="."]
 
 [node name="SSXLRenderer" type="SSXLRenderer" parent="Node3D"]
-script = ExtResource("5_kvte3")
+script = ExtResource("5_3lhfi")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(0.70710677, 0.49999997, 0.49999997, 0, 0.70710677, -0.70710677, -0.70710677, 0.49999997, 0.49999997, 0, 0, 0)
+[node name="RendererView" type="Node" parent="Node3D/SSXLRenderer"]
+script = ExtResource("6_3lhfi")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_3lhfi")

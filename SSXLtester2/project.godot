@@ -57,10 +57,6 @@ ui_shift={
 ]
 }
 
-[rendering]
-
-renderer/rendering_method="mobile"
-
 [ssxl]
 
 plugin_enabled=true
