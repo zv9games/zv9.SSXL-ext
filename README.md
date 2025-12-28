@@ -202,6 +202,8 @@ Anyways, Prerequisites:
 	-clone this repo to your harddrive. 
 		cd path/to/your/folder
 		git clone https://github.com/zv9games/SSXL-ext.git
+		
+		cd rust
 
 		cargo build -p ssxl_ext --release --features godot-binding
 		cargo run -p ssxl_cli --release
