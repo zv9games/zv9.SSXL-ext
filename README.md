@@ -195,10 +195,23 @@ This structure ensures deterministic behavior, clean separation of concerns, and
 
 ### Build Instructions
 
+Anyways, Prerequisites:
+	-a godot plugin
+	-an extention file the project can load
+	-Godot obviously(you first chief lol),
+	-clone this repo to your harddrive. 
+		cd path/to/your/folder
+		git clone https://github.com/zv9games/SSXL-ext.git
 
+		cargo build -p ssxl_ext --release --features godot-binding
+		cargo run -p ssxl_cli --release
+		
+		at the main menu press L
+		you will need to have a Godot_v4.5.1-stable_win64.exe in the SSXLtester2 directory,
+		you can change this setting in the source code locally. 
+	
 
-lol
-
+lol Good Luck!
 
 
 
